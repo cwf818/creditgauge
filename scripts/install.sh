@@ -267,13 +267,11 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "  would write:   ${UPSTREAM_CMD_FILE}"
     echo "  original cmd:  ${ORIGINAL_CMD}"
   fi
-  if [ "$INSTALL_MODE" = "fresh" ]; then
-    SEED_TARGET="${CLAUDE_ROOT}/plugins/topgauge/config.json"
-    if [ ! -f "$SEED_TARGET" ]; then
-      echo "  would seed:    ${SEED_TARGET} (statuslineTemplate=abundant, providers={}, labels glyph overrides)"
-    else
-      echo "  would keep:    ${SEED_TARGET} (already present)"
-    fi
+  SEED_TARGET="${CLAUDE_ROOT}/plugins/topgauge/config.json"
+  if [ ! -f "$SEED_TARGET" ]; then
+    echo "  would seed:    ${SEED_TARGET} (cacheTtlMs=60000, statuslineTemplate=standard, providers={}, labels glyph overrides)"
+  else
+    echo "  would keep:    ${SEED_TARGET} (already present)"
   fi
   echo "  new statusLine command will set TOPGAUGE_UPSTREAM_CMD to:"
   if [ "$INSTALL_MODE" = "replace" ]; then
@@ -306,30 +304,31 @@ if [ "$INSTALL_MODE" = "replace" ]; then
   echo "install.sh: backed up ${TARGET} -> ${TARGET}.bak.<TS>"
 fi
 
-# Fresh-install seed: drop a basic config.json so a brand-new user
-# gets the rich `abundant` preset out of the box (instead of having to
-# hand-edit the file before the statusline shows the kitchen-sink
-# layout). Skipped on `replace` so an existing user's config.json is
-# never clobbered by an upgrade — re-running :install is idempotent
-# and only writes the file when it's missing. Idempotent: the seed
-# step is gated on `fresh` mode AND on a missing config.json, so the
-# only path that creates the file is "first-time install on a system
-# that has never had a config.json".
+# config.json seed: when the user has no config.json on disk, write a
+# basic one so the runtime has a starting point (otherwise
+# src/config.ts:loadConfig falls back to DEFAULT_CONFIG and only the
+# two-module DEFAULT_STATUSLINE_TEMPLATE renders). Triggered on every
+# install mode (fresh / replace / managed) — gated only on the file
+# being absent — so a user who re-installs over a foreign statusLine
+# still gets a config.json. Existing config.json files are NEVER
+# overwritten: re-running :install is a strict no-op for the seed step.
 #
-# The seed pins the 8 labels that match the abundant preset's
-# per-turn / acc / sum token modules. The remaining 14 label axes
-# (context-*, memUsage, startTime, endTime, quota, cost, plugin-*,
-# labelTokenTotalOut, labelApiMs) inherit DEFAULT_CONFIG defaults —
-# callers who add `m_memUsage` / `m_quota` etc. get the canonical
-# `Mem:` / `quota:` prefixes for free.
-if [ "$INSTALL_MODE" = "fresh" ]; then
-  SEED_DIR="${CLAUDE_ROOT}/plugins/topgauge"
-  SEED_FILE="${SEED_DIR}/config.json"
-  if [ ! -f "$SEED_FILE" ]; then
-    mkdir -p "$SEED_DIR"
-    cat > "$SEED_FILE" <<'SEED_EOF'
+# The body uses the `standard` preset (information / git / tick_eval /
+# acc_eval / stat_eval / quota / balance / age / version — see
+# DEFAULT_STATUSLINE_PRESETS in src/config.template.ts), pins
+# `cacheTtlMs` to the runtime default, and carries the 8 label glyph
+# overrides that match the standard preset's per-turn / acc / sum
+# token modules. The remaining 14 label axes inherit DEFAULT_CONFIG
+# defaults — callers who add `m_memUsage` / `m_quota` etc. get the
+# canonical `Mem:` / `quota:` prefixes for free.
+SEED_DIR="${CLAUDE_ROOT}/plugins/topgauge"
+SEED_FILE="${SEED_DIR}/config.json"
+if [ ! -f "$SEED_FILE" ]; then
+  mkdir -p "$SEED_DIR"
+  cat > "$SEED_FILE" <<'SEED_EOF'
 {
-  "statuslineTemplate": "abundant",
+  "cacheTtlMs": 60000,
+  "statuslineTemplate": "standard",
   "providers": {},
   "labels": {
     "labelTokenIn":        "↓",
@@ -343,8 +342,7 @@ if [ "$INSTALL_MODE" = "fresh" ]; then
   }
 }
 SEED_EOF
-    echo "install.sh: seeded basic config at ${SEED_FILE}"
-  fi
+  echo "install.sh: seeded basic config at ${SEED_FILE}"
 fi
 
 node "$HELPER" "$WIN_TARGET" write-managed "$WIN_WRAPPER" "$WIN_UPSTREAM"

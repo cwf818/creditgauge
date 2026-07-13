@@ -3,13 +3,17 @@
 # semantics in scripts/uninstall.sh.
 #
 # The branches under test:
-#   - DEFAULT: topgauge/config.json + topgauge/query_plugins/ are
-#     NOT wiped; a post-uninstall hint lists their paths.
-#   - --keep-state: topgauge/state/<projectHash>/<sessionId>.jsonl
-#     files are preserved in addition to the default-preserved paths.
+#   - DEFAULT (no flags): partial-preserve — topgauge/config.json,
+#     topgauge/query_plugins/, and per-project .jsonl files are
+#     preserved; a post-uninstall hint lists their paths.
+#   - --completely: full uninstall — also wipes config.json,
+#     query_plugins/, and the .jsonl history. No hint printed.
 #   - ALWAYS wipe: state/cache.json, state/cache.stat.json,
 #     state/upstream-cmd.{sh,txt}, state/<projectHash>/state.json
 #     go regardless of flags.
+#   - --keep-state: removed in v0.9.x. The script now rejects it as
+#     an unknown argument (exit 2) — verified by the
+#     [unknown-flag] case below.
 #
 # Each test builds a synthetic CLAUDE_ROOT in a tmpdir, monkey-patches
 # HOME / CLAUDE_CONFIG_DIR to point at it, and runs uninstall.sh
@@ -79,6 +83,17 @@ assert_file_missing() {
     PASS=$((PASS + 1))
   else
     echo "  FAIL $label (unexpected file: $path)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+assert_dir_missing() {
+  local label="$1" path="$2"
+  if [ ! -d "$path" ]; then
+    echo "  ok  $label"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL $label (unexpected dir: $path)"
     FAIL=$((FAIL + 1))
   fi
 }
@@ -187,10 +202,10 @@ run_uninstall() {
 # Tests
 # ============================================================================
 
-echo "== v0.9.x partial-preserve: DEFAULT (no --keep-state) =="
+echo "== v0.9.x partial-preserve: DEFAULT (no flags) =="
 
 ROOT=$(build_fixture)
-run_uninstall "$ROOT" >/dev/null 2>&1
+OUT=$(run_uninstall "$ROOT" 2>&1)
 
 # config.json + query_plugins/ preserved
 assert_file_exists  "[default] topgauge/config.json preserved" \
@@ -214,49 +229,94 @@ assert_file_missing "[default] state/upstream-cmd.txt wiped" \
 assert_file_missing "[default] state/<hash>/state.json wiped" \
   "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/state.json"
 
-# Default-wiped .jsonl gone
-assert_file_missing "[default] state/<hash>/<sid>.jsonl wiped" \
+# Default-preserved .jsonl survives (this is the differentiating
+# branch from v0.9.x pre-rename — the .jsonl is preserved by default,
+# and only --completely wipes it)
+assert_file_exists  "[default] state/<hash>/<sid>.jsonl preserved" \
   "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/ca625a72-test-session.jsonl"
 
 # Cache dir wiped (matched the always-wipe list)
 assert_file_missing "[default] cache/topgauge/* wiped" \
   "${ROOT}/plugins/cache/topgauge"
 
-# Hint message lists preserved paths
-HINT_OUT=$(run_uninstall "$ROOT" --dry-run 2>&1)
-# On a second run, files are already gone — preserve-list check is
-# only meaningful on the FIRST run. Skip the hint pattern-check if
-# the artifact doesn't exist anymore (we already ran once above).
+# Post-uninstall hint lists preserved paths (default mode)
+assert_match_str "[default] hint mentions config.json" \
+  "config.json" "$OUT"
+assert_match_str "[default] hint mentions query_plugins" \
+  "query_plugins" "$OUT"
+assert_match_str "[default] hint mentions .jsonl path" \
+  "ca625a72-test-session.jsonl" "$OUT"
+assert_match_str "[default] hint mentions --completely" \
+  "--completely" "$OUT"
 
 rm -rf "$ROOT"
 
 echo ""
-echo "== v0.9.x partial-preserve: --keep-state =="
+echo "== v0.9.x partial-preserve: --completely =="
 
 ROOT=$(build_fixture)
-OUT=$(run_uninstall "$ROOT" --keep-state 2>&1)
+OUT=$(run_uninstall "$ROOT" --completely 2>&1)
 
-# config.json + query_plugins/ still preserved
-assert_file_exists  "[keep-state] topgauge/config.json preserved" \
+# config.json + query_plugins/ GONE
+assert_file_missing "[completely] topgauge/config.json wiped" \
   "${ROOT}/plugins/topgauge/config.json"
-assert_file_exists  "[keep-state] topgauge/query_plugins/minimax/index.js preserved" \
-  "${ROOT}/plugins/topgauge/query_plugins/minimax/index.js"
+assert_file_missing "[completely] topgauge/query_plugins/ dir wiped" \
+  "${ROOT}/plugins/topgauge/query_plugins"
 
-# .jsonl preserved (this is the differentiating branch)
-assert_file_exists  "[keep-state] state/<hash>/<sid>.jsonl preserved" \
+# .jsonl wiped
+assert_file_missing "[completely] state/<hash>/<sid>.jsonl wiped" \
   "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/ca625a72-test-session.jsonl"
 
 # Always-wiped still gone
-assert_file_missing "[keep-state] state/cache.json still wiped" \
+assert_file_missing "[completely] state/cache.json wiped" \
   "${ROOT}/plugins/topgauge/state/cache.json"
-assert_file_missing "[keep-state] state/<hash>/state.json still wiped" \
+assert_file_missing "[completely] state/<hash>/state.json wiped" \
   "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/state.json"
 
-# Post-uninstall hint mentions --keep-state + lists preserved .jsonl
-assert_match_str "[keep-state] hint mentions --keep-state" \
-  "--keep-state preserved" "$OUT"
-assert_match_str "[keep-state] hint lists .jsonl path" \
-  "ca625a72-test-session.jsonl" "$OUT"
+# Post-uninstall message confirms full uninstall
+assert_match_str "[completely] full-uninstall message" \
+  "--completely" "$OUT"
+
+# --completely also rmdir's the now-empty topgauge/ parent dir
+assert_dir_missing "[completely] topgauge/ parent dir removed" \
+  "${ROOT}/plugins/topgauge"
+
+rm -rf "$ROOT"
+
+echo ""
+echo "== v0.9.x --completely + untracked file: topgauge/ stays, exit 0 =="
+
+ROOT=$(build_fixture)
+# Plant an untracked file the script doesn't know about (simulates
+# a __legacy__/ migration leftover or a user-saved note). rmdir
+# must fail with ENOTEMPTY — we want the dir to stay, NOT to
+# silently nuke the untracked file.
+mkdir -p "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/__legacy__"
+echo "user-saved-stuff" \
+  > "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/__legacy__/readme.txt"
+
+# Capture exit code via a subshell wrapper around run_uninstall.
+OUT=$( (
+  export HOME="$ROOT"
+  export CLAUDE_CONFIG_DIR="$ROOT"
+  cd "$ROOT"
+  bash "$UNINSTALL_SH" --completely
+); echo "RC=$?")
+RC=${OUT##*RC=}
+OUT=${OUT%RC=*}
+
+# The untracked file MUST survive (rmdir failure is non-fatal).
+assert_file_exists "[untracked] __legacy__/readme.txt preserved" \
+  "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/__legacy__/readme.txt"
+# The topgauge/ parent dir MUST stay (it's non-empty thanks to
+# the untracked file).
+assert_dir_exists "[untracked] topgauge/ parent dir stays (rmdir ENOTEMPTY)" \
+  "${ROOT}/plugins/topgauge"
+# The script MUST still exit 0.
+assert_eq "[untracked] script still exits 0" "0" "$RC"
+# The full-uninstall message MUST still be printed.
+assert_match_str "[untracked] full-uninstall message still printed" \
+  "every topgauge/ artifact was wiped" "$OUT"
 
 rm -rf "$ROOT"
 
@@ -266,16 +326,38 @@ echo "== v0.9.x partial-preserve: dry-run =="
 ROOT=$(build_fixture)
 OUT=$(run_uninstall "$ROOT" --dry-run 2>&1)
 
-# grep regex: literal "rm -f ", any chars, "<file>". We match the
-# `Actions:` line via grep -E. The `--` is not needed here because
-# the pattern starts with `rm` (not `-`), but use it anyway for
-# safety across grep versions.
-assert_match_str "[dry-run] default wipes .jsonl" \
-  "ca625a72-test-session.jsonl" "$OUT"
+# Default plan wipes the always-list (cache noise + state.json) but
+# KEEPS .jsonl (so it must NOT appear in the plan).
 assert_match_str "[dry-run] default wipes state.json" \
   "d--workspace-topgauge/state.json" "$OUT"
 assert_match_str "[dry-run] default wipes cache.json" \
   "topgauge/state/cache.json" "$OUT"
+assert_match_str "[dry-run] default wipes upstream-cmd.txt" \
+  "topgauge/state/upstream-cmd.txt" "$OUT"
+
+# Inverse assertion: .jsonl wipe must NOT appear in the default plan.
+if echo "$OUT" | grep -qF -- "ca625a72-test-session.jsonl"; then
+  echo "  FAIL [dry-run default] plan contains .jsonl wipe (should be preserved)"
+  FAIL=$((FAIL + 1))
+else
+  echo "  ok  [dry-run default] plan omits .jsonl wipe"
+  PASS=$((PASS + 1))
+fi
+# Same for config.json / query_plugins in the default plan.
+if echo "$OUT" | grep -qF -- "topgauge/config.json"; then
+  echo "  FAIL [dry-run default] plan contains config.json wipe (should be preserved)"
+  FAIL=$((FAIL + 1))
+else
+  echo "  ok  [dry-run default] plan omits config.json wipe"
+  PASS=$((PASS + 1))
+fi
+if echo "$OUT" | grep -qF -- "topgauge/query_plugins"; then
+  echo "  FAIL [dry-run default] plan contains query_plugins wipe (should be preserved)"
+  FAIL=$((FAIL + 1))
+else
+  echo "  ok  [dry-run default] plan omits query_plugins wipe"
+  PASS=$((PASS + 1))
+fi
 
 # Verify dry-run did NOT actually delete anything
 assert_file_exists "[dry-run] cache.json still on disk" \
@@ -283,15 +365,18 @@ assert_file_exists "[dry-run] cache.json still on disk" \
 assert_file_exists "[dry-run] config.json still on disk" \
   "${ROOT}/plugins/topgauge/config.json"
 
-OUT_KS=$(run_uninstall "$ROOT" --dry-run --keep-state 2>&1)
-# Inverse assertion: .jsonl wipe must NOT appear in the plan.
-if echo "$OUT_KS" | grep -qF -- "ca625a72-test-session.jsonl"; then
-  echo "  FAIL [dry-run + --keep-state] plan contains .jsonl wipe (should be skipped)"
-  FAIL=$((FAIL + 1))
-else
-  echo "  ok  [dry-run + --keep-state] plan omits .jsonl wipe"
-  PASS=$((PASS + 1))
-fi
+# --completely plan SHOULD include .jsonl + config.json + query_plugins.
+OUT_C=$(run_uninstall "$ROOT" --dry-run --completely 2>&1)
+assert_match_str "[dry-run + --completely] plan wipes .jsonl" \
+  "ca625a72-test-session.jsonl" "$OUT_C"
+assert_match_str "[dry-run + --completely] plan wipes config.json" \
+  "topgauge/config.json" "$OUT_C"
+assert_match_str "[dry-run + --completely] plan wipes query_plugins" \
+  "topgauge/query_plugins" "$OUT_C"
+assert_match_str "[dry-run + --completely] plan rmdirs topgauge/ (if empty)" \
+  "rmdir" "$OUT_C"
+assert_match_str "[dry-run + --completely] plan rmdirs the right path" \
+  "topgauge (if empty after wipes)" "$OUT_C"
 
 # Dry-run + --dry-run message
 assert_match_str "[dry-run] explicit no-change message" \
@@ -308,18 +393,39 @@ OUT1=$(run_uninstall "$ROOT" 2>&1)
 assert_match_str "[first-run hint] mentions config.json" \
   "config.json" "$OUT1"
 
-# Second run on the same fixture: everything's already gone — the
-# install is fully clean. The "nothing to do" message is the right
-# signal, but the script must not crash and must not print
-# false-positive hints about non-existent files. Since HINT_LINES
-# iterates over files that no longer exist, the hint block is
-# skipped (the for-loop on HINT_LINES with length 0 prints
-# nothing). Verify the script exits 0.
+# Second run on the same fixture: the always-wipe targets are gone,
+# but config.json / query_plugins / .jsonl still exist (default mode
+# preserves them). The hint still fires (because the preserved files
+# are on disk), and the script exits 0.
 set +e
 run_uninstall "$ROOT" >/dev/null 2>&1
 EC=$?
 set -e
 assert_eq "[second-run] idempotent exit code is 0" "0" "$EC"
+
+rm -rf "$ROOT"
+
+echo ""
+echo "== v0.9.x partial-preserve: unknown --keep-state rejected =="
+
+# v0.9.x removed --keep-state. Passing it must fail loudly (exit 2)
+# with a usage hint, NOT silently default to the old behavior. This
+# guards against users with muscle memory from older releases silently
+# getting the wrong wipe set.
+ROOT=$(build_fixture)
+set +e
+OUT=$(run_uninstall "$ROOT" --keep-state 2>&1)
+EC=$?
+set -e
+assert_eq "[unknown-flag] --keep-state exit code is 2" "2" "$EC"
+assert_match_str "[unknown-flag] usage hint" \
+  "usage: uninstall.sh" "$OUT"
+# Crucially: nothing was wiped, so config.json + .jsonl still exist
+# (the script bailed before the wipe phase).
+assert_file_exists "[unknown-flag] config.json untouched" \
+  "${ROOT}/plugins/topgauge/config.json"
+assert_file_exists "[unknown-flag] .jsonl untouched" \
+  "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/ca625a72-test-session.jsonl"
 
 rm -rf "$ROOT"
 
