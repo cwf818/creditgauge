@@ -33,6 +33,7 @@ ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / ora
 
 ## Documentation
 
+- [**快速上手指南.md**](./快速上手指南.md) — 5-minute快速上手指南：效果、简介、安装、基本配置、插件、安全与协议。
 - [**MANUAL.md**](./MANUAL.md) — exhaustive configuration reference. Top-level schema, provider entries, presets, fragments, inline-args grammar, full `m_*` module catalog, recipes, plugin ABI.
 - [**HOW_TO_CREATE_A_PLUGIN.md**](./HOW_TO_CREATE_A_PLUGIN.md) — wire up a custom provider (kimi / moonshot / z.ai / etc.) without forking the plugin. User-side plugin ABI, fill contract, override resolution.
 - [**CHANGELOG.md**](./CHANGELOG.md) — per-version change history (breaking changes, new modules, removed aliases, schema upgrades).

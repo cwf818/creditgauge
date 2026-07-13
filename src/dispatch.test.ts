@@ -3,7 +3,15 @@ import assert from "node:assert/strict";
 import { buildProviderLine, type FetchResult } from "./dispatch.ts";
 import type { Quota, Balance } from "./api.ts";
 import type { TokenSnapshot } from "./types.ts";
-import { __resetForTest } from "./config.ts";
+import { __resetForTest, configStore } from "./config.ts";
+
+// The mode label the renderer emits for the active default display
+// mode (Usage: / Remain:). Derived from config so flipping the
+// default `display` value doesn't break the prefix assertions below.
+const defaultModeLabel = () => {
+  const cfg = configStore.get();
+  return cfg.modeLabels[cfg.display as "used" | "remaining"];
+};
 
 const RESET = "\x1b[0m";
 const RED = "\x1b[38;5;196m";
@@ -64,7 +72,7 @@ describe("buildProviderLine — fresh (no age suffix; data just arrived)", () =>
     // the trailing balance fragment prepends a deepseek-only line
     // (m_balance). Strip SGRs to be safe across future color
     // injections.
-    assert.ok(strip(line!).startsWith("Usage: "));
+    assert.ok(strip(line!).startsWith(`${defaultModeLabel()} `));
     assert.ok(!line!.includes("ago"));
     assert.ok(!line!.includes(STALE_COLOR));
   });
@@ -379,7 +387,7 @@ describe("buildProviderLine — null provider (no ANTHROPIC_BASE_URL match)", ()
       const line = buildProviderLine(null, result, TOKENS);
       assert.ok(line);
       const text = strip(line!);
-      assert.ok(text.startsWith("Usage:"), `got: ${text}`);
+      assert.ok(text.startsWith(defaultModeLabel()), `got: ${text}`);
       assert.ok(text.includes("in:163.5k"), `got: ${text}`);
       assert.ok(
         !text.includes("not available"),

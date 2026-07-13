@@ -13,7 +13,7 @@ import {
   splitBar,
 } from "./render.ts";
 import type { Interval } from "./render.ts";
-import { __resetForTest, type Config } from "./config.ts";
+import { __resetForTest, configStore, type Config } from "./config.ts";
 import * as cache from "./cache.ts";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -274,14 +274,19 @@ describe("colorFor — 5-band thresholds on USED value (mode-symmetric v0.8.37.1
 });
 
 describe("resolveDisplayMode", () => {
-  it("defaults to 'used' from DEFAULT_CONFIG", () => {
-    assert.equal(resolveDisplayMode(), "used");
+  it("defaults to DEFAULT_CONFIG.display", () => {
+    __resetForTest();
+    // Derive the expectation from the config default rather than
+    // pinning a literal — flipping the default `display` value is a
+    // one-field config change and must not break this test.
+    assert.equal(resolveDisplayMode(), configStore.get().display);
   });
   it("reflects config.json `display` field", () => {
     __resetForTest({ display: "remaining" });
     assert.equal(resolveDisplayMode(), "remaining");
-    __resetForTest();
+    __resetForTest({ display: "used" });
     assert.equal(resolveDisplayMode(), "used");
+    __resetForTest();
   });
 });
 
@@ -294,19 +299,29 @@ describe("formatLine — mode='used' (default)", () => {
   beforeEach(() => {
     __resetForTest({ timeFormat: { minUnit: "m", maxUnitCount: 2 } });
   });
-  it("prefixes with 'Usage:' label by default", () => {
+  it("prefixes with the default-mode label", () => {
     const line = formatLine(legacyToIv({ pct: 38 }), legacyToIv({ pct: 60 }, "7d"));
     // m_modeLabel may carry an ANSI color (default `|color:yellow` is
     // injected into DEFAULT_LINE_TEMPLATE.quota), so strip SGRs
-    // before checking the literal prefix.
-    assert.ok(strip(line).startsWith("Usage: "), `got: ${line}`);
+    // before checking the literal prefix. Derive the expected label
+    // from the active default mode — flipping `display` is a config
+    // change, not a rendering-contract change.
+    const cfg = configStore.get();
+    const expectedLabel = cfg.modeLabels[cfg.display as "used" | "remaining"];
+    assert.ok(strip(line).startsWith(`${expectedLabel} `), `got: ${line}`);
     assert.ok(line.includes(" · "));
   });
 
-  it("default mode displays used percentages (38% / 60%)", () => {
+  it("default mode displays the mode-appropriate percentages (from 38 / 60 used)", () => {
     const line = formatLine(legacyToIv({ pct: 38 }), legacyToIv({ pct: 60 }, "7d"));
-    assert.ok(line.includes(`38%`));
-    assert.ok(line.includes(`60%`));
+    // `pct` is the USED percentage; the displayed value flips with the
+    // mode. Derive both expectations from the active default so the
+    // assertion tracks the config default automatically.
+    const mode = configStore.get().display;
+    const [first, second] =
+      mode === "remaining" ? [100 - 38, 100 - 60] : [38, 60];
+    assert.ok(line.includes(`${first}%`), `got: ${line}`);
+    assert.ok(line.includes(`${second}%`), `got: ${line}`);
   });
 
   it("displayed value = 100 - used when mode='remaining'", () => {

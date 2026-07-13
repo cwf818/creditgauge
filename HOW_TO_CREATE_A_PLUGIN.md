@@ -11,6 +11,8 @@
 3. [Plugin ABI contract](#3-plugin-abi-contract)
 4. [Authoring recipes by provider type](#4-authoring-recipes-by-provider-type)
 5. [Registration in `config.json`](#5-registration-in-configjson)
+   - [5a. Example — `copilot-api`](#5a-example--copilot-api-github-copilot-proxy-sidecar)
+   - [5b. Bundled plugin catalog](#5b-bundled-plugin-catalog)
 6. [Returned shape — `Partial<Quota>` / `Partial<Balance>`](#6-returned-shape--partialquota--partialbalance)
 7. [Error semantics — soft-fail vs hard-fail](#7-error-semantics--soft-fail-vs-hard-fail)
 8. [Override resolution order](#8-override-resolution-order)
@@ -38,14 +40,16 @@ You do **NOT** need a plugin to:
 
 ## 2. The 60-second path
 
-Three commands. Copy-paste-able for kimi:
+Three commands. Copy-paste-able for a generic QUOTA provider (swap
+`myprovider` + the endpoint for your own; a real, fuller example lives
+in [§5b](#5b-bundled-plugin-catalog)):
 
 ```bash
 # 1. Create the plugin directory (stable across cache rolls).
-mkdir -p ~/.claude/plugins/topgauge/query_plugins/kimi
+mkdir -p ~/.claude/plugins/topgauge/query_plugins/myprovider
 
 # 2. Drop your plugin file. Both .js and .mjs work; .js is conventional.
-cat > ~/.claude/plugins/topgauge/query_plugins/kimi/index.js <<'EOF'
+cat > ~/.claude/plugins/topgauge/query_plugins/myprovider/index.js <<'EOF'
 const ENDPOINT = "https://your.provider.example/api/quota";
 export default {
   async fetchAccountCredit(authenticationKey, ctx) {
@@ -226,10 +230,127 @@ config block by the same id. Edit `~/.claude/plugins/topgauge/config.json`:
 | `ENDPOINT`             | no       | URL your plugin hits. Your plugin reads `ENDPOINT` from its own constant — this config field is for the host's URL-matching only, not for the plugin. |
 | `AUTHENTICATION_KEY`   | no       | Sent to your plugin as the first arg. Falls back to `process.env.ANTHROPIC_AUTH_TOKEN`. **Never logged / echoed / persisted by the host.** |
 
+### 5a. Example — `copilot-api` (GitHub Copilot proxy sidecar)
+
+The bundled `copilot-api` plugin talks to the local copilot-proxy sidecar
+on `http://localhost:4141`. Register it the same way as any other
+provider — the id (`copilot-api`) matches the plugin directory name:
+
+```jsonc
+{
+  "providers": {
+    "copilot-api": {
+      "TYPE": "QUOTA",
+      "BASE_URL_COMPARED_TO": "http://localhost:4141",
+      "COMPARE_METHOD": "STARTWITH"
+    }
+  }
+}
+```
+
+`AUTHENTICATION_KEY` is omitted — the sidecar is authenticated by
+localhost/IP and needs no Bearer token. `COMPARE_METHOD: "STARTWITH"`
+matches any `ANTHROPIC_BASE_URL` beginning with `http://localhost:4141`
+(so `http://localhost:4141/v1`, `.../anthropic`, etc. all route here).
+
+**Only the 30-day (natural-month) window is available.** The plugin
+projects Copilot's `premium_interactions` onto the canonical
+`longInterval` slot and leaves `shortInterval` / `midInterval` `null`;
+that slot carries only a **percent** (`remaining/used %`) and a **credit**
+pair (`remainingQuota` / `limitQuota` — the premium-interaction count and
+entitlement). There is no 5h / 7d data.
+
+Because a Copilot-only display should show just that one window, define a
+dedicated `lineTemplates` fragment and gate it to this provider with the
+`m_template` `provider:` filter — that's how you "set the display
+condition via a provider parameter". The `provider:copilot-api` gate
+renders the fragment only when the active provider id is `copilot-api`,
+and drops it under every other provider (and under an unmatched
+`ANTHROPIC_BASE_URL`):
+
+```jsonc
+{
+  "lineTemplates": {
+    "copilot": [
+      "m_modeLabel", "s_space",
+      "m_windowQuota|term:long", "s_space", "m_countdown|term:long"
+    ]
+  },
+  "statuslineTemplate": [
+    "m_template|quota|type:quota|provider:copilot-api",
+    "m_template|copilot|provider:copilot-api"
+  ]
+}
+```
+
+Use `term:long` (not `short` / `mid`) everywhere in the fragment — that's
+the only slot the plugin fills. `m_windowQuota|term:long` renders the
+percent + bar; add `m_windowQuota|term:long|display:remaining` or the
+absolute credit via the interval's `remainingQuota` / `limitQuota` (see
+[MANUAL.md](./MANUAL.md) for the credit-rendering module args).
+
 Plugin authors sometimes find that the `ENDPOINT` config field is a
 footgun — it lures people into believing the host reads it. The host
 does **not** call your endpoint directly. Your plugin reads the URL
 from its own module-level constant.
+
+> ⚠️ **Never commit a real `AUTHENTICATION_KEY`.** `config.json` lives
+> outside the repo (`~/.claude/plugins/topgauge/config.json`) and is
+> not tracked, but if you paste a real credential into any doc snippet,
+> scrub it before `git add`. The Kimi credential in particular is a
+> browser `localStorage.access_token` tied to your account — leaking it
+> is the same as leaking your password.
+
+### 5b. Bundled plugin catalog
+
+The repo ships two reference plugins under `query_plugins/`. Both are
+plain ESM files you can copy to start your own — read them alongside
+§4's recipes.
+
+#### `kimi/` — Moonshot Kimi (kimi.com)
+
+Endpoint:
+`POST https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages`
+
+Three windows:
+- `5h` rolling sub-window (`usages.limits[0].detail`) → `shortInterval`
+- `7d` primary weekly cycle (`usages.detail`) → `midInterval`
+- `30d` total-quota percentage only (`totalQuota.remaining` — no
+  resetTime / startAt / endAt, so the renderer drops the time group) →
+  `longInterval`
+
+**`AUTHENTICATION_KEY` — REQUIRED, non-obvious source.** It is the Kimi
+dashboard's `localStorage.access_token` (issued after browser login at
+<https://kimi.com>), **NOT** the API token under Settings. The plugin
+sends it as `Authorization: Bearer <key>` against the dashboard's
+gRPC-over-HTTP endpoint. To grab it:
+
+1. Open <https://kimi.com>, log in.
+2. DevTools → Application → Local Storage → `https://kimi.com` → copy
+   the value of `access_token`.
+3. Paste it into `config.json`:
+
+   ```jsonc
+   {
+     "providers": {
+       "kimi": {
+         "TYPE": "QUOTA",
+         "BASE_URL_COMPARED_TO": "https://api.kimi.com/coding/",
+         "COMPARE_METHOD": "EXACT",
+         "AUTHENTICATION_KEY": "REPLACE_ME_WITH_LOCALSTORAGE_ACCESS_TOKEN"
+       }
+     }
+   }
+   ```
+
+#### `copilot-api/` — GitHub Copilot (via copilot-proxy sidecar)
+
+Endpoint: `GET http://localhost:4141/usage` — the copilot-proxy sidecar
+running on the user's machine. One window: `30d` natural-month cycle
+(`premium_interactions` → `longInterval`; `startAt` / `endAt` computed
+locally as month boundaries). No `AUTHENTICATION_KEY` — authenticated by
+localhost/IP. See [§5a](#5a-example--copilot-api-github-copilot-proxy-sidecar)
+for the full registration + display walkthrough.
 
 ---
 

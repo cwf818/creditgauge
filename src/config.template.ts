@@ -301,7 +301,7 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "s_space",
     "m_tokenTotalIn",
     "s_space",
-    "m_quote|freq:120s|color:rainbow|lang:en|wrap:~",
+    "m_template|quote",
   ],
   acc_eval: [
     "m_label|🟢Session: |color:orange",
@@ -398,6 +398,9 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "s_space",
     "m_contextRemainingPercent",
   ],
+  quote: [
+    "m_quote|freq:120s|color:rainbow|lang:en|wrap:~",
+  ],
 };
 
 // vX.X.X+ — top-level `statuslineTemplate` preset registry. Distinct
@@ -463,7 +466,7 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "s_newline",
     "m_template|git_info_all",
     "s_pipe|wrap:true",
-    "m_quote|address:https://api.quotable.io/random|quote:content|author:author|freq:120s|color:rainbow|insecureTls:true",
+    "m_template|quote",
     "s_newline",
     "m_label|⚡Tick-tock: |color:cyan",
     "s_tab",

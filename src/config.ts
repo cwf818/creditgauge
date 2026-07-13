@@ -398,7 +398,7 @@ const DEFAULT_CONFIG: {
 } = {
   cacheTtlMs: 60_000,
   fetchTimeoutMs: 5_000,
-  display: "used",
+  display: "remaining",
   // "balance" was added in v0.2.17 alongside the lineTemplate refactor
   // so the m_modeLabel module for the DeepSeek path can pick it up. Defaults
   // to "Balance:" to preserve the v0.2.16 hardcoded literal.
