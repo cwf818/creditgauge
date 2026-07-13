@@ -2131,35 +2131,75 @@ describe("formatLine — stale suffix integration", () => {
     // fires only on stale. A fresh tick (default plan template has
     // no m_age) renders no suffix — the broken-chain indicator is
     // reserved for real outages.
-    const line = formatLine(
-      legacyToIv({ pct: 38, resetAt: null }),
-      legacyToIv({ pct: 39, resetAt: null }, "7d"),
-      null,
-      "used",
-      Date.now(),
-      30_000,
-      false,
-    );
-    assert.ok(!line.includes("ago"), `got: ${line}`);
-    assert.ok(!line.includes(STALE_COLOR), `got: ${line}`);
+    // v0.4.x: the default quota template now ends with `m_age`, so
+    // formatLine renders the slot via m_age and the forced-fallback
+    // path stays silent. To exercise the stale-fallback logic in
+    // isolation we override the template to mirror pre-v0.4.x.
+    __resetForTest({
+      statuslineTemplate:[
+        "m_modeLabel", "s_space",
+        "m_windowQuota|term:short", "s_space", "m_countdown|term:short",
+        "s_space", "s_dot", "s_space",
+        "m_windowQuota|term:mid", "s_space", "m_countdown|term:mid",
+      ],
+    });
+    try {
+      const line = formatLine(
+        legacyToIv({ pct: 38, resetAt: null }),
+        legacyToIv({ pct: 39, resetAt: null }, "7d"),
+        null,
+        "used",
+        Date.now(),
+        30_000,
+        false,
+      );
+      assert.ok(!line.includes("ago"), `got: ${line}`);
+      assert.ok(!line.includes(STALE_COLOR), `got: ${line}`);
+    } finally {
+      __resetForTest();
+    }
   });
 
   it("does NOT append the stale suffix when ageMs is omitted", () => {
-    const line = formatLine(legacyToIv({ pct: 38, resetAt: null }), legacyToIv({ pct: 39, resetAt: null }, "7d"));
-    assert.ok(!line.includes("ago"));
-    assert.ok(!line.includes(STALE_COLOR));
+    __resetForTest({
+      statuslineTemplate:[
+        "m_modeLabel", "s_space",
+        "m_windowQuota|term:short", "s_space", "m_countdown|term:short",
+        "s_space", "s_dot", "s_space",
+        "m_windowQuota|term:mid", "s_space", "m_countdown|term:mid",
+      ],
+    });
+    try {
+      const line = formatLine(legacyToIv({ pct: 38, resetAt: null }), legacyToIv({ pct: 39, resetAt: null }, "7d"));
+      assert.ok(!line.includes("ago"));
+      assert.ok(!line.includes(STALE_COLOR));
+    } finally {
+      __resetForTest();
+    }
   });
 
   it("does NOT append the stale suffix when ageMs is 0 and stale=false", () => {
-    const line = formatLine(
-      legacyToIv({ pct: 38, resetAt: null }),
-      legacyToIv({ pct: 39, resetAt: null }, "7d"),
-      null,
-      "used",
-      Date.now(),
-      0
-    );
-    assert.ok(!line.includes("ago"));
+    __resetForTest({
+      statuslineTemplate:[
+        "m_modeLabel", "s_space",
+        "m_windowQuota|term:short", "s_space", "m_countdown|term:short",
+        "s_space", "s_dot", "s_space",
+        "m_windowQuota|term:mid", "s_space", "m_countdown|term:mid",
+      ],
+    });
+    try {
+      const line = formatLine(
+        legacyToIv({ pct: 38, resetAt: null }),
+        legacyToIv({ pct: 39, resetAt: null }, "7d"),
+        null,
+        "used",
+        Date.now(),
+        0
+      );
+      assert.ok(!line.includes("ago"));
+    } finally {
+      __resetForTest();
+    }
   });
 
   it("DOES append the broken-chain suffix when stale=true even if ageMs is 0", () => {

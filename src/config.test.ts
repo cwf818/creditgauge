@@ -78,12 +78,18 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
   });
 
   it('"standard" resolves to the standard preset body', async () => {
+    // v0.4.x: tail of standard no longer appends `m_age` + `m_version`
+    // — the default `quota` template already owns the age slot via
+    // `m_age`, and `m_version` was deemed redundant with the plugin
+    // source glyph (`m_pluginSource`) for version visibility.
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "standard" }));
     const cfg = await loadConfig();
     assert.ok(cfg.statuslineTemplate[0].startsWith("m_template|information"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|tick_eval"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|stat_eval"));
-    assert.ok(cfg.statuslineTemplate.includes("m_version|color:yellow"));
+    assert.ok(cfg.statuslineTemplate.includes("m_pluginSource"));
+    assert.ok(cfg.statuslineTemplate.includes("m_template|quota|type:quota"));
+    assert.ok(cfg.statuslineTemplate.includes("m_template|balance|type:balance"));
   });
 
   it('"abundant" resolves to the abundant preset body', async () => {
@@ -112,12 +118,13 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     assert.equal(cfg.statuslineTemplate[0], "m_template|tick_eval");
     assert.ok(cfg.statuslineTemplate.includes("m_template|acc_eval"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|stat_eval"));
-    // Final line: provider-type dispatch + m_age + mem_info + version.
+    // Final line: provider-type dispatch + mem_info (v0.4.x — m_age +
+    // m_version were trimmed; m_pluginSource glyph carries the version
+    // semantic now).
     assert.ok(cfg.statuslineTemplate.includes("m_pluginSource"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|quota|type:quota"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|balance|type:balance"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|mem_info"));
-    assert.ok(cfg.statuslineTemplate.includes("m_version|color:yellow"));
     // 4 logical lines = 3 newlines in the array.
     const newlines = cfg.statuslineTemplate.filter((t) => t === "s_newline").length;
     assert.equal(newlines, 3, `expected 3 s_newline (4-line layout), got ${newlines}`);

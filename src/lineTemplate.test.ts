@@ -239,18 +239,35 @@ describe("lineTemplate — forced visibility of m_age on stale", () => {
     }
   });
 
-  it("does NOT render the stale suffix on a fresh tick (ageMs=0)", () => {
-    const line = renderProviderLine("minimax", {
-      mode: "used",
-      nowMs: Date.now(),
-      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 38, remainingPercent: 100 - 38, remainingQuota: null, usedQuota: null, limitQuota: null },
-      midInterval: { windowId: "7d", label: "7d", startAt: null, endAt: null, intervalMs: null, usedPercent: 60, remainingPercent: 100 - 60, remainingQuota: null, usedQuota: null, limitQuota: null },
-      ageMs: 0,
-      stale: false,
-      version: "",
+  it("does NOT render the stale suffix on a fresh tick (ageMs=0) when m_age is absent from the template", () => {
+    // v0.4.x+: default quota template now ends with `m_age`, so a fresh
+    // tick DOES emit `🔗 0m ago` (m_age owns the slot, no separate stale
+    // suffix). This test pins the pre-m_age-in-default behavior: with
+    // m_age explicitly excluded, the legacy stale-fallback logic must
+    // NOT inject a stale suffix on ageMs=0.
+    __resetForTest({
+      statuslineTemplate:[
+        "m_modeLabel", "s_space",
+        "m_windowQuota|term:short", "s_space", "m_countdown|term:short",
+        "s_space", "s_dot", "s_space",
+        "m_windowQuota|term:mid", "s_space", "m_countdown|term:mid",
+      ],
     });
-    assert.ok(!line.includes(STALE_COLOR));
-    assert.ok(!line.includes("ago"));
+    try {
+      const line = renderProviderLine("minimax", {
+        mode: "used",
+        nowMs: Date.now(),
+        shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 38, remainingPercent: 100 - 38, remainingQuota: null, usedQuota: null, limitQuota: null },
+        midInterval: { windowId: "7d", label: "7d", startAt: null, endAt: null, intervalMs: null, usedPercent: 60, remainingPercent: 100 - 60, remainingQuota: null, usedQuota: null, limitQuota: null },
+        ageMs: 0,
+        stale: false,
+        version: "",
+      });
+      assert.ok(!line.includes(STALE_COLOR));
+      assert.ok(!line.includes("ago"));
+    } finally {
+      __resetForTest();
+    }
   });
 
   it("uses healthy emoji when stale=false and ageMs > 0 (m_age is in template)", () => {
@@ -1899,17 +1916,19 @@ describe("lineTemplate — inline-args regression / round-trip", () => {
   beforeEach(() => __resetUnknownModuleWarnForTest());
   afterEach(() => __resetForTest());
 
-  it("default template (bare m_modeLabel) still renders byte-for-byte equal to pre-v0.3.3", () => {
-    // No __resetForTest — uses the stock default template.
+  it("default template (bare m_modeLabel) renders the post-v0.4.x quota header line", () => {
+    // v0.4.x default quota template ends with `m_age` so the line tail
+    // is `age:n/a` when no age is provided. We pin the post-default
+    // shape here (pre-v0.3.3 byte-identical contract is preserved by
+    // the m_age-absent test above).
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
       shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 38, remainingPercent: 100 - 38, remainingQuota: null, usedQuota: null, limitQuota: null },
       midInterval: { windowId: "7d", label: "7d", startAt: null, endAt: null, intervalMs: null, usedPercent: 60, remainingPercent: 100 - 60, remainingQuota: null, usedQuota: null, limitQuota: null },
       ageMs: null, stale: false, version: "",
     });
-    // Default template renders "Usage: ▓▓▓░░░░░ 38% 5h · ▓▓▓▓▓▓░░░ 60% 7d".
-    // Strip ANSI to make the assertion stable.
-    assert.match(strip(line), /^Usage: ▓+░+ 38% 5h · ▓+░+ 60% 7d$/);
+    // Default template renders "Usage: ▓░░░ 38% 5h · ▓░░ 60% 7d age:n/a".
+    assert.match(strip(line), /^Usage: ▓+░+ 38% 5h · ▓+░+ 60% 7d age:n\/a$/);
   });
 
   it("compose() round-trip preserves an inline-colored chunk without bleeding upstream", () => {

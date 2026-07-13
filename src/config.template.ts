@@ -46,8 +46,9 @@ const DEFAULT_LINE_TEMPLATE: {
     "m_windowQuota|term:short", "s_space", "m_countdown|term:short",
     "s_space", "s_dot", "s_space",
     "m_windowQuota|term:mid", "s_space", "m_countdown|term:mid",
+    "s_space", "m_age"
   ],
-  balance: ["m_modeLabel|color:yellow", "s_space", "m_balance"],
+  balance: ["m_modeLabel|color:yellow", "s_space", "m_balance", "s_space", "m_age"],
 };
 
 // v0.4.0+ — registry of reusable template fragments. Each value is a
@@ -170,6 +171,7 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "m_windowQuota|term:mid", "s_space", "m_countdown|term:mid",
     "s_space", "s_dot", "s_space",
     "m_windowQuota|term:long", "s_space", "m_countdown|term:long",
+    "s_space", "m_age"
   ],
 
   // ----- User-facing fragment library (vX.X.X+) -----
@@ -259,20 +261,17 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "m_contextSize|valueOnly:true",
     "/",
     "m_contextWindowsSize|valueOnly:true",
-    "s_pipe|wrap:true",
-    "m_label|Memory: |color:yellow",
-    "m_windowMemUsage|display:used",
-    "s_space",
-    "m_memUsage|valueOnly:true"
   ],
   mem_info: [
-    "m_label|Memory: |color:yellow",
+    "m_label|▦ Memory: |color:yellow",
     "m_windowMemUsage|display:used",
     "s_space",
-    "m_memUsage|valueOnly:true"
+    "m_memUsage|valueOnly:true",
+    "s_pipe|wrap:true",
+    "m_version|color:yellow",
   ],
   git_info: [
-    "m_label|Git: |color:yellow",
+    "m_label|⎇ Git: |color:yellow",
     "m_branch",
     "s_space",
     "m_gitStatus",
@@ -376,7 +375,7 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "m_statTtlStatus",
   ],
   git_info_all: [
-    "m_label|Git: |color:yellow",
+    "m_label|⎇ Git: |color:yellow",
     "m_repo",
     "s_space",
     "m_branch",
@@ -422,9 +421,7 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   simple: [
     "m_pluginSource",
     "m_template|quota|type:quota",
-    "m_template|balance|type:balance",
-    "s_space",
-    "m_age",
+    "m_template|balance|type:balance"
   ],
   // multi-line: context-info / tick-eval / stat-eval stacked.
   compact: [
@@ -438,16 +435,12 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_template|quota|type:quota",
     "m_template|balance|type:balance",
     "s_space",
-    "m_age",
-    "s_dot|wrap:true",
     "m_template|mem_info",
-    "s_dot|wrap:true",
-    "m_version|color:yellow",
   ],
   standard: [
     "m_template|information",
-    "s_pipe|wrap:true",
-    "m_template|git_info",
+    "s_space",
+    "m_template|mem_info",
     "s_newline",
     "m_template|tick_eval",
     "s_newline",
@@ -459,14 +452,14 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_template|quota|type:quota",
     "m_template|balance|type:balance",
     "s_space",
-    "m_age",
-    "s_space",
-    "m_version|color:yellow",
+    "m_template|git_info",
   ],
   // kitchen-sink: every fragment + per-scope acc + per-window
   // stat + long-interval quota + chain emoji + version.
   abundant: [
     "m_template|information",
+    "s_space",
+    "m_template|mem_info",
     "s_newline",
     "m_template|git_info_all",
     "s_pipe|wrap:true",
@@ -507,11 +500,7 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_template|quota_all|type:quota",
     "m_template|balance|type:balance",
     "s_space",
-    "m_quota|term:long|display:remaining|nulldrop:true",
-    "s_space",
-    "m_age",
-    "s_space",
-    "m_version|color:yellow",
+    "m_quota|term:long|display:remaining|nulldrop:true"
   ],
 };
 
