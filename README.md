@@ -4,16 +4,6 @@ Usage: ▓▓▓▓░░░░ 40% (1h27m🕗 5h) · ▓▓░░░░░░ 2
 Balance: ￥110.00 · $3.5                                        # Balance
 </pre>
 
-## Snapshots
-
-**Standard preset** (default `statuslineTemplate` — context, memory, git, session / project / 5h-align / 7d-align scanners, m_statTtlStatus tail, plus the live quota line):
-
-![toPGauge standard preset](./screenshots/screenshot-standard.png)
-
-**Simple preset** — minimal layout, single Remain line on its own:
-
-![toPGauge simple preset](./screenshots/screenshot-simple.png)
-
 # ToPGauge
 
 [![License](https://img.shields.io/github/license/cwf818/topgauge)](LICENSE)
@@ -30,6 +20,16 @@ For vanilla Anthropic, OpenRouter, or any other provider not on the list above, 
 We deliberately don't reimplement the kitchen-sink statuslines that already exist for vanilla Anthropic — [`claude-hud`](https://github.com/jarrodwatts/claude-hud) and [`ccstatusline`](https://github.com/sirmalloc/ccstatusline) cover that. This plugin focuses on provider-specific **quota / balance** data, plus lightweight usage statistics read from Claude Code's stdin payload.
 
 ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / orange / red. Applied to the displayed value + the colored bar segment; the empty part of the bar stays uncolored so it remains readable.
+
+## Snapshots
+
+**Simple preset** (default `statuslineTemplate`, working with a pre-installed `claude-hud`) — minimal layout, single Remain line on its own:
+
+![toPGauge simple preset](./screenshots/screenshot-simple.png)
+
+**Standard preset** — context, memory, git, session / project / 5h-align / 7d-align scanners, m_statTtlStatus tail, plus the live quota line:
+
+![toPGauge standard preset](./screenshots/screenshot-standard.png)
 
 ## Documentation
 
