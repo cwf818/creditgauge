@@ -27,22 +27,32 @@ loader hands the id straight through).
 
 The plugin needs a provider entry that points at it. Set the active
 provider via `ANTHROPIC_BASE_URL` and add the matching block to
-`~/.claude/plugins/topgauge/config.json`:
+`~/.claude/plugins/topgauge/config.json`. The matching is driven by
+the **uppercase** `BASE_URL_COMPARED_TO` + `COMPARE_METHOD` keys
+(`EXACT` | `INCLUDE` | `STARTWITH`) — `AUTHENTICATION_KEY` is the
+plugin's credential and is forwarded to `fetchAccountCredit(authenticationKey, ctx)`
+on every call:
 
 ```jsonc
 {
   "providers": {
     "<id>": {
-      "baseUrl": "https://<provider-host>",
-      // Plugin-specific knobs go here. Most plugins need at minimum:
-      "AUTHENTICATION_KEY": "<credential>",
-      // Optional template / fail-label / interval overrides:
-      "template": "minimal",
-      "failLabel": "unavailable"
+      "TYPE": "QUOTA",                          // "QUOTA" or "BALANCE"
+      "BASE_URL_COMPARED_TO": "https://<host>/<path>",
+      "COMPARE_METHOD": "EXACT",                // EXACT | INCLUDE | STARTWITH
+      "AUTHENTICATION_KEY": "REPLACE_ME"        // plugin reads this off ctx
     }
   }
 }
 ```
+
+> ⚠️ **Never commit a real `AUTHENTICATION_KEY`.** `config.json`
+> itself is gitignored (it lives outside the repo, at
+> `~/.claude/plugins/topgauge/config.json`), but if you paste a real
+> credential here for documentation, scrub it before `git add`. The
+> Kimi credential in particular is a browser `localStorage.access_token`
+> tied to your account — leaking it is the same as leaking your
+> password.
 
 Plugin keys land on the `ctx` argument the host passes in, so the plugin
 author reads `ctx.intervals` / `ctx.currencies` / etc. directly from the
@@ -81,8 +91,10 @@ To grab it:
    {
      "providers": {
        "kimi": {
-         "baseUrl": "https://api.kimi.com/coding/",
-         "AUTHENTICATION_KEY": "<paste access_token here>"
+         "TYPE": "QUOTA",
+         "BASE_URL_COMPARED_TO": "https://api.kimi.com/coding/",
+         "COMPARE_METHOD": "EXACT",
+         "AUTHENTICATION_KEY": "REPLACE_ME_WITH_LOCALSTORAGE_ACCESS_TOKEN"
        }
      }
    }
@@ -117,8 +129,10 @@ Leave it out unless your copilot-proxy variant requires it.
 {
   "providers": {
     "copilot": {
-      "baseUrl": "http://localhost:1141",
-      "AUTHENTICATION_KEY": ""
+      "TYPE": "QUOTA",
+      "BASE_URL_COMPARED_TO": "http://localhost:4141",
+      "COMPARE_METHOD": "EXACT",
+      "AUTHENTICATION_KEY": ""        // leave empty unless your proxy needs it
     }
   }
 }
