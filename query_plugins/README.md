@@ -100,11 +100,6 @@ To grab it:
    }
    ```
 
-**Refresh cadence.** Kimi's auth tokens expire with the browser session
-and there is no programmatic refresh — when you log out / re-login,
-re-extract the new `access_token` and update `config.json`. A stale
-token does **not** throw a visible error; the plugin silently returns
-null and the renderer falls back to a `Remain: --:…` placeholder.
 
 ### `copilot-api/` — GitHub Copilot (via copilot-proxy sidecar)
 
@@ -117,23 +112,3 @@ null and the renderer drops them on a Copilot-only display. The
 `startAt` / `endAt` are computed locally as the natural-month
 boundaries (start of this month → start of next month, local time)
 so the renderer can draw a window-fill-aware reset arrow.
-
-#### `AUTHENTICATION_KEY` — OPTIONAL
-
-The proxy sidecar is on `localhost` and is implicit-authenticated by
-IP. Most users leave `AUTHENTICATION_KEY` unset; the plugin only
-attaches `Authorization: Bearer <key>` if the field is non-empty.
-Leave it out unless your copilot-proxy variant requires it.
-
-```jsonc
-{
-  "providers": {
-    "copilot": {
-      "TYPE": "QUOTA",
-      "BASE_URL_COMPARED_TO": "http://localhost:4141",
-      "COMPARE_METHOD": "EXACT",
-      "AUTHENTICATION_KEY": ""        // leave empty unless your proxy needs it
-    }
-  }
-}
-```

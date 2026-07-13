@@ -23,7 +23,7 @@ ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / ora
 
 ## Snapshots
 
-**Simple preset** (default `statuslineTemplate`, working with a pre-installed `claude-hud`) — minimal layout, single Remain line on its own:
+**Simple preset** (default `statuslineTemplate`, working with a pre-installed `claude-hud`) — minimal layout, single Quota line on its own:
 
 ![toPGauge simple preset](./screenshots/screenshot-simple.png)
 
