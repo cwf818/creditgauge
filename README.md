@@ -4,6 +4,16 @@ Usage: ▓▓▓▓░░░░ 40% (1h27m🕗 5h) · ▓▓░░░░░░ 2
 Balance: ￥110.00 · $3.5                                        # Balance
 </pre>
 
+## Snapshots
+
+**Standard preset** (default `statuslineTemplate` — context, memory, git, session / project / 5h-align / 7d-align scanners, m_statTtlStatus tail, plus the live quota line):
+
+![toPGauge standard preset](./screenshots/screenshot-standard.png)
+
+**Simple preset** — minimal layout, single Remain line on its own:
+
+![toPGauge simple preset](./screenshots/screenshot-simple.png)
+
 # ToPGauge
 
 [![License](https://img.shields.io/github/license/cwf818/topgauge)](LICENSE)
