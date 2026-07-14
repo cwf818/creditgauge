@@ -42,7 +42,7 @@ src/
   # The value color is driven by colorFor(pct, "used") so
   # thresholds.percentBands drives the hue. NO label prefix.
   # Opt-in; not in any default lineTemplate.
-  render.ts           # v1.0 READ-ONLY against tickState.pending: pctBar + ANSI color thresholds + formatLine + formatBalanceLine; NO setAvg/setPrevTick/setLastSpeed calls (those moved to data-processor.ts)
+  render.ts           # v1.0 READ-ONLY against tickState.pending: pctBar + ANSI color thresholds + renderProviderLine (sole public entry; the legacy formatLine / formatBalanceLine shims were dropped in v0.9.x); NO setAvg/setPrevTick/setLastSpeed calls (those moved to data-processor.ts)
   data-processor.ts   # v1.0 processTick + setPrevTick + setAvg + setLastSpeed/ApiMs/TokenHitRate + computeAndCacheTickDeltaPure + getDeltaForRender — owns ALL writes to tickState.pending
   cache.ts            # TTL + stale-on-error (Map<key, {at, value}>) — TTL passed in by index.ts from configStore
   config.ts           # config loader/store and provider facade

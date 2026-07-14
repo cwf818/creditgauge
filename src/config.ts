@@ -720,7 +720,9 @@ function applyOverrides(base: Config, raw: Record<string, unknown>): Config {
         warn("modeLabels.remaining must be a string; using default");
       // v0.2.17: added alongside the lineTemplate refactor so m_modeLabel
       // can pick it up for the DeepSeek (balance) path. Replaces the
-      // hardcoded "Balance: " literal in the old formatBalanceLine.
+      // hardcoded "Balance: " literal in the legacy `formatBalanceLine`
+      // shim (dropped in the v0.9.x dead-export cleanup; the "Balance:"
+      // prefix now flows through m_modeLabel).
       if (typeof m.balance === "string") out.modeLabels.balance = m.balance;
       else if ("balance" in m)
         warn("modeLabels.balance must be a string; using default");

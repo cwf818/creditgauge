@@ -9,10 +9,10 @@
 // v0.2.17: the line layout is now driven by a `lineTemplate` config
 // field — an ordered list of display-module tokens (m_modeLabel,
 // m_window5h, m_countdown5h, m_window7d, m_countdown7d, m_balance,
-// m_age, m_version) and separator references (s_0, s_1, …).
-// `formatLine` and `formatBalanceLine` are preserved as compatibility
-// shims that expand the default templates; new code should call
-// `renderProviderLine` directly.
+// m_age, m_version) and separator references (s_0, s_1, …). New
+// code should call `renderProviderLine` directly with the open-ended
+// `intervals` dict shape (v0.9.4) so non-reserved terms aren't
+// dropped on the floor.
 
 import { configStore, warn } from "./config.ts";
 import { providerTypeFor } from "./providers.ts";
@@ -130,8 +130,9 @@ type DisplayMode = "remaining" | "used";
 // (placeholder when the key is missing).
 
 // Shorthand for the active config snapshot. Reading configStore.get()
-// on every call would be wasteful for hot paths (every formatLine call
-// does many color/band lookups) — the helpers below read it lazily.
+// on every call would be wasteful for hot paths (every
+// renderProviderLine call does many color/band lookups) — the helpers
+// below read it lazily.
 function cfg() {
   return configStore.get();
 }
@@ -1038,37 +1039,6 @@ export function resolveDisplayMode(): DisplayMode {
   return cfg().display;
 }
 
-export function formatLine(
-  shortInterval: Interval | null,
-  midInterval: Interval | null,
-  longInterval: Interval | null = null,
-  mode: DisplayMode = resolveDisplayMode(),
-  nowMs: number = Date.now(),
-  ageMs?: number,
-  stale: boolean = false,
-  tokens: TokenSnapshot | null = null,
-): string {
-  // v0.9.4 — three positional args packed into the open-ended
-  // `intervals` dict. The 3-arg signature is preserved for
-  // back-compat with old test fixtures / external callers; new
-  // code should call `renderProviderLine` directly with the dict
-  // shape so non-reserved terms aren't dropped on the floor.
-  const intervals: Record<string, Interval | null> = {
-    short: shortInterval ?? null,
-    mid: midInterval ?? null,
-    long: longInterval ?? null,
-  };
-  return renderProviderLine("minimax", {
-    mode,
-    nowMs,
-    intervals,
-    ageMs: ageMs ?? null,
-    stale,
-    version: cfg().version,
-    tokens,
-  });
-}
-
 // ----- DeepSeek balance line -------------------------------------------------
 //
 // Distinct from the MiniMax percentage thresholds (0/20/40/60/80): a balance
@@ -1152,7 +1122,7 @@ type BalanceLike = {
   minValue: number | null;
 };
 
-// v0.2.17: refactor of formatBalanceLine so the m_balance module can
+// v0.2.17: refactor of the balance-line renderer so the m_balance module can
 // produce a complete colored chunk (prefix + " · "-joined entries
 // wrapped in a single SGR block). Returns "" when there's nothing to
 // render so the m_balance module can return null and the template
@@ -1168,29 +1138,6 @@ function formatBalanceEntriesColored(b: BalanceLike, override?: string): string 
   // Color follows the LOWEST entry — most urgent currency drives the hue.
   const color = override ?? colorForBalance(b.minValue);
   return `${color}${chunks.join(" · ")}${RESET}`;
-}
-
-export function formatBalanceLine(b: BalanceLike, ageMs?: number, stale: boolean = false, tokens: TokenSnapshot | null = null): string {
-  if (!b.isAvailable || b.entries.length === 0 || b.minValue == null) {
-    // "not available!" is rendered for BOTH the original "API said no" branch
-    // (is_available: false) and the "fetch failed and we have no cache" branch
-    // upstream. Neither carries an age to report, so the stale suffix is
-    // intentionally NOT appended here. v0.2.17: this branch is NOT routed
-    // through the lineTemplate (out of scope for v0.2.17) — it's a hardcoded
-    // sentinel that always wins.
-    return `Balance: ${RED}not available!${RESET}`;
-  }
-  // v0.2.17: delegate to the lineTemplate renderer. The default balance
-  // template reproduces the v0.2.16 byte-for-byte output.
-  return renderProviderLine("deepseek", {
-    mode: resolveDisplayMode(),
-    nowMs: Date.now(),
-    balance: b,
-    ageMs: ageMs ?? null,
-    stale,
-    version: cfg().version,
-    tokens,
-  });
 }
 
 // ----- lineTemplate / module renderer (v0.2.17) -------------------------
@@ -1326,11 +1273,12 @@ type RenderContext = {
 };
 
 // v0.4.x — modules may declare a `type` filter so they only render
-// for one provider kind. With the unification of renderPlanLine /
-// formatBalanceLine into a single `renderDataLine`, the per-provider
-// gate that used to live in dispatch.ts:buildProviderLine now lives
-// here: a bare `m_window5h` in a balance provider's template
-// silently drops (the module is type:`"quota"`), and `m_balance` in a
+// for one provider kind. With the unification of `renderPlanLine`
+// (and the legacy `formatBalanceLine` shim, dropped in v0.9.x) into
+// a single `renderDataLine`, the per-provider gate that used to
+// live in dispatch.ts:buildProviderLine now lives here: a bare
+// `m_window5h` in a balance provider's template silently drops (the
+// module is type:`"quota"`), and `m_balance` in a
 // quota provider's template silently drops too. Modules without a
 // type tag (m_token*, m_age, m_version, …) are provider-agnostic
 // and emit on every ctx.

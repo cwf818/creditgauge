@@ -1,8 +1,9 @@
 // v0.4.x — regression tests for the per-module `type` filter on
-// MODULES / INLINE_RENDERERS (added alongside the renderPlanLine /
-// formatBalanceLine unification in Phase 1, then renamed `mode` →
-// `type` and widened to include `"unknown"` for unregistered
-// providers).
+// MODULES / INLINE_RENDERERS (added alongside the renderPlanLine
+// unification in Phase 1, then renamed `mode` → `type` and widened
+// to include `"unknown"` for unregistered providers; the
+// `formatBalanceLine` shim was removed in v0.9.x but the filter
+// contract is unchanged).
 //
 // The filter gates rendering on ctx.providerType:
 //   m_windowQuota|term:short|mid|long, m_countdown|term:*, m_quota|term:* → "plan"

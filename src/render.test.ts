@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import {
   colorFor,
   colorForBalance,
-  formatBalanceLine,
-  formatLine,
   formatResetSuffix,
   formatStaleSuffix,
   pctBar,
@@ -92,6 +90,49 @@ function winToIv(
     usedQuota: null,
     limitQuota: null,
   };
+}
+
+// Local helper: collapse the 24 quota-line renderProviderLine("minimax", …)
+// call sites into a single positional-arg call. Mirrors the shape the
+// old `formatLine` shim used to forward — `formatLine` was dropped as
+// part of the v0.9.x dead-export cleanup; tests now thread the
+// reserved-slot dict directly via `renderProviderLine`.
+function renderQuotaLine(
+  shortInterval: Interval | null,
+  midInterval: Interval | null,
+  longInterval: Interval | null = null,
+  mode: "used" | "remaining" = resolveDisplayMode(),
+  nowMs: number = Date.now(),
+  ageMs: number | null = null,
+  stale: boolean = false,
+): string {
+  return renderProviderLine("minimax", {
+    mode, nowMs,
+    shortInterval, midInterval, longInterval,
+    balance: null, ageMs, stale, version: "",
+  });
+}
+
+// Local helper: collapse the 9 available-balance renderProviderLine
+// call sites into a single positional-arg call. Mirrors the old
+// `formatBalanceLine` shim's available-branch — the unavailable
+// short-circuit (`Balance: not available!`) was dropped along with
+// the shim; those 3 tests now assert what `renderProviderLine`
+// actually emits via `m_balance` → `placeholderBare` (see the
+// "balance: " describe block below).
+function renderBalanceLine(
+  b: { isAvailable: boolean; entries: ReadonlyArray<{ currency: string; totalBalance: number }>; minValue: number | null },
+  ageMs: number | null = null,
+  stale: boolean = false,
+): string {
+  return renderProviderLine("deepseek", {
+    mode: resolveDisplayMode(),
+    nowMs: Date.now(),
+    balance: b,
+    ageMs,
+    stale,
+    version: "",
+  });
 }
 
 describe("splitBar — unified layout (left=used, right=remaining, glyphs flip by mode)", () => {
@@ -290,7 +331,7 @@ describe("resolveDisplayMode", () => {
   });
 });
 
-describe("formatLine — mode='used' (default)", () => {
+describe("renderQuotaLine — mode='used' (default)", () => {
   // Pin minUnit='m' for this suite — the tests pin time strings
   // that depend on minute-grain truncation (e.g. "1h0m" stays
   // "1h0m" rather than expanding to "1h0m0s" under the default
@@ -300,7 +341,7 @@ describe("formatLine — mode='used' (default)", () => {
     __resetForTest({ timeFormat: { minUnit: "m", maxUnitCount: 2 } });
   });
   it("prefixes with the default-mode label", () => {
-    const line = formatLine(legacyToIv({ pct: 38 }), legacyToIv({ pct: 60 }, "7d"));
+    const line = renderQuotaLine(legacyToIv({ pct: 38 }), legacyToIv({ pct: 60 }, "7d"));
     // m_modeLabel may carry an ANSI color (default `|color:yellow` is
     // injected into DEFAULT_LINE_TEMPLATE.quota), so strip SGRs
     // before checking the literal prefix. Derive the expected label
@@ -313,7 +354,7 @@ describe("formatLine — mode='used' (default)", () => {
   });
 
   it("default mode displays the mode-appropriate percentages (from 38 / 60 used)", () => {
-    const line = formatLine(legacyToIv({ pct: 38 }), legacyToIv({ pct: 60 }, "7d"));
+    const line = renderQuotaLine(legacyToIv({ pct: 38 }), legacyToIv({ pct: 60 }, "7d"));
     // `pct` is the USED percentage; the displayed value flips with the
     // mode. Derive both expectations from the active default so the
     // assertion tracks the config default automatically.
@@ -329,7 +370,7 @@ describe("formatLine — mode='used' (default)", () => {
     // remaining=62 → usedPct=38 → band 0 (BRIGHT_GREEN). The 7d
     // window has used=60 → remaining=40 → usedPct=60 → exact
     // threshold → band 1 (DARK_GREEN).
-    const line = formatLine(legacyToIv({ pct: 38 }), legacyToIv({ pct: 60 }, "7d"), null, "remaining");
+    const line = renderQuotaLine(legacyToIv({ pct: 38 }), legacyToIv({ pct: 60 }, "7d"), null, "remaining");
     assert.ok(line.includes(`${BRIGHT_GREEN}62%${RESET}`));
     assert.ok(line.includes(`${DARK_GREEN}40%${RESET}`));
   });
@@ -339,7 +380,7 @@ describe("formatLine — mode='used' (default)", () => {
     // v0.8.37.1 mode-symmetric: remaining=25 → usedPct=75 → band 2
     // (YELLOW). The bar reads "what's spent ░░░░░░ what's left ▓▓",
     // color follows the danger level (75% spent = YELLOW).
-    const line = formatLine(legacyToIv({ pct: 75 }), legacyToIv({ pct: 0 }, "7d"), null, "remaining");
+    const line = renderQuotaLine(legacyToIv({ pct: 75 }), legacyToIv({ pct: 0 }, "7d"), null, "remaining");
     // Bar: 6 plain ░ + 2 colored ▓
     assert.ok(line.includes(`░░░░░░${YELLOW}▓▓${RESET} ${YELLOW}25%${RESET}`),
       `got: ${line}`);
@@ -353,12 +394,12 @@ describe("formatLine — mode='used' (default)", () => {
   });
 });
 
-describe("formatLine — mode='used'", () => {
+describe("renderQuotaLine — mode='used'", () => {
   beforeEach(() => {
     __resetForTest({ timeFormat: { minUnit: "m", maxUnitCount: 2 } });
   });
   it("prefixes with 'Usage:' label", () => {
-    const line = formatLine(legacyToIv({ pct: 70 }), legacyToIv({ pct: 90 }, "7d"), null, "used");
+    const line = renderQuotaLine(legacyToIv({ pct: 70 }), legacyToIv({ pct: 90 }, "7d"), null, "used");
     // m_modeLabel may carry an ANSI color (default `|color:yellow` is
     // injected into DEFAULT_LINE_TEMPLATE.quota), so strip SGRs
     // before checking the literal prefix.
@@ -367,14 +408,14 @@ describe("formatLine — mode='used'", () => {
 
   it("displayed value = used", () => {
     // used=70 → display 70 → yellow (band 2)
-    const line = formatLine(legacyToIv({ pct: 70 }), legacyToIv({ pct: 90 }, "7d"), null, "used");
+    const line = renderQuotaLine(legacyToIv({ pct: 70 }), legacyToIv({ pct: 90 }, "7d"), null, "used");
     assert.ok(line.includes(`${YELLOW}70%${RESET}`));
     assert.ok(line.includes(`${RED}90%${RESET}`));
   });
 
   it("used mode: colored ▓ on LEFT represents used", () => {
     // used=75 → displayed=75 (band 2 = YELLOW) → 6/8 LEFT cells colored
-    const line = formatLine(legacyToIv({ pct: 75 }), legacyToIv({ pct: 0 }, "7d"), null, "used");
+    const line = renderQuotaLine(legacyToIv({ pct: 75 }), legacyToIv({ pct: 0 }, "7d"), null, "used");
     // Bar: 6 colored ▓ (LEFT) + 2 plain ░ (RIGHT)
     assert.ok(line.includes(`${YELLOW}▓▓▓▓▓▓${RESET}░░ ${YELLOW}75%${RESET}`),
       `got: ${line}`);
@@ -389,7 +430,7 @@ describe("formatLine — mode='used'", () => {
 
   it("full layout matches spec: 'Usage: <bar> <pct>% (<reset><arrow> <windowLabel>) · ...'", () => {
     const now = Date.parse("2026-06-24T12:00:00Z");
-    const line = formatLine(
+    const line = renderQuotaLine(
       legacyToIv({ pct: 62, resetAt: "2026-06-24T12:38:00Z" }),
       legacyToIv({ pct: 42, resetAt: "2026-06-29T04:38:00Z" }, "7d"),
       null,
@@ -421,13 +462,13 @@ describe("formatLine — mode='used'", () => {
   });
 });
 
-describe("formatLine — reset suffix integration", () => {
+describe("renderQuotaLine — reset suffix integration", () => {
   beforeEach(() => {
     __resetForTest({ timeFormat: { minUnit: "m", maxUnitCount: 2 } });
   });
   it("appends reset countdown + arrow + label inside parens, no slash", () => {
     const now = Date.parse("2026-06-24T12:00:00Z");
-    const line = formatLine(
+    const line = renderQuotaLine(
       legacyToIv({ pct: 30, resetAt: "2026-06-24T14:03:00Z" }),
       legacyToIv({ pct: 40, resetAt: "2026-06-27T17:00:00Z" }, "7d"),
       null,
@@ -439,7 +480,7 @@ describe("formatLine — reset suffix integration", () => {
   });
 
   it("no resetAt → bare ' 5h' / ' 7d' with no parens and no arrow", () => {
-    const line = formatLine(legacyToIv({ pct: 30 }), legacyToIv({ pct: 40 }, "7d"));
+    const line = renderQuotaLine(legacyToIv({ pct: 30 }), legacyToIv({ pct: 40 }, "7d"));
     // v6.x: m_countdown|term:short|mid wrap in DEFAULT_COLORS (teal);
     // strip SGR before checking substring.
     const clean = strip(line);
@@ -452,7 +493,7 @@ describe("formatLine — reset suffix integration", () => {
   it("sub-minute remaining → '<1m' (still wrapped in parens, arrow preserved)", () => {
     const now = Date.parse("2026-06-24T12:00:00Z");
     // 5h window with 30 seconds remaining
-    const line = formatLine(
+    const line = renderQuotaLine(
       legacyToIv({ pct: 99, resetAt: new Date(now + 30_000).toISOString() }),
       legacyToIv({ pct: 99, resetAt: new Date(now + 30_000).toISOString() }, "7d"),
       null,
@@ -612,13 +653,13 @@ describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
   // to index 0.
   const NOW = Date.parse("2026-06-24T12:00:00Z");
 
-  // Helper: call formatLine so the rendered glyph is what the user sees.
+  // Helper: call renderQuotaLine so the rendered glyph is what the user sees.
   // Builds a Window with the given remaining/total, sets nowMs via the
   // 4th arg. Reads the arrow off the rendered line.
   const arrow = (ratio: number, durMs: number = 5 * 3_600_000) => {
     const remaining = ratio * durMs;
     const startMs = NOW - (durMs - remaining);
-    const line = formatLine(
+    const line = renderQuotaLine(
       legacyToIv({
         pct: 50,
         resetAt: new Date(NOW + remaining).toISOString(),
@@ -660,7 +701,7 @@ describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
       const arrowAt = (ratio: number) => {
         const remaining = ratio * 5 * 3_600_000;
         const startMs = NOW - (5 * 3_600_000 - remaining);
-        const line = formatLine(
+        const line = renderQuotaLine(
           legacyToIv({
             pct: 50,
             resetAt: new Date(NOW + remaining).toISOString(),
@@ -684,7 +725,7 @@ describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
   });
 
   it("falls back to index 0 when resetStartAt is missing (DeepSeek path)", () => {
-    const line = formatLine(
+    const line = renderQuotaLine(
       legacyToIv({ pct: 50, resetAt: new Date(NOW + 60_000).toISOString() }),
       legacyToIv({ pct: 50, resetAt: new Date(NOW + 100_000_000).toISOString() }, "7d"),
       null,
@@ -702,7 +743,7 @@ describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
     // should NOT fall back to index 0 anymore — it gets the full
     // remaining/total ratio and picks the right glyph.
     const startAt = new Date(NOW - 3 * 3_600_000).toISOString();
-    const line = formatLine(
+    const line = renderQuotaLine(
       legacyToIv({
         pct: 50,
         resetAt: new Date(NOW + 2 * 3_600_000).toISOString(),
@@ -727,7 +768,7 @@ describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
     // → clamped to 1 → last index 🕐.
     const startAt = new Date(NOW + 5_000).toISOString();
     const dur = 5 * 3_600_000;
-    const line = formatLine(
+    const line = renderQuotaLine(
       legacyToIv({
         pct: 50,
         resetAt: new Date(NOW + dur).toISOString(),
@@ -774,8 +815,8 @@ describe("colorForBalance — 5-band thresholds (5/10/20/50)", () => {
   });
 });
 
-describe("formatBalanceLine — single-currency", () => {
-  // vX.X.X+ — `formatBalanceLine` delegates to `renderProviderLine`
+describe("renderBalanceLine — single-currency", () => {
+  // vX.X.X+ — `renderBalanceLine` delegates to `renderProviderLine`
   // with the "deepseek" provider. Tests pin a raw balance token
   // list (no `m_modeLabel|color:yellow`, so the rendered line
   // starts with bare "Balance: " — the bare-prefix asserts below
@@ -788,7 +829,7 @@ describe("formatBalanceLine — single-currency", () => {
   afterEach(() => __resetForTest());
 
   it("CNY uses ￥ prefix, integer value, bright-green band", () => {
-    const line = formatBalanceLine({
+    const line = renderBalanceLine({
       isAvailable: true,
       entries: [{ currency: "CNY", totalBalance: 110 }],
       minValue: 110,
@@ -799,7 +840,7 @@ describe("formatBalanceLine — single-currency", () => {
   });
 
   it("USD uses $ prefix", () => {
-    const line = formatBalanceLine({
+    const line = renderBalanceLine({
       isAvailable: true,
       entries: [{ currency: "USD", totalBalance: 25 }],
       minValue: 25,
@@ -811,7 +852,7 @@ describe("formatBalanceLine — single-currency", () => {
     // Currency code not in the default map → currencyLabel falls back
     // to the uppercased code (e.g. EUR → "EUR"). No per-config lookup,
     // no legacy prefix resolution.
-    const line = formatBalanceLine({
+    const line = renderBalanceLine({
       isAvailable: true,
       entries: [{ currency: "EUR", totalBalance: 42 }],
       minValue: 42,
@@ -821,23 +862,23 @@ describe("formatBalanceLine — single-currency", () => {
 
   it("decimal value preserved up to 2 dp, trailing zeros stripped", () => {
     // 110.10 → "110.1"; 110.00 → "110"; 110.05 → "110.05".
-    const a = formatBalanceLine({ isAvailable: true, entries: [{ currency: "USD", totalBalance: 110.1 }], minValue: 110.1 });
+    const a = renderBalanceLine({ isAvailable: true, entries: [{ currency: "USD", totalBalance: 110.1 }], minValue: 110.1 });
     assert.equal(strip(a), "Balance: $110.1");
-    const b = formatBalanceLine({ isAvailable: true, entries: [{ currency: "USD", totalBalance: 110.05 }], minValue: 110.05 });
+    const b = renderBalanceLine({ isAvailable: true, entries: [{ currency: "USD", totalBalance: 110.05 }], minValue: 110.05 });
     assert.equal(strip(b), "Balance: $110.05");
   });
 
   it("color band reflects the lowest entry (single entry = that entry)", () => {
     // 3.5 → ORANGE band (5<=3.5<10? no, 3.5<5 → RED)
-    const red = formatBalanceLine({ isAvailable: true, entries: [{ currency: "CNY", totalBalance: 3.5 }], minValue: 3.5 });
+    const red = renderBalanceLine({ isAvailable: true, entries: [{ currency: "CNY", totalBalance: 3.5 }], minValue: 3.5 });
     assert.ok(red.startsWith(`Balance: ${RED}`));
     // 25 → DARK_GREEN band (20<=25<50)
-    const dg = formatBalanceLine({ isAvailable: true, entries: [{ currency: "USD", totalBalance: 25 }], minValue: 25 });
+    const dg = renderBalanceLine({ isAvailable: true, entries: [{ currency: "USD", totalBalance: 25 }], minValue: 25 });
     assert.ok(dg.startsWith(`Balance: ${DARK_GREEN}`));
   });
 });
 
-describe("formatBalanceLine — multi-currency joined by ·", () => {
+describe("renderBalanceLine — multi-currency joined by ·", () => {
   // vX.X.X+ — pin a raw balance token list (same reason as the
   // single-currency describe above).
   beforeEach(() => {
@@ -851,7 +892,7 @@ describe("formatBalanceLine — multi-currency joined by ·", () => {
     // CNY 110 (BRIGHT_GREEN) + USD 3.5 (RED). minValue=3.5 → RED band.
     // Each entry's currency code is mapped to its display symbol via
     // the renderer-owned `currencyLabel(code)` helper (CNY → ￥, USD → $).
-    const line = formatBalanceLine({
+    const line = renderBalanceLine({
       isAvailable: true,
       entries: [
         { currency: "CNY", totalBalance: 110 },
@@ -868,7 +909,7 @@ describe("formatBalanceLine — multi-currency joined by ·", () => {
   });
 
   it("integer formatting per-chunk", () => {
-    const line = formatBalanceLine({
+    const line = renderBalanceLine({
       isAvailable: true,
       entries: [
         { currency: "CNY", totalBalance: 100 },
@@ -880,19 +921,35 @@ describe("formatBalanceLine — multi-currency joined by ·", () => {
   });
 });
 
-describe("formatBalanceLine — unavailable", () => {
-  it("renders 'not available!' when isAvailable=false", () => {
-    const line = formatBalanceLine({ isAvailable: false, entries: [], minValue: null });
-    assert.equal(strip(line), "Balance: not available!");
-    assert.ok(line.startsWith(`Balance: ${RED}`));
+describe("renderBalanceLine — unavailable", () => {
+  // v0.9.x — the legacy `formatBalanceLine` shim short-circuited with a
+  // hardcoded "Balance: not available!" sentinel. The shim is gone;
+  // renderProviderLine routes the unavailable case through
+  // `m_balance` → `formatBalanceEntriesColored` (returns "" when
+  // unavailable) → `placeholderBare("m_balance", c)` → "balance:n/a".
+  // The `m_age` module surfaces its own placeholder ("age:n/a") in
+  // the same pass when no age is provided, producing the final
+  // "Balance: balance:n/a age:n/a" form. The whole body is wrapped
+  // in STALE_COLOR (placeholderBare's color choice), not RED — the
+  // legacy RED tint is preserved only for the dispatch.ts fail-line
+  // path (see "renderPlanLine: fail → 'X: not available!'" in
+  // dispatch.test.ts).
+  it("falls back to 'balance:n/a age:n/a' placeholders when isAvailable=false", () => {
+    const line = renderBalanceLine({ isAvailable: false, entries: [], minValue: null });
+    assert.equal(strip(line), "Balance: balance:n/a age:n/a");
   });
-  it("renders 'not available!' when entries is empty despite isAvailable=true", () => {
-    const line = formatBalanceLine({ isAvailable: true, entries: [], minValue: null });
-    assert.equal(strip(line), "Balance: not available!");
+  it("falls back to placeholders when entries is empty despite isAvailable=true", () => {
+    const line = renderBalanceLine({ isAvailable: true, entries: [], minValue: null });
+    assert.equal(strip(line), "Balance: balance:n/a age:n/a");
   });
-  it("renders 'not available!' when minValue is null", () => {
-    const line = formatBalanceLine({ isAvailable: true, entries: [{ currency: "USD", totalBalance: 0 }], minValue: null });
-    assert.equal(strip(line), "Balance: not available!");
+  it("falls back to placeholders when minValue is null", () => {
+    const line = renderBalanceLine({ isAvailable: true, entries: [{ currency: "USD", totalBalance: 0 }], minValue: null });
+    assert.equal(strip(line), "Balance: balance:n/a age:n/a");
+  });
+  it("the unavailable-body chunks carry STALE_COLOR (placeholder convention), not RED", () => {
+    const line = renderBalanceLine({ isAvailable: false, entries: [], minValue: null });
+    assert.ok(line.includes(`${STALE_COLOR}balance:n/a`), `got: ${line}`);
+    assert.ok(!line.includes(RED), `RED is reserved for the dispatch fail-line path: ${line}`);
   });
 });
 
@@ -2120,12 +2177,12 @@ describe("formatStaleSuffix", () => {
   });
 });
 
-describe("formatLine — stale suffix integration", () => {
+describe("renderQuotaLine — stale suffix integration", () => {
   beforeEach(() => {
     __resetForTest({ timeFormat: { minUnit: "m", maxUnitCount: 2 } });
   });
   it("appends the stale suffix with broken emoji when stale=true", () => {
-    const line = formatLine(
+    const line = renderQuotaLine(
       legacyToIv({ pct: 38, resetAt: null }),
       legacyToIv({ pct: 39, resetAt: null }, "7d"),
       null,
@@ -2147,7 +2204,7 @@ describe("formatLine — stale suffix integration", () => {
     // no m_age) renders no suffix — the broken-chain indicator is
     // reserved for real outages.
     // v0.4.x: the default quota template now ends with `m_age`, so
-    // formatLine renders the slot via m_age and the forced-fallback
+    // renderQuotaLine renders the slot via m_age and the forced-fallback
     // path stays silent. To exercise the stale-fallback logic in
     // isolation we override the template to mirror pre-v0.4.x.
     __resetForTest({
@@ -2159,7 +2216,7 @@ describe("formatLine — stale suffix integration", () => {
       ],
     });
     try {
-      const line = formatLine(
+      const line = renderQuotaLine(
         legacyToIv({ pct: 38, resetAt: null }),
         legacyToIv({ pct: 39, resetAt: null }, "7d"),
         null,
@@ -2185,7 +2242,7 @@ describe("formatLine — stale suffix integration", () => {
       ],
     });
     try {
-      const line = formatLine(legacyToIv({ pct: 38, resetAt: null }), legacyToIv({ pct: 39, resetAt: null }, "7d"));
+      const line = renderQuotaLine(legacyToIv({ pct: 38, resetAt: null }), legacyToIv({ pct: 39, resetAt: null }, "7d"));
       assert.ok(!line.includes("ago"));
       assert.ok(!line.includes(STALE_COLOR));
     } finally {
@@ -2203,7 +2260,7 @@ describe("formatLine — stale suffix integration", () => {
       ],
     });
     try {
-      const line = formatLine(
+      const line = renderQuotaLine(
         legacyToIv({ pct: 38, resetAt: null }),
         legacyToIv({ pct: 39, resetAt: null }, "7d"),
         null,
@@ -2221,7 +2278,7 @@ describe("formatLine — stale suffix integration", () => {
     // v0.4.0: formatStaleSuffix no longer short-circuits on ageMs=0.
     // A just-failed fetch shows "⛓️‍💥 0m ago" (forced fallback, since
     // the default template doesn't include m_age).
-    const line = formatLine(
+    const line = renderQuotaLine(
       legacyToIv({ pct: 38, resetAt: null }),
       legacyToIv({ pct: 39, resetAt: null }, "7d"),
       null,
@@ -2234,12 +2291,12 @@ describe("formatLine — stale suffix integration", () => {
   });
 });
 
-describe("formatBalanceLine — stale suffix integration", () => {
+describe("renderBalanceLine — stale suffix integration", () => {
   beforeEach(() => {
     __resetForTest({ timeFormat: { minUnit: "m", maxUnitCount: 2 } });
   });
   it("appends the stale suffix with broken emoji when stale=true", () => {
-    const line = formatBalanceLine(
+    const line = renderBalanceLine(
       { isAvailable: true, entries: [{ currency: "CNY", totalBalance: 110 }], minValue: 110 },
       5 * 60_000,
       true,  // stale → broken emoji
@@ -2249,7 +2306,7 @@ describe("formatBalanceLine — stale suffix integration", () => {
   });
 
   it("appends the stale suffix on a multi-currency line", () => {
-    const line = formatBalanceLine(
+    const line = renderBalanceLine(
       {
         isAvailable: true,
         entries: [
@@ -2265,20 +2322,27 @@ describe("formatBalanceLine — stale suffix integration", () => {
     assert.ok(strip(line).endsWith("⛓️‍💥 1h30m ago"));
   });
 
-  it("does NOT append the stale suffix on the 'not available!' branch", () => {
-    // Even when staleMs is passed, the API-failed branch must not append —
-    // there's no cached value to be stale-OF.
-    const line = formatBalanceLine(
+  it("does append the stale suffix on the unavailable branch (m_age fires regardless of m_balance)", () => {
+    // v0.9.x — the legacy `formatBalanceLine` short-circuited the
+    // unavailable case BEFORE m_age could fire, so the stale suffix
+    // was suppressed. After the shim deletion, the renderer routes
+    // through m_balance → placeholderBare AND m_age → formatStaleSuffix
+    // independently; with stale=true + ageMs>0 the suffix still
+    // emits on top of the "balance:n/a" placeholder. The pin here
+    // documents that the legacy "no suffix on fail" guarantee is
+    // gone — it's the dispatch.ts fail-line path (kind="fail") that
+    // owns the unavailable-without-stale semantics now.
+    const line = renderBalanceLine(
       { isAvailable: false, entries: [], minValue: null },
       5 * 60_000,
       true,
     );
-    assert.equal(strip(line), "Balance: not available!");
-    assert.ok(!line.includes("ago"));
+    assert.ok(strip(line).endsWith("⛓️‍💥 5m ago"), `got: ${strip(line)}`);
+    assert.ok(strip(line).includes("balance:n/a"));
   });
 
   it("does NOT append the stale suffix when ageMs is omitted", () => {
-    const line = formatBalanceLine({
+    const line = renderBalanceLine({
       isAvailable: true,
       entries: [{ currency: "USD", totalBalance: 25 }],
       minValue: 25,

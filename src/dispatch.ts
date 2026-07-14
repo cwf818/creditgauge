@@ -121,8 +121,9 @@ export type FetchResult<T> =
 // the right ctx fields for renderProviderLine. Replaces the older
 // `renderPlanLine` + the inline `entry.TYPE === "BALANCE"` branch
 // in buildProviderLine: those two paths used to fork on TYPE and
-// dispatch to formatLine vs formatBalanceLine, each of which had
-// its own way of plumbing the data into the renderer.
+// dispatch to the now-deleted `formatLine` vs `formatBalanceLine`
+// shims (dropped in the v0.9.x dead-export cleanup), each of which
+// had its own way of plumbing the data into the renderer.
 //
 // Now both shapes flow through here. The provider's TYPE controls
 // which ctx fields are populated; the renderer's per-module `type`
@@ -234,15 +235,16 @@ function renderDataLine(
 // Maps a (provider, FetchResult) pair to the final statusline line.
 //
 // v0.4.x — collapsed: previously dispatched on `entry.TYPE` to
-// renderPlanLine (Quota) or formatBalanceLine (BALANCE) and
-// the per-TYPE helpers hardcoded their data shape. Now every path
-// funnels through renderDataLine, which reads TYPE only to pick
-// the right ctx fields (`fiveHour`/`weekly` vs `balance`) and
-// delegates the rest to renderProviderLine + the per-module
-// `type` filter. The fail-with-tokens branch was already a
-// renderProviderLine call (it's been template-routed since v0.4.0);
-// the bare-tokens-fail "Usage: not available!" branch is preserved
-// verbatim for v0.2.20 byte-for-byte compatibility.
+// `renderPlanLine` (Quota) or `formatBalanceLine` (BALANCE) and
+// the per-TYPE helpers hardcoded their data shape. v0.9.x — both
+// `formatLine` and `formatBalanceLine` are also gone; every path
+// funnels through `renderDataLine` → `renderProviderLine`, which
+// reads TYPE only to pick the right ctx fields (`fiveHour`/`weekly`
+// vs `balance`) and delegates the rest to the per-module `type`
+// filter. The fail-with-tokens branch was already a renderProviderLine
+// call (it's been template-routed since v0.4.0); the bare-tokens-fail
+// "Usage: not available!" branch is preserved verbatim for v0.2.20
+// byte-for-byte compatibility.
 //
 // Display mode lives in configStore — the old TOPGAUGE_DISPLAY env
 // var is gone (see README "Configuration"). For fresh ticks the
@@ -278,9 +280,12 @@ export function buildProviderLine(
   if (result.kind === "fail") {
     // No cached data + fetch failed. Render a colored "not available!"
     // so the user sees the plugin is alive but the provider is
-    // unreachable. Color matches the existing "is_available: false"
-    // branch in formatBalanceLine (RED) so the two unavailable states
-    // look the same on screen.
+    // unreachable. Color matches the legacy "is_available: false"
+    // branch in `formatBalanceLine` (RED) — the shim is gone now but
+    // the RED tint for the dispatch fail-line path is preserved so
+    // the two unavailable states (API-said-no vs fetch-failed) keep
+    // the same hue. The available-but-empty path in renderProviderLine
+    // uses STALE_COLOR instead (via m_balance → placeholderBare).
     //
     // `failLabelForProvider` returns the modeLabel verbatim (no
     // trailing space — m_modeLabel module relies on s_0 separators in
