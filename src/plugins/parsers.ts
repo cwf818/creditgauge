@@ -124,39 +124,23 @@ export function ensureInterval(
   };
 }
 
-// v0.9.4 — accept EITHER the new dict shape `{ intervals: { … } }`
-// or the legacy v0.9.x fixed fields `{ shortInterval, midInterval,
-// longInterval }` (and any mix: e.g. a plugin that ships
-// `intervals.monthly` AND the legacy `shortInterval` field is
-// normalised into one `intervals` dict with the union of keys).
-// The `all` reserved key is rejected as a dict key (reserved by
-// parseWindowScope's no-time-anchor sentinel — accepting it would
-// silently shadow the m_sum*|window|all short-circuit).
+// v0.9.5 — accept the open-ended dict shape `{ short, mid, long,
+// <any> }` directly from the plugin. The legacy v0.9.4 wrapper
+// `{ intervals: { … } }` and the v0.9.x fixed-slot fields
+// `{ shortInterval, midInterval, longInterval }` are both gone
+// (hard cut per the v0.9.x new-feature convention; plugin authors
+// upgraded to v0.9.4 already return the wrapper, so the upgrade is
+// a single-line removal). The `all` reserved key is rejected as a
+// dict key (reserved by parseWindowScope's no-time-anchor sentinel
+// — accepting it would silently shadow the m_sum*|window|all
+// short-circuit).
 export function ensureQuota(value: unknown): Quota | null {
   if (!isRecord(value)) return null;
   const out: Record<string, Interval | null> = {};
 
-  const intervalsRaw = value.intervals;
-  if (intervalsRaw != null) {
-    if (!isRecord(intervalsRaw)) return null;
-    for (const [k, v] of Object.entries(intervalsRaw)) {
-      if (k === "all") continue;
-      out[k] = v == null ? null : ensureInterval(v, k);
-    }
-  }
-
-  // Legacy v0.9.x — three fixed fields. Map onto the reserved
-  // keys; user-supplied entries (above) win on conflict so a
-  // plugin that ships BOTH the new dict and the legacy fields
-  // keeps its explicit dict entries intact.
-  for (const legacyKey of ["shortInterval", "midInterval", "longInterval"] as const) {
-    const reserved: ReservedIntervalKey =
-      legacyKey === "shortInterval" ? "short"
-      : legacyKey === "midInterval" ? "mid"
-      : "long";
-    if (legacyKey in value && !(reserved in out)) {
-      out[reserved] = ensureInterval(value[legacyKey], reserved);
-    }
+  for (const [k, v] of Object.entries(value)) {
+    if (k === "all") continue;
+    out[k] = v == null ? null : ensureInterval(v, k);
   }
 
   // Always seed the three reserved keys so the renderer never has

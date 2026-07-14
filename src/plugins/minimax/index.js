@@ -23,10 +23,10 @@ function asStatusCode(value) {
 
 // Raw → Partial<Quota>. Selects the "general" entry from
 // `model_remains[]` and projects the two MiniMax windows onto the
-// canonical `intervals.short` / `intervals.mid` keys. Returns null
-// when the response is missing base_resp / status_code != 0 / the
-// "general" entry is absent — those cases propagate to the host as
-// a soft fail.
+// canonical reserved `short` / `mid` keys (the `long` slot is null
+// for this provider). Returns null when the response is missing
+// base_resp / status_code != 0 / the "general" entry is absent —
+// those cases propagate to the host as a soft fail.
 function fillQuota(raw) {
   if (!isRecord(raw)) return null;
 
@@ -43,19 +43,17 @@ function fillQuota(raw) {
   if (!general) return null;
 
   return {
-    intervals: {
-      short: {
-        remainingPercent: general.current_interval_remaining_percent,
-        startAt: general.start_time,
-        endAt: general.end_time,
-      },
-      mid: {
-        remainingPercent: general.current_weekly_remaining_percent,
-        startAt: general.weekly_start_time,
-        endAt: general.weekly_end_time,
-      },
-      long: null,
+    short: {
+      remainingPercent: general.current_interval_remaining_percent,
+      startAt: general.start_time,
+      endAt: general.end_time,
     },
+    mid: {
+      remainingPercent: general.current_weekly_remaining_percent,
+      startAt: general.weekly_start_time,
+      endAt: general.weekly_end_time,
+    },
+    long: null,
   };
 }
 

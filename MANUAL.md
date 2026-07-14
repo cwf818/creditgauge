@@ -274,9 +274,13 @@ type Interval = {
   limitQuota:       number | null;
 };
 
-type Quota = {
-  intervals: Record<string, Interval | null>; // open dict; 3 reserved keys "short"/"mid"/"long"
-};
+// v0.9.5 — the plugin's returned shape IS the open-ended intervals
+// dict. The v0.9.4 `{ intervals: { … } }` wrapper was dropped per
+// the new-feature hard-cut convention. Three reserved keys
+// ("short" / "mid" / "long") ship with the historical 5h / 7d / 30d
+// windowId defaults; arbitrary additional keys (e.g. "monthly")
+// are accepted and referenceable via `m_windowQuota|term|<key>`.
+type Quota = Record<string, Interval | null>;
 
 type BalanceEntry = {
   currency:     string,        // ISO 4217 ("USD", "CNY") or free-form

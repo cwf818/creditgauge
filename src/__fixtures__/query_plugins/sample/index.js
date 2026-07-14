@@ -21,8 +21,11 @@
 //   - The plugin is a regular ESM module.
 //   - Its **default export** must be `{ fetchAccountCredit(authenticationKey, context) }`.
 //   - `authenticationKey` is the configured key or `process.env.ANTHROPIC_AUTH_TOKEN`.
-//   - `fetchAccountCredit` returns an object already shaped like the
-//     canonical Quota or Balance data — the dispatcher does NOT re-parse.
+//   - `fetchAccountCredit` returns the open-ended intervals dict
+//     `{ short, mid, long, <any> }` directly — no `intervals:` wrapper
+//     (v0.9.5 dropped the wrapper per the new-feature hard-cut
+//     convention). For BALANCE providers, return the canonical
+//     Balance shape directly.
 //
 // The plugin is loaded in-process via dynamic `import()` (same
 // Node runtime, same ESM loader). Throwing inside `fetchAccountCredit` is
@@ -32,25 +35,23 @@
 const payload = () => {
   const now = Date.now();
   return {
-    intervals: {
-      short: {
-        label: "5h",
-        startAt: now,
-        endAt: now + 4 * 3600 * 1000,
-        intervalMs: 4 * 3600 * 1000,
-        remainingPercent: 75,
-        usedPercent: 25,
-      },
-      mid: {
-        label: "7d",
-        startAt: now,
-        endAt: now + 7 * 24 * 3600 * 1000,
-        intervalMs: 7 * 24 * 3600 * 1000,
-        remainingPercent: 50,
-        usedPercent: 50,
-      },
-      long: null,
+    short: {
+      label: "5h",
+      startAt: now,
+      endAt: now + 4 * 3600 * 1000,
+      intervalMs: 4 * 3600 * 1000,
+      remainingPercent: 75,
+      usedPercent: 25,
     },
+    mid: {
+      label: "7d",
+      startAt: now,
+      endAt: now + 7 * 24 * 3600 * 1000,
+      intervalMs: 7 * 24 * 3600 * 1000,
+      remainingPercent: 50,
+      usedPercent: 50,
+    },
+    long: null,
   };
 };
 

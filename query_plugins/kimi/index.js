@@ -143,16 +143,16 @@ function longInterval(raw) {
 function fillQuota(raw) {
   const usage = findCodingUsage(raw);
   if (!usage) return null;
-  // v0.9.4 — open-ended intervals dict. The three reserved keys
+  // v0.9.5 — open-ended intervals dict returned directly (the
+  // v0.9.4 `intervals: { … }` wrapper was dropped per the new-
+  // feature hard-cut convention). The three reserved keys
   // (`short` / `mid` / `long`) keep the v0.9.x contract; arbitrary
   // additional windows can be added by including them here and
   // referencing them from `m_windowQuota|term|<key>` in the template.
   return {
-    intervals: {
-      short: shortInterval(usage),
-      mid: midInterval(usage),
-      long: longInterval(raw),
-    },
+    short: shortInterval(usage),
+    mid: midInterval(usage),
+    long: longInterval(raw),
   };
 }
 

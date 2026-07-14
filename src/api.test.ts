@@ -65,8 +65,7 @@ describe("ensure quota", () => {
 
   it("normalizes all quota slots and preserves explicit zero", () => {
     assert.deepEqual(ensureQuota({
-      shortInterval: { remainingPercent: 0 },
-      extra: "ignored",
+      short: { remainingPercent: 0 },
     }), {
       intervals: {
         short: {
@@ -268,7 +267,7 @@ describe("dynamic plugin loader", () => {
     // runs ensureQuota / ensureBalance on the result).
     writeFileSync(resolve(pluginDir, "index.mjs"), `export default {
       fetchAccountCredit(token) {
-        return { shortInterval: { remainingPercent: 50, usedPercent: 50, windowId: token, label: token, startAt: null, endAt: null, intervalMs: null, remainingQuota: null, usedQuota: null, limitQuota: null } };
+        return { short: { remainingPercent: 50, usedPercent: 50, windowId: token, label: token, startAt: null, endAt: null, intervalMs: null, remainingQuota: null, usedQuota: null, limitQuota: null } };
       }
     };`);
     const path = resolvePluginOnDiskWithKind("custom");
@@ -401,9 +400,9 @@ describe("resolvePluginOnDiskWithKind (v0.9.0+ override)", () => {
     writeFileSync(userPath, `export default {
       fetchAccountCredit() {
         return {
-          shortInterval: { remainingPercent: 11, usedPercent: 89, windowId: "user", label: "5h", startAt: null, endAt: null, intervalMs: null, remainingQuota: null, usedQuota: null, limitQuota: null },
-          midInterval:   { remainingPercent: 22, usedPercent: 78, windowId: "user", label: "7d", startAt: null, endAt: null, intervalMs: null, remainingQuota: null, usedQuota: null, limitQuota: null },
-          longInterval:  null,
+          short: { remainingPercent: 11, usedPercent: 89, windowId: "user", label: "5h", startAt: null, endAt: null, intervalMs: null, remainingQuota: null, usedQuota: null, limitQuota: null },
+          mid:   { remainingPercent: 22, usedPercent: 78, windowId: "user", label: "7d", startAt: null, endAt: null, intervalMs: null, remainingQuota: null, usedQuota: null, limitQuota: null },
+          long:  null,
         };
       },
     };`);
@@ -451,9 +450,9 @@ describe("pluginTransport override end-to-end (v0.9.0+)", () => {
     writeFileSync(resolve(userDirPath, "index.mjs"), `export default {
       fetchAccountCredit(token, ctx) {
         return {
-          shortInterval: { remainingPercent: 42, usedPercent: 58, windowId: "user", label: "5h", startAt: null, endAt: null, intervalMs: null, remainingQuota: null, usedQuota: null, limitQuota: null },
-          midInterval:   null,
-          longInterval:  null,
+          short: { remainingPercent: 42, usedPercent: 58, windowId: "user", label: "5h", startAt: null, endAt: null, intervalMs: null, remainingQuota: null, usedQuota: null, limitQuota: null },
+          mid:   null,
+          long:  null,
         };
       },
     };`);
@@ -471,11 +470,11 @@ describe("pluginTransport override end-to-end (v0.9.0+)", () => {
       assert.equal(partial.kind, "user");
       assert.equal(fetchCalled, false, "globalThis.fetch must not be invoked by the user plugin");
       // partial.result is the RAW plugin return value (before ensureQuota).
-      // The user plugin in this test returns the legacy 3-slot shape, so
-      // we read it directly.
-      const shape = partial.result as { shortInterval: { remainingPercent: number; windowId: string } };
-      assert.equal(shape.shortInterval.remainingPercent, 42);
-      assert.equal(shape.shortInterval.windowId, "user");
+      // The user plugin in this test returns the v0.9.5 open-ended dict
+      // shape, so we read it directly.
+      const shape = partial.result as { short: { remainingPercent: number; windowId: string } };
+      assert.equal(shape.short.remainingPercent, 42);
+      assert.equal(shape.short.windowId, "user");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -503,8 +502,12 @@ describe("pluginTransport override end-to-end (v0.9.0+)", () => {
       const partial = await pluginTransportWithKind("minimax", "ignored");
       assert.equal(partial.kind, "builtin");
       assert.ok(partial.result, "bundled built-in should return a non-null partial");
-      const shape = partial.result as { intervals: { short: { remainingPercent: number } | null } };
-      assert.equal(shape.intervals.short?.remainingPercent, 50);
+      // partial.result is the RAW plugin return value (before ensureQuota).
+      // The bundled minimax plugin returns the v0.9.5 open-ended dict
+      // shape `{ short, mid, long }` directly — the host wraps it back
+      // into the canonical Quota via ensureQuota.
+      const shape = partial.result as { short: { remainingPercent: number } | null };
+      assert.equal(shape.short?.remainingPercent, 50);
     } finally {
       globalThis.fetch = originalFetch;
     }

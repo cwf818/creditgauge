@@ -18,12 +18,12 @@
 //
 // All Copilot spend flows through the natural-month window — there
 // is no short/mid term available. We project premium_interactions
-// onto the canonical `intervals.long` slot, and let `intervals.short`
-// / `intervals.mid` resolve to null (the renderer drops them on a
-// Copilot-only display). `startAt` / `endAt` are computed from the
-// call clock as natural-month boundaries (start of this month →
-// start of next month, local time) so the renderer can draw a
-// window-fill-aware reset arrow.
+// onto the canonical reserved `long` slot, and let `short` / `mid`
+// resolve to null (the renderer drops them on a Copilot-only
+// display). `startAt` / `endAt` are computed from the call clock
+// as natural-month boundaries (start of this month → start of next
+// month, local time) so the renderer can draw a window-fill-aware
+// reset arrow.
 
 const ENDPOINT = "http://localhost:4141/usage";
 
@@ -55,11 +55,11 @@ function naturalMonthBounds(nowMs) {
   return { startAt, endAt };
 }
 
-// Raw → Partial<Quota>. Only the longInterval slot is filled;
-// shortInterval / midInterval stay null and the renderer drops
-// them on a Copilot-only display. Returns null when the response
-// is missing the premium_interactions block — that's the soft-fail
-// signal the host surfaces as "not available".
+// Raw → Partial<Quota>. Only the reserved `long` slot is filled;
+// `short` / `mid` stay null and the renderer drops them on a
+// Copilot-only display. Returns null when the response is missing
+// the premium_interactions block — that's the soft-fail signal the
+// host surfaces as "not available".
 function fillQuota(raw, nowMs) {
   if (!isRecord(raw)) return null;
   const snapshots = raw.quota_snapshots;
@@ -74,21 +74,19 @@ function fillQuota(raw, nowMs) {
   const bounds = naturalMonthBounds(nowMs);
 
   return {
-    intervals: {
-      short: null,
-      mid: null,
-      long: {
-        // windowId / label resolution lives in `ensureInterval`: with
-        // both fields absent it falls back to the canonical
-        // "30d" label — the user's `providers.copilot.intervals.
-        // long.label` config override still wins on top of
-        // that. We don't bake a label in here so providers (and
-        // users) keep full control.
-        remainingPercent,
-        remainingQuota,
-        limitQuota,
-        ...(bounds ?? {}),
-      },
+    short: null,
+    mid: null,
+    long: {
+      // windowId / label resolution lives in `ensureInterval`: with
+      // both fields absent it falls back to the canonical
+      // "30d" label — the user's `providers.copilot.intervals.
+      // long.label` config override still wins on top of
+      // that. We don't bake a label in here so providers (and
+      // users) keep full control.
+      remainingPercent,
+      remainingQuota,
+      limitQuota,
+      ...(bounds ?? {}),
     },
   };
 }

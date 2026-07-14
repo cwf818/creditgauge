@@ -61,17 +61,21 @@ export default {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const raw = JSON.parse(await r.text());
     return {
-      intervals: {
-        short: {
-          remainingPercent: raw.percent,
-          // startAt / endAt optional — renderer's window-fill-aware
-          // reset arrow gets its direction from these when present.
-          startAt: raw.resetStartMs,
-          endAt: raw.resetAtMs,
-        },
-        mid: null,
-        long: null,
+      // v0.9.5 — open-ended dict returned directly. The v0.9.4
+      // `intervals: { … }` wrapper was dropped per the new-feature
+      // hard-cut convention. Three reserved keys ("short" / "mid" /
+      // "long") ship with the historical 5h / 7d / 30d windowId
+      // defaults; arbitrary additional keys (e.g. "monthly") are
+      // accepted and referenceable via `m_windowQuota|term|<key>`.
+      short: {
+        remainingPercent: raw.percent,
+        // startAt / endAt optional — renderer's window-fill-aware
+        // reset arrow gets its direction from these when present.
+        startAt: raw.resetStartMs,
+        endAt: raw.resetAtMs,
       },
+      mid: null,
+      long: null,
     };
   },
 };
@@ -166,15 +170,13 @@ export default {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const raw = JSON.parse(await response.text());
     return {
-      intervals: {
-        short: {
-          remainingPercent: raw.pct,
-          startAt: raw.startMs,
-          endAt: raw.endMs,
-        },
-        mid: null,
-        long: null,
+      short: {
+        remainingPercent: raw.pct,
+        startAt: raw.startMs,
+        endAt: raw.endMs,
       },
+      mid: null,
+      long: null,
     };
   },
 };
@@ -296,9 +298,9 @@ the percent + bar; add `m_windowQuota|term:long|display:remaining` or the
 absolute credit via the interval's `remainingQuota` / `limitQuota` (see
 [MANUAL.md](./MANUAL.md) for the credit-rendering module args).
 
-The `term` axis is open-ended: any key you put in `intervals` is
-resolvable. So a plugin that wants a "monthly" window can return
-`intervals: { ..., monthly: { ... } }` and reference it from the template
+The `term` axis is open-ended: any key you put in the returned
+dict is resolvable. So a plugin that wants a "monthly" window can
+return `{ ..., monthly: { ... } }` and reference it from the template
 as `m_windowQuota|term|monthly` — no host changes required.
 
 Plugin authors sometimes find that the `ENDPOINT` config field is a
@@ -384,9 +386,10 @@ type Interval = {
   limitQuota:       number | null;
 };
 
-type Quota = {
-  intervals: Record<string, Interval | null>;
-};
+// v0.9.5 — the Quota type IS the open-ended intervals dict. The
+// v0.9.4 `{ intervals: { … } }` wrapper was dropped per the new-
+// feature hard-cut convention.
+type Quota = Record<string, Interval | null>;
 ```
 
 Rules (enforced by `ensureQuota` in `src/plugins/parsers.ts`):
