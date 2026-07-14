@@ -27,14 +27,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Built-in defaults for `windowId` / `label` when a plugin omits
-// them. Mirrors the historical v0.4.x "5h / 7d / 30d" defaults so
-// existing plugin authors don't have to set these explicitly.
-const DEFAULT_WINDOW_IDS: Record<"shortInterval" | "midInterval" | "longInterval", "5h" | "7d" | "30d"> = {
-  shortInterval: "5h",
-  midInterval:   "7d",
-  longInterval:  "30d",
+// v0.9.4 — the `intervals` dict is the source of truth. Three reserved
+// keys ("short" / "mid" / "long") ship with the historical
+// windowId defaults (5h / 7d / 30d) so existing plugin authors and
+// the built-in plugins keep working without renaming; the dict is
+// otherwise OPEN — a plugin may declare any additional key (e.g.
+// "monthly" / "yearly" / "weekday-peak") and reference it via
+// `m_windowQuota|term|<key>`. The `all` key is reserved by the
+// renderer's parseWindowScope sentinel and is never valid as a
+// dict key.
+const RESERVED_INTERVAL_KEYS = ["short", "mid", "long"] as const;
+type ReservedIntervalKey = (typeof RESERVED_INTERVAL_KEYS)[number];
+
+// v0.9.4 — built-in windowId defaults for the three reserved keys.
+// Mirrors the historical v0.4.x "5h / 7d / 30d" defaults so existing
+// plugin authors don't have to set `windowId` explicitly when they
+// already use the canonical reserved names.
+const RESERVED_DEFAULT_WINDOW_IDS: Record<ReservedIntervalKey, string> = {
+  short: "5h",
+  mid:   "7d",
+  long:  "30d",
 };
+
+function isReservedIntervalKey(key: string): key is ReservedIntervalKey {
+  return (RESERVED_INTERVAL_KEYS as readonly string[]).includes(key);
+}
 
 function ensureTimeGroup(value: Record<string, unknown>): {
   startAt: number | null;
@@ -67,9 +84,15 @@ function ensureTimeGroup(value: Record<string, unknown>): {
   return { startAt: null, endAt: null, intervalMs: null };
 }
 
+// Normalize a single Interval payload. `key` is the dict key the
+// interval sits under (e.g. "short" / "mid" / "long" / "monthly");
+// the reserved-key default windowId is only consulted when the
+// payload itself doesn't ship one. Non-reserved keys with no
+// explicit windowId fall back to the key name verbatim, so
+// `intervals: { monthly: { … } }` produces `windowId: "monthly"`.
 export function ensureInterval(
   value: unknown,
-  key: "shortInterval" | "midInterval" | "longInterval",
+  key: string,
 ): Interval | null {
   if (!isRecord(value)) return null;
   const remainingRaw = asNumber(value.remainingPercent);
@@ -79,7 +102,9 @@ export function ensureInterval(
     remainingRaw != null ? 100 - remainingRaw : null
   );
   const time = ensureTimeGroup(value);
-  const fallback = DEFAULT_WINDOW_IDS[key];
+  const fallback = isReservedIntervalKey(key)
+    ? RESERVED_DEFAULT_WINDOW_IDS[key]
+    : key;
   const windowId = typeof value.windowId === "string" ? value.windowId : fallback;
   const label = typeof value.label === "string"
     ? value.label
@@ -99,13 +124,50 @@ export function ensureInterval(
   };
 }
 
+// v0.9.4 — accept EITHER the new dict shape `{ intervals: { … } }`
+// or the legacy v0.9.x fixed fields `{ shortInterval, midInterval,
+// longInterval }` (and any mix: e.g. a plugin that ships
+// `intervals.monthly` AND the legacy `shortInterval` field is
+// normalised into one `intervals` dict with the union of keys).
+// The `all` reserved key is rejected as a dict key (reserved by
+// parseWindowScope's no-time-anchor sentinel — accepting it would
+// silently shadow the m_sum*|window|all short-circuit).
 export function ensureQuota(value: unknown): Quota | null {
   if (!isRecord(value)) return null;
-  return {
-    shortInterval: ensureInterval(value.shortInterval, "shortInterval"),
-    midInterval: ensureInterval(value.midInterval, "midInterval"),
-    longInterval: ensureInterval(value.longInterval, "longInterval"),
-  };
+  const out: Record<string, Interval | null> = {};
+
+  const intervalsRaw = value.intervals;
+  if (intervalsRaw != null) {
+    if (!isRecord(intervalsRaw)) return null;
+    for (const [k, v] of Object.entries(intervalsRaw)) {
+      if (k === "all") continue;
+      out[k] = v == null ? null : ensureInterval(v, k);
+    }
+  }
+
+  // Legacy v0.9.x — three fixed fields. Map onto the reserved
+  // keys; user-supplied entries (above) win on conflict so a
+  // plugin that ships BOTH the new dict and the legacy fields
+  // keeps its explicit dict entries intact.
+  for (const legacyKey of ["shortInterval", "midInterval", "longInterval"] as const) {
+    const reserved: ReservedIntervalKey =
+      legacyKey === "shortInterval" ? "short"
+      : legacyKey === "midInterval" ? "mid"
+      : "long";
+    if (legacyKey in value && !(reserved in out)) {
+      out[reserved] = ensureInterval(value[legacyKey], reserved);
+    }
+  }
+
+  // Always seed the three reserved keys so the renderer never has
+  // to special-case the "key absent from dict" path (it can read
+  // `ctx.intervals[term]` and treat `undefined`/`null` identically
+  // as "no data"). Pre-existing entries are preserved verbatim.
+  for (const reserved of RESERVED_INTERVAL_KEYS) {
+    if (!(reserved in out)) out[reserved] = null;
+  }
+
+  return { intervals: out };
 }
 
 // Apply the is_available fallback contract (missing → optimistic

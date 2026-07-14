@@ -1,8 +1,8 @@
 // Kimi user plugin for topgauge. POST {scope:["FEATURE_CODING"]}
 // → usages[] entry with resetTime + limits[] + totalQuota. Maps:
-//   shortInterval ← usages.limits[0].detail  (intervalMs = window.duration MINUTES × 60s × 1000)
-//   midInterval   ← usages.detail            (intervalMs = 7d, fixed — primary weekly cycle)
-//   longInterval  ← totalQuota.remaining     (percent only — no startAt/endAt/intervalMs available)
+//   intervals.short ← usages.limits[0].detail  (intervalMs = window.duration MINUTES × 60s × 1000)
+//   intervals.mid   ← usages.detail            (intervalMs = 7d, fixed — primary weekly cycle)
+//   intervals.long  ← totalQuota.remaining     (percent only — no startAt/endAt/intervalMs available)
 //
 // ABI: default export is { fetchAccountCredit(authenticationKey, ctx) },
 // same shape as the built-in minimax / deepseek plugins. The host runs
@@ -143,10 +143,16 @@ function longInterval(raw) {
 function fillQuota(raw) {
   const usage = findCodingUsage(raw);
   if (!usage) return null;
+  // v0.9.4 — open-ended intervals dict. The three reserved keys
+  // (`short` / `mid` / `long`) keep the v0.9.x contract; arbitrary
+  // additional windows can be added by including them here and
+  // referencing them from `m_windowQuota|term|<key>` in the template.
   return {
-    shortInterval: shortInterval(usage),
-    midInterval: midInterval(usage),
-    longInterval: longInterval(raw),
+    intervals: {
+      short: shortInterval(usage),
+      mid: midInterval(usage),
+      long: longInterval(raw),
+    },
   };
 }
 

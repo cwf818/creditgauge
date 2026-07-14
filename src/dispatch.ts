@@ -189,20 +189,24 @@ function renderDataLine(
   }
   if (entry.TYPE === "QUOTA") {
     const r = data as Quota;
-    // v0.9.0+ — three independent Intervals. No partial-window
-    // fallback synthesis (the v0.5.0–v0.8.x `zero = { pct: 0 }`
-    // trick): each interval is independent now, and the renderer
-    // (m_windowQuota / m_countdown / m_quota) handles a null interval
-    // via its own per-term placeholder. We only return null when
-    // ALL three intervals are null — i.e. the parser found no
-    // recognizable data for any term.
-    if (!r.shortInterval && !r.midInterval && !r.longInterval) return null;
+    // v0.9.4 — `intervals` is a Record<string, Interval|null>. The
+    // dict is open: plugins may declare any key (e.g. "monthly") and
+    // reference it via `m_windowQuota|term|<key>`. Three reserved
+    // keys ("short" / "mid" / "long") are always seeded (ensured by
+    // `ensureQuota`) so the renderer can read `ctx.intervals[term]`
+    // uniformly. We only return null when every seeded entry is
+    // null — i.e. the parser found no recognisable data for any
+    // reserved term. Non-reserved keys alone are treated as opt-in
+    // and don't gate the whole render.
+    if (
+      r.intervals.short == null &&
+      r.intervals.mid == null &&
+      r.intervals.long == null
+    ) return null;
     return renderProviderLine(provider, {
       mode,
       nowMs: Date.now(),
-      shortInterval: r.shortInterval,
-      midInterval: r.midInterval,
-      longInterval: r.longInterval,
+      intervals: r.intervals,
       ageMs,
       stale,
       version: configStore.get().version,

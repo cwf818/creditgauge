@@ -262,7 +262,7 @@ Every plugin returns a canonical `Quota` or `Balance` object directly. The host 
 
 ```ts
 type Interval = {
-  windowId:    string | null;       // default "5h" / "7d" / "30d"
+  windowId:    string | null;       // default = key (short → "5h", mid → "7d", long → "30d")
   label:       string | null;       // free-form; overrides m_windowQuota's "(5h)" suffix
   startAt:     number | string | null; // epoch ms (recommended) OR ISO-8601 string
   endAt:       number | string | null;
@@ -275,9 +275,7 @@ type Interval = {
 };
 
 type Quota = {
-  shortInterval: Interval | null,
-  midInterval:   Interval | null,
-  longInterval:  Interval | null,
+  intervals: Record<string, Interval | null>; // open dict; 3 reserved keys "short"/"mid"/"long"
 };
 
 type BalanceEntry = {
@@ -305,7 +303,7 @@ The host runs `ensureQuota` / `ensureBalance` on whatever the plugin returns. A 
 - `intervalMs` accepts number only (it's a duration, not an instant).
 - Only 1 of the 3 present → entire time group collapses to nulls (render falls back to placeholder).
 - `remainingPercent` ↔ `usedPercent`: one derives the other as `100 − x`. When both present, `usedPercent` wins.
-- Default `windowId` / `label` per slot: `shortInterval → "5h"`, `midInterval → "7d"`, `longInterval → "30d"`.
+- Default `windowId` / `label` per slot: `short → "5h"`, `mid → "7d"`, `long → "30d"`. For non-reserved keys (e.g. `monthly` / `yearly`), the key itself is the default windowId.
 
 **`ensureBalance` rules**:
 - `entries` missing or empty + `isAvailable = false` → placeholder "not available!".
@@ -417,8 +415,8 @@ Every module the renderer recognizes. **Type filter** tells you which provider T
 | ------ | ----------------------- | ------------ | ----------- | ----------- |
 | `m_modeLabel` | `Usage:` / `Remain:` / `Balance:`. | derived from `providerType` + global `display` | agnostic | `color`, `nulldrop` |
 | `m_windowQuota\|term:short\|mid\|long` (default `term=short`) | Bar + colored % of the chosen interval, e.g. `▓░░░░░░░ 9%`. | canonical `Interval.{usedPercent,remainingPercent,startAt,endAt}` | plan | `color`, `display`, `term`, `nulldrop` |
-| `m_countdown\|term:short\|mid\|long` (default `term=short`) | `(4h47m🕔 5h)` reset countdown with fill-state arrow. | canonical `Interval.{startAt,endAt,intervalMs}` | plan | `color`, `term`, `nulldrop` |
-| `m_quota\|term:short\|mid\|long` (default `term=short`) | Quota display, e.g. `quota(5h):100/500`. | canonical `Interval.{usedQuota,limitQuota}` | plan | `color`, `term`, `nulldrop` |
+| `m_countdown\|term:<key>` (default `term=short`) | `(4h47m🕔 5h)` reset countdown with fill-state arrow. `term` is the intervals dict key (`short` / `mid` / `long` or any plugin-declared key like `monthly`). | canonical `Interval.{startAt,endAt,intervalMs}` | plan | `color`, `term`, `nulldrop` |
+| `m_quota\|term:<key>` (default `term=short`) | Quota display, e.g. `quota(5h):100/500`. `term` accepts any intervals dict key. | canonical `Interval.{usedQuota,limitQuota}` | plan | `color`, `term`, `nulldrop` |
 | `m_balance` | `CNY 110.00 · USD 5.00`. | `balance.entries[]` | balance | `color`, `nulldrop` |
 | `m_age` | `🔗 5m ago` (fresh) / `⛓️‍💥 5m ago` (stale). | `ageMs`, `stale` | agnostic | `color`, `nulldrop` |
 | `m_version` | `v0.9.0` plugin version. | `version` from `.claude-plugin/plugin.json` | agnostic | `color`, `nulldrop` |
@@ -506,7 +504,7 @@ Three semantic variants per metric: **per-turn** (stdin-only, zero IO), **acc** 
 | `color`     | SGR string OR shortcut (`red`, `green`, `yellow`, `blue`, `cyan`, `magenta`, `white`, `gray`, `orange`, `purple`, plus `rainbow`/`rand-rainbow`/`hue` for `m_quote`) | module's natural palette | All `m_*` modules. Replaces the module's band color. Always wins. |
 | `nulldrop`  | `true` \| `false`                                                              | `false`            | All `m_*` modules. `false` → keep placeholder slot; `true` → drop the chunk.        |
 | `display`   | `used` \| `remaining`                                                          | global `display`   | Window modules only (`m_windowQuota`/`m_windowContext`/`m_windowMemUsage`). Flip which side of the bar is colored and which percentage is shown. Inline wins over config. |
-| `term`      | `short` \| `mid` \| `long`                                                     | `short`            | `m_windowQuota` / `m_countdown` / `m_quota`. Selects the canonical Interval slot.   |
+| `term`      | any non-empty string (reserved: `short` / `mid` / `long`)                     | `short`            | `m_windowQuota` / `m_countdown` / `m_quota`. Selects the intervals dict key — three reserved plus any plugin-declared (`monthly`, `yearly`, …). |
 | `type`      | `quota` \| `balance`                                                           | (provider-agnostic) | `m_template` only. Filter sub-template by provider TYPE. Absent = universal.        |
 | `provider`  | any non-empty string                                                           | (no per-instance gate) | `m_template` only. Gates to one specific provider instance.                  |
 | `scope`     | `session` \| `project` \| `model`                                              | `session`          | `m_acc*` only. Pick which slot of the three-layer accumulator.                       |

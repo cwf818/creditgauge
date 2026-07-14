@@ -48,7 +48,7 @@ describe("ensure quota", () => {
       remainingPercent: 66,
       startAt: 1_000,
       endAt: 5_000,
-    }, "shortInterval");
+    }, "short");
     assert.deepEqual(interval, {
       windowId: "5h",
       label: "5h",
@@ -68,20 +68,22 @@ describe("ensure quota", () => {
       shortInterval: { remainingPercent: 0 },
       extra: "ignored",
     }), {
-      shortInterval: {
-        windowId: "5h",
-        label: "5h",
-        startAt: null,
-        endAt: null,
-        intervalMs: null,
-        remainingPercent: 0,
-        usedPercent: 100,
-        remainingQuota: null,
-        usedQuota: null,
-        limitQuota: null,
+      intervals: {
+        short: {
+          windowId: "5h",
+          label: "5h",
+          startAt: null,
+          endAt: null,
+          intervalMs: null,
+          remainingPercent: 0,
+          usedPercent: 100,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+        mid: null,
+        long: null,
       },
-      midInterval: null,
-      longInterval: null,
     });
     assert.equal(ensureQuota(null), null);
   });
@@ -116,16 +118,18 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
         "secret",
         undefined,
       );
-      const quota = result.data as {
-        shortInterval: { remainingPercent: number; usedPercent: number; intervalMs: number };
-        midInterval: { remainingPercent: number; usedPercent: number; intervalMs: number };
-        longInterval: unknown;
+      const quota = result.data as unknown as {
+        intervals: {
+          short: { remainingPercent: number; usedPercent: number; intervalMs: number };
+          mid: { remainingPercent: number; usedPercent: number; intervalMs: number };
+          long: unknown;
+        };
       };
-      assert.equal(quota.shortInterval.remainingPercent, 66);
-      assert.equal(quota.shortInterval.usedPercent, 34);
-      assert.equal(quota.midInterval.remainingPercent, 61);
-      assert.equal(quota.midInterval.intervalMs, 604_800_000);
-      assert.equal(quota.longInterval, null);
+      assert.equal(quota.intervals.short.remainingPercent, 66);
+      assert.equal(quota.intervals.short.usedPercent, 34);
+      assert.equal(quota.intervals.mid.remainingPercent, 61);
+      assert.equal(quota.intervals.mid.intervalMs, 604_800_000);
+      assert.equal(quota.intervals.long, null);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -200,14 +204,16 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
         "secret",
         undefined,
       );
-      const quota = result.data as {
-        shortInterval: { remainingPercent: number; usedPercent: number; startAt: number | null };
-        midInterval: { remainingPercent: number | null };
+      const quota = result.data as unknown as {
+        intervals: {
+          short: { remainingPercent: number; usedPercent: number; startAt: number | null };
+          mid: { remainingPercent: number | null };
+        };
       };
-      assert.equal(quota.shortInterval.remainingPercent, 0);
-      assert.equal(quota.shortInterval.usedPercent, 100);
-      assert.equal(quota.shortInterval.startAt, null);
-      assert.equal(quota.midInterval.remainingPercent, null);
+      assert.equal(quota.intervals.short.remainingPercent, 0);
+      assert.equal(quota.intervals.short.usedPercent, 100);
+      assert.equal(quota.intervals.short.startAt, null);
+      assert.equal(quota.intervals.mid.remainingPercent, null);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -237,16 +243,18 @@ describe("dynamic plugin loader", () => {
         "secret",
         undefined,
       );
-      const quota = result.data as {
-        shortInterval: { remainingPercent: number; usedPercent: number; intervalMs: number };
-        midInterval: { remainingPercent: number; usedPercent: number; intervalMs: number };
+      const quota = result.data as unknown as {
+        intervals: {
+          short: { remainingPercent: number; usedPercent: number; intervalMs: number };
+          mid: { remainingPercent: number; usedPercent: number; intervalMs: number };
+        };
       };
-      assert.equal(quota.shortInterval.remainingPercent, 66);
-      assert.equal(quota.shortInterval.usedPercent, 34);
-      assert.equal(quota.shortInterval.intervalMs, 14_400_000);
-      assert.equal(quota.midInterval.remainingPercent, 61);
-      assert.equal(quota.midInterval.usedPercent, 39);
-      assert.equal(quota.midInterval.intervalMs, 604_800_000);
+      assert.equal(quota.intervals.short.remainingPercent, 66);
+      assert.equal(quota.intervals.short.usedPercent, 34);
+      assert.equal(quota.intervals.short.intervalMs, 14_400_000);
+      assert.equal(quota.intervals.mid.remainingPercent, 61);
+      assert.equal(quota.intervals.mid.usedPercent, 39);
+      assert.equal(quota.intervals.mid.intervalMs, 604_800_000);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -277,7 +285,7 @@ describe("dynamic plugin loader", () => {
       undefined,
     );
     assert.equal(
-      (result.data as { shortInterval: { windowId: string } }).shortInterval
+      (result.data as unknown as { intervals: { short: { windowId: string } } }).intervals.short
         .windowId,
       "configured-key",
     );
@@ -462,6 +470,9 @@ describe("pluginTransport override end-to-end (v0.9.0+)", () => {
       const partial = await pluginTransportWithKind("minimax", "ignored");
       assert.equal(partial.kind, "user");
       assert.equal(fetchCalled, false, "globalThis.fetch must not be invoked by the user plugin");
+      // partial.result is the RAW plugin return value (before ensureQuota).
+      // The user plugin in this test returns the legacy 3-slot shape, so
+      // we read it directly.
       const shape = partial.result as { shortInterval: { remainingPercent: number; windowId: string } };
       assert.equal(shape.shortInterval.remainingPercent, 42);
       assert.equal(shape.shortInterval.windowId, "user");
@@ -492,8 +503,8 @@ describe("pluginTransport override end-to-end (v0.9.0+)", () => {
       const partial = await pluginTransportWithKind("minimax", "ignored");
       assert.equal(partial.kind, "builtin");
       assert.ok(partial.result, "bundled built-in should return a non-null partial");
-      const shape = partial.result as { shortInterval: { remainingPercent: number } | null };
-      assert.equal(shape.shortInterval?.remainingPercent, 50);
+      const shape = partial.result as { intervals: { short: { remainingPercent: number } | null } };
+      assert.equal(shape.intervals.short?.remainingPercent, 50);
     } finally {
       globalThis.fetch = originalFetch;
     }

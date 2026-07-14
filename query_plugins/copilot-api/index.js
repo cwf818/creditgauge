@@ -18,8 +18,8 @@
 //
 // All Copilot spend flows through the natural-month window — there
 // is no short/mid term available. We project premium_interactions
-// onto the canonical `longInterval` slot, and let `shortInterval` /
-// `midInterval` resolve to null (the renderer drops them on a
+// onto the canonical `intervals.long` slot, and let `intervals.short`
+// / `intervals.mid` resolve to null (the renderer drops them on a
 // Copilot-only display). `startAt` / `endAt` are computed from the
 // call clock as natural-month boundaries (start of this month →
 // start of next month, local time) so the renderer can draw a
@@ -74,19 +74,21 @@ function fillQuota(raw, nowMs) {
   const bounds = naturalMonthBounds(nowMs);
 
   return {
-    shortInterval: null,
-    midInterval: null,
-    longInterval: {
-      // windowId / label resolution lives in `ensureInterval`: with
-      // both fields absent it falls back to the canonical
-      // "30d" label — the user's `providers.copilot.intervals.
-      // longInterval.label` config override still wins on top of
-      // that. We don't bake a label in here so providers (and
-      // users) keep full control.
-      remainingPercent,
-      remainingQuota,
-      limitQuota,
-      ...(bounds ?? {}),
+    intervals: {
+      short: null,
+      mid: null,
+      long: {
+        // windowId / label resolution lives in `ensureInterval`: with
+        // both fields absent it falls back to the canonical
+        // "30d" label — the user's `providers.copilot.intervals.
+        // long.label` config override still wins on top of
+        // that. We don't bake a label in here so providers (and
+        // users) keep full control.
+        remainingPercent,
+        remainingQuota,
+        limitQuota,
+        ...(bounds ?? {}),
+      },
     },
   };
 }

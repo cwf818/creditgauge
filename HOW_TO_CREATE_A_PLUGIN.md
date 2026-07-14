@@ -61,15 +61,17 @@ export default {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const raw = JSON.parse(await r.text());
     return {
-      shortInterval: {
-        remainingPercent: raw.percent,
-        // startAt / endAt optional — renderer's window-fill-aware
-        // reset arrow gets its direction from these when present.
-        startAt: raw.resetStartMs,
-        endAt: raw.resetAtMs,
+      intervals: {
+        short: {
+          remainingPercent: raw.percent,
+          // startAt / endAt optional — renderer's window-fill-aware
+          // reset arrow gets its direction from these when present.
+          startAt: raw.resetStartMs,
+          endAt: raw.resetAtMs,
+        },
+        mid: null,
+        long: null,
       },
-      midInterval: null,
-      longInterval: null,
     };
   },
 };
@@ -140,9 +142,12 @@ If neither `query_plugins/<id>/index.js` nor `index.mjs` exists, the host falls 
 
 ### 4a. Token-plan / quota provider → `type: "QUOTA"`
 
-Returned shape is a `Partial<Quota>`. Three independent interval slots:
-`shortInterval`, `midInterval`, `longInterval`. Each can be `null` when
-you have no data for that slot.
+Returned shape is a `Partial<Quota>`. The `intervals` field is an open
+dictionary — declare any keys you like (e.g. `short` / `mid` / `long` /
+`monthly` / `yearly`); the host runs `ensureQuota` to canonicalize.
+Three reserved keys (`short` / `mid` / `long`) are always seeded as
+`null` when absent, so `m_windowQuota|term|short` etc. never errors.
+Each interval can be `null` when you have no data for that slot.
 
 ```js
 // Reference: built-in src/plugins/minimax/index.js
@@ -161,13 +166,15 @@ export default {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const raw = JSON.parse(await response.text());
     return {
-      shortInterval: {
-        remainingPercent: raw.pct,
-        startAt: raw.startMs,
-        endAt: raw.endMs,
+      intervals: {
+        short: {
+          remainingPercent: raw.pct,
+          startAt: raw.startMs,
+          endAt: raw.endMs,
+        },
+        mid: null,
+        long: null,
       },
-      midInterval: null,
-      longInterval: null,
     };
   },
 };
@@ -254,8 +261,8 @@ matches any `ANTHROPIC_BASE_URL` beginning with `http://localhost:4141`
 (so `http://localhost:4141/v1`, `.../anthropic`, etc. all route here).
 
 **Only the 30-day (natural-month) window is available.** The plugin
-projects Copilot's `premium_interactions` onto the canonical
-`longInterval` slot and leaves `shortInterval` / `midInterval` `null`;
+projects Copilot's `premium_interactions` onto the reserved
+`long` slot of the `intervals` dict and leaves `short` / `mid` `null`;
 that slot carries only a **percent** (`remaining/used %`) and a **credit**
 pair (`remainingQuota` / `limitQuota` — the premium-interaction count and
 entitlement). There is no 5h / 7d data.
@@ -284,10 +291,15 @@ and drops it under every other provider (and under an unmatched
 ```
 
 Use `term:long` (not `short` / `mid`) everywhere in the fragment — that's
-the only slot the plugin fills. `m_windowQuota|term:long` renders the
-percent + bar; add `m_windowQuota|term:long|display:remaining` or the
+the only reserved slot the plugin fills. `m_windowQuota|term:long` renders
+the percent + bar; add `m_windowQuota|term:long|display:remaining` or the
 absolute credit via the interval's `remainingQuota` / `limitQuota` (see
 [MANUAL.md](./MANUAL.md) for the credit-rendering module args).
+
+The `term` axis is open-ended: any key you put in `intervals` is
+resolvable. So a plugin that wants a "monthly" window can return
+`intervals: { ..., monthly: { ... } }` and reference it from the template
+as `m_windowQuota|term|monthly` — no host changes required.
 
 Plugin authors sometimes find that the `ENDPOINT` config field is a
 footgun — it lures people into believing the host reads it. The host
@@ -313,11 +325,11 @@ Endpoint:
 `POST https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages`
 
 Three windows:
-- `5h` rolling sub-window (`usages.limits[0].detail`) → `shortInterval`
-- `7d` primary weekly cycle (`usages.detail`) → `midInterval`
+- `5h` rolling sub-window (`usages.limits[0].detail`) → `intervals.short`
+- `7d` primary weekly cycle (`usages.detail`) → `intervals.mid`
 - `30d` total-quota percentage only (`totalQuota.remaining` — no
   resetTime / startAt / endAt, so the renderer drops the time group) →
-  `longInterval`
+  `intervals.long`
 
 **`AUTHENTICATION_KEY` — REQUIRED, non-obvious source.** It is the Kimi
 dashboard's `localStorage.access_token` (issued after browser login at
@@ -347,7 +359,7 @@ gRPC-over-HTTP endpoint. To grab it:
 
 Endpoint: `GET http://localhost:4141/usage` — the copilot-proxy sidecar
 running on the user's machine. One window: `30d` natural-month cycle
-(`premium_interactions` → `longInterval`; `startAt` / `endAt` computed
+(`premium_interactions` → `intervals.long`; `startAt` / `endAt` computed
 locally as month boundaries). No `AUTHENTICATION_KEY` — authenticated by
 localhost/IP. See [§5a](#5a-example--copilot-api-github-copilot-proxy-sidecar)
 for the full registration + display walkthrough.
@@ -373,9 +385,7 @@ type Interval = {
 };
 
 type Quota = {
-  shortInterval: Interval | null;
-  midInterval:   Interval | null;
-  longInterval:  Interval | null;
+  intervals: Record<string, Interval | null>;
 };
 ```
 
@@ -460,7 +470,7 @@ const sample = JSON.parse(readFileSync("./fixture.json", "utf8"));
 console.log(plugin.fillQuota(sample));
 ```
 
-The kimi plugin's `[fillQuota, shortInterval, midInterval, longInterval, findCodingUsage]` exports give you all the surface area you'd want to pin. See `src/plugins/kimi.test.ts` for a complete example using the captured-real fixture `src/__fixtures__/quota.real.kimi.json`.
+The kimi plugin's `[fillQuota, findCodingUsage]` exports give you all the surface area you'd want to pin. See `src/plugins/kimi.test.ts` for a complete example using the captured-real fixture `src/__fixtures__/quota.real.kimi.json`.
 
 ---
 

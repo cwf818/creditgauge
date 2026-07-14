@@ -32,23 +32,25 @@
 const payload = () => {
   const now = Date.now();
   return {
-    shortInterval: {
-      label: "5h",
-      startAt: now,
-      endAt: now + 4 * 3600 * 1000,
-      intervalMs: 4 * 3600 * 1000,
-      remainingPercent: 75,
-      usedPercent: 25,
+    intervals: {
+      short: {
+        label: "5h",
+        startAt: now,
+        endAt: now + 4 * 3600 * 1000,
+        intervalMs: 4 * 3600 * 1000,
+        remainingPercent: 75,
+        usedPercent: 25,
+      },
+      mid: {
+        label: "7d",
+        startAt: now,
+        endAt: now + 7 * 24 * 3600 * 1000,
+        intervalMs: 7 * 24 * 3600 * 1000,
+        remainingPercent: 50,
+        usedPercent: 50,
+      },
+      long: null,
     },
-    midInterval: {
-      label: "7d",
-      startAt: now,
-      endAt: now + 7 * 24 * 3600 * 1000,
-      intervalMs: 7 * 24 * 3600 * 1000,
-      remainingPercent: 50,
-      usedPercent: 50,
-    },
-    longInterval: null,
   };
 };
 

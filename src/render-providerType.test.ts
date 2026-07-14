@@ -41,9 +41,11 @@ const BALANCE = {
 const ctxFor = (providerType: "quota" | "balance" | "unknown") => ({
   mode: "used" as const,
   nowMs: 1_000_000,
-  shortInterval: { windowId: "5h" as const, label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 30, remainingPercent: 70, remainingQuota: null, usedQuota: null, limitQuota: null },
-  midInterval: { windowId: "7d" as const, label: "7d", startAt: null, endAt: null, intervalMs: null, usedPercent: 50, remainingPercent: 50, remainingQuota: null, usedQuota: null, limitQuota: null },
-  longInterval: null,
+  intervals: {
+    short: { windowId: "5h" as const, label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 30, remainingPercent: 70, remainingQuota: null, usedQuota: null, limitQuota: null },
+    mid: { windowId: "7d" as const, label: "7d", startAt: null, endAt: null, intervalMs: null, usedPercent: 50, remainingPercent: 50, remainingQuota: null, usedQuota: null, limitQuota: null },
+    long: null,
+  },
   balance: BALANCE,
   ageMs: null,
   stale: false,

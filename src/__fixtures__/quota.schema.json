@@ -1,5 +1,5 @@
 {
-  "_about": "topgauge Quota 标准 schema —— 插件(用户脚本)的输出契约。插件读取 provider API 原始响应,把它转换(或裁剪)成本 schema 的形状,host 通过 ensureQuota() 把它规约成 canonical Quota。设计原则:1) 字段值必须是已规约的原值(number / string / null),不再二次解析;2) null = 未知 / 不存在,渲染器走 placeholder;3) 三个 interval 独立存在,可全 null,但只要任一字段非 null 即视为有数据;4) 时间字段接受 epoch ms number 或 ISO-8601 string(由 ensureInterval 处理),推荐插件直接规约成 number 以减少一次 Date.parse;5) 百分比用 [0,100] 的 number,quota 用 integer 自由单位。",
+  "_about": "topgauge Quota 标准 schema —— 插件(用户脚本)的输出契约。v0.9.4 — `intervals` 是开放 dict,任意 key 都接受;host 通过 ensureQuota() 把它规约成 canonical Quota。设计原则:1) 字段值必须是已规约的原值(number / string / null),不再二次解析;2) null = 未知 / 不存在,渲染器走 placeholder;3) 任意多个 interval 独立存在,可全 null,但只要任一字段非 null 即视为有数据;4) 时间字段接受 epoch ms number 或 ISO-8601 string(由 ensureInterval 处理),推荐插件直接规约成 number 以减少一次 Date.parse;5) 百分比用 [0,100] 的 number,quota 用 integer 自由单位。",
   "_rendererNotes": [
     "render.ts:Interval.windowId  决定 m_windowQuota / m_countdown 渲染时绑定的 m_sum* |window|<id> 维度(默认 5h / 7d / 30d)。",
     "render.ts:Interval.label     决定 quota(5h) 这类渲染括号里的人类可读标签。",
@@ -7,9 +7,9 @@
     "render.ts:Interval.remainingPercent / usedPercent  互斥对:插件只需填一个,另一个 = 100 - x 由 ensureInterval 自动派生。",
     "render.ts:Interval.remainingQuota / usedQuota / limitQuota  自由组合:空 → placeholder;only limit → '0/limit';used+limit → 'used/limit'。"
   ],
-  "schemaVersion": "1.0",
+  "schemaVersion": "0.9.4",
   "type": "object",
-  "required": ["shortInterval", "midInterval", "longInterval"],
+  "required": ["intervals"],
   "additionalProperties": false,
   "properties": {
     "$comment_meta": {
@@ -22,14 +22,21 @@
         "note":        { "type": "string", "description": "自由注释;写入 diagnostics.jsonl 之前由插件自己转储" }
       }
     },
-    "shortInterval": { "$ref": "#/$defs/Interval" },
-    "midInterval":   { "$ref": "#/$defs/Interval" },
-    "longInterval":  { "$ref": "#/$defs/Interval" }
+    "intervals": {
+      "type": "object",
+      "description": "窗口字典,key 是 interval 名(如 'short' / 'mid' / 'long' / 'monthly' / 'yearly')。三个 reserved key 'short' / 'mid' / 'long' 由 ensureQuota 自动 seed(null),其他 key 由插件声明。term:|key| 直接读 ctx.intervals[key]。'all' 是 m_sum* |window| 的保留 sentinel,不能作为 dict key。",
+      "additionalProperties": { "$ref": "#/$defs/Interval" },
+      "properties": {
+        "short": { "$ref": "#/$defs/Interval", "description": "reserved (5h)" },
+        "mid":   { "$ref": "#/$defs/Interval", "description": "reserved (7d)" },
+        "long":  { "$ref": "#/$defs/Interval", "description": "reserved (30d)" }
+      }
+    }
   },
   "$defs": {
     "Interval": {
       "type": "object",
-      "description": "一个独立的 token-plan 窗口(5h / 7d / 30d 之一)。全字段可选:插件决定能填几个就填几个,其余留给 null = unknown 语义。",
+      "description": "一个独立的 token-plan 窗口(5h / 7d / 30d / monthly / yearly / ...)。全字段可选:插件决定能填几个就填几个,其余留给 null = unknown 语义。",
       "additionalProperties": false,
       "properties": {
         "$comment_windowId": { "type": "string", "const": "windowId 决定 m_sum* |window|<id> 的 align=true 维度查找键。默认 '5h' / '7d' / '30d'。vX.X.X+ 接受任意 string(数字开头会被 config.ts 自动加 w 前缀以避免与 parseDhms 撞车)。" },
@@ -47,7 +54,7 @@
         "remainingPercent":  { "type": ["number", "null"], "minimum": 0, "maximum": 100, "description": "[0,100] 剩余百分比。null = 未知。" },
         "usedPercent":       { "type": ["number", "null"], "minimum": 0, "maximum": 100, "description": "[0,100] 已用百分比。null = 未知。" },
 
-        "$comment_quota":    { "type": "string", "const": "remainingQuota / usedQuota / limitQuota 自由组合。整数 / 自由单位(无跨 provider 归一化)。m_quota 决定渲染什么:全 null = placeholder;only limit = '0/limit';used+limit = 'used/limit'。" },
+        "$comment_quota":    { "type": "string", "const": "remainingQuota / usedQuota / limitQuota 自由组合。整数 / 自由单位(无跨 provider 归一化)。m_quota 决定渲染什么:全 null = placeholder;only limit = '0/limit';used+limit → 'used/limit'。" },
         "remainingQuota":    { "type": ["number", "null"], "description": "剩余 quota 整数,自由单位。null = 未知。" },
         "usedQuota":         { "type": ["number", "null"], "description": "已用 quota 整数,自由单位。null = 未知。" },
         "limitQuota":        { "type": ["number", "null"], "description": "总额 quota 整数,自由单位。null = 未知。" }
@@ -57,81 +64,106 @@
 
   "example": {
     "_about": "示例:插件捕获 minimax /v1/token_plan/remains 后,选择 model_remains 里 current_interval_remaining_percent 最低的那条(此处为 61%),规约成下面这个对象。",
-    "shortInterval": {
-      "windowId": "5h",
-      "label": "5h",
-      "startAt": 1782302400000,
-      "endAt":   1782316800000,
-      "intervalMs": 14400000,
-      "remainingPercent": 39,
-      "usedPercent":      61,
-      "remainingQuota": null,
-      "usedQuota":      null,
-      "limitQuota":     null
-    },
-    "midInterval": {
-      "windowId": "7d",
-      "label": "7d",
-      "startAt": 1782057600000,
-      "endAt":   1782662400000,
-      "intervalMs": 604800000,
-      "remainingPercent": 39,
-      "usedPercent":      61,
-      "remainingQuota": null,
-      "usedQuota":      null,
-      "limitQuota":     null
-    },
-    "longInterval": {
-      "windowId": "30d",
-      "label": "30d",
-      "startAt": null,
-      "endAt":   null,
-      "intervalMs": null,
-      "remainingPercent": null,
-      "usedPercent":      null,
-      "remainingQuota": null,
-      "usedQuota":      null,
-      "limitQuota":     null
+    "intervals": {
+      "short": {
+        "windowId": "5h",
+        "label": "5h",
+        "startAt": 1782302400000,
+        "endAt":   1782316800000,
+        "intervalMs": 14400000,
+        "remainingPercent": 39,
+        "usedPercent":      61,
+        "remainingQuota": null,
+        "usedQuota":      null,
+        "limitQuota":     null
+      },
+      "mid": {
+        "windowId": "7d",
+        "label": "7d",
+        "startAt": 1782057600000,
+        "endAt":   1782662400000,
+        "intervalMs": 604800000,
+        "remainingPercent": 39,
+        "usedPercent":      61,
+        "remainingQuota": null,
+        "usedQuota":      null,
+        "limitQuota":     null
+      },
+      "long": {
+        "windowId": "30d",
+        "label": "30d",
+        "startAt": null,
+        "endAt":   null,
+        "intervalMs": null,
+        "remainingPercent": null,
+        "usedPercent":      null,
+        "remainingQuota": null,
+        "usedQuota":      null,
+        "limitQuota":     null
+      }
     }
   },
 
   "example_iso8601": {
     "_about": "示例 2:同一份数据用 ISO-8601 字符串表达 startAt / endAt。等价于上面的 number 版本 —— ensureInterval 会把 ISO 字符串 Date.parse 成 epoch ms。插件负责原样传字符串,无需自己 Date.parse。",
-    "shortInterval": {
-      "windowId": "5h",
-      "label": "5h",
-      "startAt": "2026-06-24T04:00:00.000Z",
-      "endAt":   "2026-06-24T08:00:00.000Z",
-      "intervalMs": 14400000,
-      "remainingPercent": 39,
-      "usedPercent":      61,
-      "remainingQuota": null,
-      "usedQuota":      null,
-      "limitQuota":     null
-    },
-    "midInterval": {
-      "windowId": "7d",
-      "label": "7d",
-      "startAt": "2026-06-21T00:00:00.000Z",
-      "endAt":   "2026-06-28T00:00:00.000Z",
-      "intervalMs": 604800000,
-      "remainingPercent": 39,
-      "usedPercent":      61,
-      "remainingQuota": null,
-      "usedQuota":      null,
-      "limitQuota":     null
-    },
-    "longInterval": {
-      "windowId": "30d",
-      "label": "30d",
-      "startAt": null,
-      "endAt":   null,
-      "intervalMs": null,
-      "remainingPercent": null,
-      "usedPercent":      null,
-      "remainingQuota": null,
-      "usedQuota":      null,
-      "limitQuota":     null
+    "intervals": {
+      "short": {
+        "windowId": "5h",
+        "label": "5h",
+        "startAt": "2026-06-24T04:00:00.000Z",
+        "endAt":   "2026-06-24T08:00:00.000Z",
+        "intervalMs": 14400000,
+        "remainingPercent": 39,
+        "usedPercent":      61,
+        "remainingQuota": null,
+        "usedQuota":      null,
+        "limitQuota":     null
+      },
+      "mid": {
+        "windowId": "7d",
+        "label": "7d",
+        "startAt": "2026-06-21T00:00:00.000Z",
+        "endAt":   "2026-06-28T00:00:00.000Z",
+        "intervalMs": 604800000,
+        "remainingPercent": 39,
+        "usedPercent":      61,
+        "remainingQuota": null,
+        "usedQuota":      null,
+        "limitQuota":     null
+      },
+      "long": {
+        "windowId": "30d",
+        "label": "30d",
+        "startAt": null,
+        "endAt":   null,
+        "intervalMs": null,
+        "remainingPercent": null,
+        "usedPercent":      null,
+        "remainingQuota": null,
+        "usedQuota":      null,
+        "limitQuota":     null
+      }
+    }
+  },
+
+  "example_custom_key": {
+    "_about": "示例 3:插件声明自定义 key 'monthly'。host 把任意插件 key 都接受;term:|monthly| 直接读 ctx.intervals.monthly。",
+    "intervals": {
+      "short": null,
+      "mid": null,
+      "long": null,
+      "monthly": {
+        "windowId": "30d",
+        "label": "本月",
+        "startAt": 1782057600000,
+        "endAt":   1784649600000,
+        "intervalMs": 2592000000,
+        "remainingPercent": 80,
+        "usedPercent":      20,
+        "remainingQuota": null,
+        "usedQuota":      null,
+        "limitQuota":     null
+      }
     }
   }
 }

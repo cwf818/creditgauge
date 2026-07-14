@@ -11,10 +11,25 @@ export type Interval = {
   limitQuota: number | null;
 };
 
+// v0.9.4 — the `intervals` dict IS the source of truth. Three reserved
+// keys (short / mid / long) ship with the historical defaults
+// (5h / 7d / 30d) so existing plugin authors and the built-in
+// minimax/deepseek/kimi/copilot plugins keep working without
+// renaming; the dict is otherwise OPEN — a plugin may declare any
+// additional key (e.g. "monthly", "yearly", "weekday-peak") and
+// reference it via `m_windowQuota|term|<key>`. Empty dict is the
+// legitimate "no data" case (the host treats it as "all slots
+// null" and the per-module placeholder fires).
+//
+// For backward compat, the host's `ensureQuota` ALSO accepts the
+// legacy `shortInterval` / `midInterval` / `longInterval` fields on
+// the raw plugin output and maps them onto the reserved keys. The
+// Quota type itself only exposes `intervals` — the legacy fields
+// are an `ensureQuota`-level concern, not part of the canonical
+// shape (so render-time reads go through `ctx.intervals["short"]`
+// / `ctx.intervals[anyOtherKey]` uniformly).
 export type Quota = {
-  shortInterval: Interval | null;
-  midInterval: Interval | null;
-  longInterval: Interval | null;
+  intervals: Record<string, Interval | null>;
 };
 
 export type BalanceEntry = {

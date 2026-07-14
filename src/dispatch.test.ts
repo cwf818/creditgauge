@@ -23,9 +23,11 @@ const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
 // A minimally valid Quota payload (two windows) — enough for the renderer.
 const MINI_DATA: Quota = {
-  shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 38, remainingPercent: 62, remainingQuota: null, usedQuota: null, limitQuota: null },
-  midInterval: { windowId: "7d", label: "7d", startAt: null, endAt: null, intervalMs: null, usedPercent: 39, remainingPercent: 61, remainingQuota: null, usedQuota: null, limitQuota: null },
-  longInterval: null,
+  intervals: {
+    short: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 38, remainingPercent: 62, remainingQuota: null, usedQuota: null, limitQuota: null },
+    mid: { windowId: "7d", label: "7d", startAt: null, endAt: null, intervalMs: null, usedPercent: 39, remainingPercent: 61, remainingQuota: null, usedQuota: null, limitQuota: null },
+    long: null,
+  },
 };
 
 // A minimally valid Balance payload.

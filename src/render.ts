@@ -67,8 +67,12 @@ type Window = {
 
 // v0.9.x — unified interval shape. Replaces the v0.5.0–v0.8.x
 // pair-of-Windows model (`Quota.fiveHour` / `Quota.weekly`) with
-// three independent intervals (`shortInterval` / `midInterval` /
-// `longInterval`). The fields are populated by the plugin's
+// three independent intervals. v0.9.4 — those three slots collapse
+// into a single open-ended `intervals` dict
+// (`Record<string, Interval|null>`); the three reserved keys
+// ("short" / "mid" / "long") ship with the historical windowId
+// defaults (5h / 7d / 30d) so existing renders stay byte-identical
+// after upgrade. The fields are populated by the plugin's
 // `fillQuota` and normalised by `ensureInterval` in
 // src/plugins/parsers.ts. The renderer (m_windowQuota / m_countdown /
 // m_quota) reads these fields directly. `Window` (above) is still the
@@ -118,12 +122,12 @@ export type Interval = {
 type DisplayMode = "remaining" | "used";
 
 // v0.9.0+ — interval-term selector used by m_windowQuota / m_countdown /
-// m_quota. Each term maps to one of the three `Interval` fields on
-// `RenderContext`. The `Term` type lives here (next to `Interval`)
-// because the inline-renderer branch uses it as a narrow string
-// union — the dispatcher also uses it for the `term` resolver in
-// `TERM_PARAM` (see below).
-type Term = "short" | "mid" | "long";
+// m_quota. v0.9.4 — the `intervals` dict is open, so the term is no
+// longer a closed union; it can be any string the plugin declared.
+// TERM_PARAM accepts the byte-for-byte inline resolver behaviour
+// — the renderer reads `ctx.intervals[term]` for ANY string, so
+// passing e.g. `m_windowQuota|term|monthly` just works
+// (placeholder when the key is missing).
 
 // Shorthand for the active config snapshot. Reading configStore.get()
 // on every call would be wasteful for hot paths (every formatLine call
@@ -1044,16 +1048,20 @@ export function formatLine(
   stale: boolean = false,
   tokens: TokenSnapshot | null = null,
 ): string {
-  // v0.9.0+ — three-Interval signature. The first two are required
-  // (preserves backward compat with callers that pass two windows);
-  // longInterval is optional and defaults to null (the v0.8.x
-  // signature only shipped two windows).
+  // v0.9.4 — three positional args packed into the open-ended
+  // `intervals` dict. The 3-arg signature is preserved for
+  // back-compat with old test fixtures / external callers; new
+  // code should call `renderProviderLine` directly with the dict
+  // shape so non-reserved terms aren't dropped on the floor.
+  const intervals: Record<string, Interval | null> = {
+    short: shortInterval ?? null,
+    mid: midInterval ?? null,
+    long: longInterval ?? null,
+  };
   return renderProviderLine("minimax", {
     mode,
     nowMs,
-    shortInterval: shortInterval ?? null,
-    midInterval: midInterval ?? null,
-    longInterval: longInterval ?? null,
+    intervals,
     ageMs: ageMs ?? null,
     stale,
     version: cfg().version,
@@ -1205,15 +1213,28 @@ export function formatBalanceLine(b: BalanceLike, ageMs?: number, stale: boolean
 type RenderContext = {
   mode: DisplayMode;
   nowMs: number;
-  // v0.9.0+ — three independent intervals. Replaces v0.5.0–v0.8.x
-  // `fiveHour` + `weekly` (a fixed pair of Windows). Each is the
-  // `Interval` shape produced by the parser; `m_windowQuota` /
-  // `m_countdown` / `m_quota` project the active one through
-  // `intervalToWindow` to feed the gauge / countdown renderers.
-  // Old code paths (m_sum* align-aware scans) read these directly.
-  shortInterval: Interval | null;
-  midInterval: Interval | null;
-  longInterval: Interval | null;
+  // v0.9.4 — open-ended `intervals` dict replaces the v0.9.0 trio
+  // of fixed slots (`shortInterval` / `midInterval` / `longInterval`).
+  // The three reserved keys ("short" / "mid" / "long") are always
+  // seeded by `ensureQuota` so legacy `m_windowQuota|term|short`
+  // / `mid` / `long` lookups keep working byte-for-byte. New
+  // plugins can declare arbitrary keys (e.g. "monthly") and
+  // reference them via `m_windowQuota|term|monthly`. `Window` is
+  // still the shape `formatOneChunk` / `formatOneResetSuffix`
+  // consume; `intervalToWindow` projects an `Interval` →
+  // `Window` when the gauge / countdown rendering path needs to
+  // fire. Old code paths (m_sum* align-aware scans) read
+  // `Object.values(intervals)` to find a matching `windowId`.
+  intervals?: Record<string, Interval | null>;
+  // v0.9.4 — legacy back-compat. Test helpers and a handful of internal
+  // call sites still construct ctx with flat `shortInterval` /
+  // `midInterval` / `longInterval` fields. `renderTemplate` and
+  // `renderProviderLine` fold these into the reserved dict keys
+  // (`short` / `mid` / `long`) when `intervals` is absent. The
+  // canonical ctx has only `intervals`.
+  shortInterval?: Interval | null;
+  midInterval?: Interval | null;
+  longInterval?: Interval | null;
   balance: BalanceLike | null;
   ageMs: number | null;
   stale: boolean;
@@ -1947,15 +1968,17 @@ const MODULES: Record<string, Module> = {
       : cfg().modeLabels[c.mode],
     undefined),
   // v0.9.0+ — unified m_windowQuota module (replaces v0.5.0–v0.8.x
-// `m_window5h` + `m_window7d`). Reads `c.shortInterval` (the
+// `m_window5h` + `m_window7d`). Reads `c.intervals["short"]` (the
 // 5-hour default term) and projects it through `intervalToWindow`
-// for the gauge render. Inline form accepts `|term|short|mid|long`
-// to pick a different interval. The hard-coded "5h" / "7d" labels
-// from the v0.8.x renderers are gone — the gauge is data-driven,
-// driven entirely by the Interval's `pct` field.
+// for the gauge render. Inline form accepts `|term|<key>` to pick
+// a different interval (legacy `short` / `mid` / `long` still
+// work; arbitrary keys like `monthly` are also fine as long as the
+// plugin populates that dict slot). The hard-coded "5h" / "7d"
+// labels from the v0.8.x renderers are gone — the gauge is data-
+// driven, driven entirely by the Interval's `pct` field.
 m_windowQuota: Object.assign(
   ((c: RenderContext) => {
-    const iv = c.shortInterval;
+    const iv = (c.intervals ?? {})["short"] ?? null;
     if (!iv) return placeholderBare("m_windowQuota", c);
     const w = intervalToWindow(iv);
     if (!w) return placeholderBare("m_windowQuota", c);
@@ -1971,7 +1994,7 @@ m_windowQuota: Object.assign(
   // <label>)" body stays in sync with the active renderer.
 m_countdown: Object.assign(
   ((c: RenderContext) => {
-    const iv = c.shortInterval;
+    const iv = (c.intervals ?? {})["short"] ?? null;
     if (!iv) return placeholderBare("m_countdown", c);
     const w = intervalToWindow(iv);
     if (!w) return placeholderBare("m_countdown", c);
@@ -1983,18 +2006,18 @@ m_countdown: Object.assign(
   { type: "quota" as const },
 ),
   // v0.9.0+ — quota module. Reads the quota group from
-  // `c.shortInterval` (default term; bare form), and the chosen
-  // `term` slot for the inline form. Renders
+  // `c.intervals["short"]` (default term; bare form), and the
+  // chosen `term` slot for the inline form. Renders
   // `<labelQuota>(<interval.label>):<axis>/limit` shape where
   // `<axis>` is `used` by default and `remaining` when
   // `c.mode === "remaining"` (mirrors `m_windowQuota`). The
   // placeholder (rendered when no quota data is present) is
   // `${labelFor("quota")}(<term-label>):--` — bare defaults to
-  // `c.shortInterval?.label`; inline honors `params.term` so a
-  // `m_quota|term|mid` placeholder reads `(7d):--`, not `(5h):--`.
+  // `c.intervals["short"]?.label`; inline honors `params.term` so
+  // a `m_quota|term|mid` placeholder reads `(7d):--`, not `(5h):--`.
 m_quota: Object.assign(
   ((c: RenderContext) => {
-    const iv = c.shortInterval;
+    const iv = (c.intervals ?? {})["short"] ?? null;
     if (!iv) return placeholderBare("m_quota", c);
     const parts = renderQuotaParts(iv, c.mode);
     if (!parts) return placeholderBare("m_quota", c);
@@ -3432,21 +3455,18 @@ type SumFilter = {
 };
 
 // vX.X.X — look up which Interval (if any) declares a given
-// windowId. Walks the three Interval slots on ctx and returns the
-// first that matches. Used by parseWindowScope for the
+// windowId. Walks the open-ended `intervals` dict on ctx and
+// returns the first that matches. Used by parseWindowScope for the
 // `|window|<declaredWindowId>` lookup path so a user can write
-// `|window|monthly` against `intervals.longInterval.windowId =
+// `|window|monthly` against `intervals.monthly.windowId =
 // "monthly"` and (with `|align|true`) get the plan-aligned scan.
+// v0.9.4 — the `intervals` dict is open, so this lookup hits
+// arbitrary keys (not just the v0.9.x three reserved slots).
 function matchIntervalByWindowId(
   ctx: RenderContext,
   windowId: string,
 ): Interval | null {
-  const candidates: Array<Interval | null | undefined> = [
-    ctx.shortInterval,
-    ctx.midInterval,
-    ctx.longInterval,
-  ];
-  for (const iv of candidates) {
+  for (const iv of Object.values(ctx.intervals ?? {})) {
     if (iv != null && iv.windowId === windowId) return iv;
   }
   return null;
@@ -4211,15 +4231,20 @@ const ALIGN_PARAM = {
 } as const;
 
 // v0.9.0+ — interval-term selector for m_windowQuota / m_countdown /
-// m_quota. Resolves to "short" | "mid" | "long"; the bare form
-// defaults to "short". Invalid values drop the inline token
-// (same shape as ALIGN_PARAM's true/false parse). The renderer
-// maps the term to one of the three `Interval` fields on
-// `RenderContext`: `shortInterval` / `midInterval` / `longInterval`.
+// m_quota. v0.9.4 — the `intervals` dict is open-ended, so `term`
+// accepts ANY non-empty string (the bare form defaults to
+// "short" upstream of the dispatcher). `all` is reserved by
+// parseWindowScope's no-time-anchor sentinel and is rejected here
+// so a user typo (`m_windowQuota|term|all`) fails loud at the
+// inline-args resolver rather than silently no-op'ing. Empty
+// strings and whitespace-only values are likewise dropped.
 const TERM_PARAM = {
   named: {
-    term: (raw: string): ResolvedValue | null =>
-      raw === "short" || raw === "mid" || raw === "long" ? raw : null,
+    term: (raw: string): ResolvedValue | null => {
+      if (raw === "all") return null;
+      if (raw.trim() === "") return null;
+      return raw;
+    },
   },
 } as const;
 
@@ -4339,26 +4364,32 @@ function placeholderDashesUnitFn(
 // Term-aware renderer-context lookup. Mirrors the renderer-side
 // `term → Interval` switch (used in m_windowQuota / m_countdown /
 // m_quota) so placeholder + live bodies agree on what interval
-// they read. Default is "short" to match the bare-MODULES default.
+// they read. v0.9.4 — `term` is the literal dict key
+// (`ctx.intervals[term]`), NOT a fixed union. Default is "short"
+// to match the bare-MODULES default; any other string is a
+// passthrough to the dict.
 function intervalForTerm(
-  term: Term | undefined,
+  term: string | undefined,
   ctx: RenderContext,
-): { label: string | null | undefined } | null {
-  if (term === "mid") return ctx.midInterval;
-  if (term === "long") return ctx.longInterval;
-  return ctx.shortInterval;
+): Interval | null {
+  const key = term ?? "short";
+  return (ctx.intervals ?? {})[key] ?? null;
 }
 
-// Built-in fallback labels for when the chosen interval is null.
-// Keyed by term so the placeholder reads with the same family
-// the live module would render.
-const PLACEHOLDER_TERM_FALLBACK: Record<Term, string> = {
+// Built-in fallback labels for the three reserved terms when the
+// chosen interval is null. Non-reserved terms (e.g. "monthly")
+// fall back to the term string itself, since the renderer has no
+// historical default for them. Matches the v0.9.x "5h / 7d / 30d"
+// convention so existing renders stay byte-identical.
+const PLACEHOLDER_TERM_FALLBACK: Record<string, string> = {
   short: "5h",
   mid: "7d",
-  // vX.X.X+ — long-term fallback is "30d" (label form, so the
-  // call sites can reformat it as "--:(30d)" / "prefix:n/a(30d)").
   long: "30d",
 };
+
+function termFallbackLabel(term: string): string {
+  return PLACEHOLDER_TERM_FALLBACK[term] ?? term;
+}
 
 // Standard per-term + per-interval label resolver shared by
 // m_countdown / m_quota placeholders. `wrap` receives the
@@ -4372,9 +4403,9 @@ function placeholderTermLabel(
   ctx: RenderContext,
   wrap: (label: string) => string,
 ): string {
-  const term = (params.term as Term | undefined) ?? "short";
+  const term = (params.term as string | undefined) ?? "short";
   const iv = intervalForTerm(term, ctx);
-  const label = iv?.label ?? PLACEHOLDER_TERM_FALLBACK[term];
+  const label = iv?.label ?? termFallbackLabel(term);
   return wrap(label);
 }
 
@@ -5648,16 +5679,17 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_windowQuota: (params, ctx) => {
     // v0.9.0+ — replaces v0.5.0–v0.8.x `m_window5h` + `m_window7d`.
     // The `term` inline arg picks which interval to read:
-    //   |term|short → c.shortInterval (default)
-    //   |term|mid   → c.midInterval
-    //   |term|long  → c.longInterval
+    //   |term|short  → c.intervals["short"] (default)
+    //   |term|mid    → c.intervals["mid"]
+    //   |term|long   → c.intervals["long"]
+    //   |term|<any>  → c.intervals[<any>] (v0.9.4: open-ended
+    //                    dict; "monthly" / "yearly" / etc. all
+    //                    resolve via the same lookup)
     // Missing interval → placeholder. No percent data on the
     // resolved Interval → also placeholder (intervalToWindow
     // returns null when usedPercent/remainingPercent are both null).
-    const term = (params.term as Term | undefined) ?? "short";
-    const iv = term === "short" ? ctx.shortInterval
-             : term === "mid"   ? ctx.midInterval
-                                : ctx.longInterval;
+    const term = (params.term as string | undefined) ?? "short";
+    const iv = intervalForTerm(term, ctx);
     if (!iv) return placeholderWithColor("m_windowQuota", params, ctx);
     const w = intervalToWindow(iv);
     if (!w) return placeholderWithColor("m_windowQuota", params, ctx);
@@ -5668,14 +5700,12 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   },
   m_countdown: (params, ctx) => {
     // v0.9.0+ — replaces v0.5.0–v0.8.x `m_countdown5h` +
-    // `m_countdown7d`. Same `term` arg as `m_windowQuota`. The label
-    // printed in `(n/a<arrow> <label>)` and `(4h47m🕔 <label>)` is
-    // read from the live `Interval.label` (no more hard-coded
-    // "5h" / "7d" strings).
-    const term = (params.term as Term | undefined) ?? "short";
-    const iv = term === "short" ? ctx.shortInterval
-             : term === "mid"   ? ctx.midInterval
-                                : ctx.longInterval;
+    // `m_countdown7d`. Same `term` arg as `m_windowQuota` (open
+    // dict in v0.9.4+). The label printed in `(n/a<arrow> <label>)`
+    // and `(4h47m🕔 <label>)` is read from the live `Interval.label`
+    // (no more hard-coded "5h" / "7d" strings).
+    const term = (params.term as string | undefined) ?? "short";
+    const iv = intervalForTerm(term, ctx);
     if (!iv) return placeholderWithColor("m_countdown", params, ctx);
     const w = intervalToWindow(iv);
     if (!w) return placeholderWithColor("m_countdown", params, ctx);
@@ -5693,14 +5723,13 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     // v0.9.0+ — NEW module. vX.X.X+ — label moved to the tail,
     // so the shape is now `<labelQuota><axis>/<limit>(<interval.label>)`
     // (placeholder: `<labelQuota>n/a(<interval.label>)`).
-    // `term` arg same shape as `m_windowQuota` / `m_countdown`.
+    // `term` arg same shape as `m_windowQuota` / `m_countdown`
+    // (v0.9.4+ open-ended dict lookup).
     // vX.X.X+ — `display` inline arg swaps the rendered axis:
     //   |display|used      → `<used>/<limit>`      (default)
     //   |display|remaining → `<remaining>/<limit>`
-    const term = (params.term as Term | undefined) ?? "short";
-    const iv = term === "short" ? ctx.shortInterval
-             : term === "mid"   ? ctx.midInterval
-                                : ctx.longInterval;
+    const term = (params.term as string | undefined) ?? "short";
+    const iv = intervalForTerm(term, ctx);
     if (!iv) return placeholderWithColor("m_quota", params, ctx);
     const mode = (params.display as DisplayMode | undefined) ?? ctx.mode;
     const parts = renderQuotaParts(iv, mode);
@@ -6863,6 +6892,30 @@ function expandInlineToken(
 }
 
 export function renderTemplate(template: readonly string[], ctx: RenderContext): string[] {
+  // v0.9.4 — synthesize a guaranteed non-null `intervals` dict. The
+  // type allows it to be absent (test helpers + legacy call sites
+  // supply the flat `shortInterval` / `midInterval` /
+  // `longInterval` fields instead); module code can then rely on
+  // `ctx.intervals[term]` without a nullable guard.
+  if (
+    !ctx.intervals &&
+    (ctx.shortInterval != null || ctx.midInterval != null || ctx.longInterval != null)
+  ) {
+    ctx = {
+      ...ctx,
+      intervals: {
+        short: ctx.shortInterval ?? null,
+        mid: ctx.midInterval ?? null,
+        long: ctx.longInterval ?? null,
+      },
+      shortInterval: undefined,
+      midInterval: undefined,
+      longInterval: undefined,
+    };
+  }
+  // Even when neither is supplied, ensure `ctx.intervals` is a
+  // non-null dict so per-module placeholders fire uniformly.
+  if (!ctx.intervals) ctx = { ...ctx, intervals: {} };
   // v1.0 — _renderDepth tracking and the deferred setPrevTick
   // commit are GONE. The -processor (processTick Stage 3)
   // sets PREV_TICK_KEY once per tick BEFORE render begins, so
@@ -7331,10 +7384,18 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
 // lineTemplate.
 export function renderProviderLine(
   provider: import("./types.ts").Provider,
-  ctx: Omit<RenderContext, "shortInterval" | "midInterval" | "longInterval" | "balance" | "tokens" | "contextWindow" | "providerType"> & {
-    // v0.9.0+ — three Interval fields replace the v0.5.0–v0.8.x
-    // `fiveHour` + `weekly` Windows. Caller (dispatch.ts) passes
-    // the parsed Quota directly; default to null when missing.
+  ctx: Omit<RenderContext, "intervals" | "balance" | "tokens" | "contextWindow" | "providerType"> & {
+    // v0.9.4 — open-ended `intervals` dict replaces the v0.9.0 trio
+    // of fixed slots (`shortInterval` / `midInterval` /
+    // `longInterval`). Caller (dispatch.ts) passes the parsed
+    // Quota's intervals dict directly. Missing → empty dict,
+    // which the renderer treats as "all slots null" and the
+    // per-module placeholder fires.
+    intervals?: Record<string, Interval | null>;
+    // v0.9.4 — back-compat: legacy callers (and existing tests) still
+    // pass `shortInterval` / `midInterval` / `longInterval` as flat
+    // fields. When present and `intervals` is absent, we fold them
+    // into the reserved dict keys (`short` / `mid` / `long`).
     shortInterval?: Interval | null;
     midInterval?: Interval | null;
     longInterval?: Interval | null;
@@ -7399,9 +7460,20 @@ export function renderProviderLine(
   const fullCtx: RenderContext = {
     mode: ctx.mode,
     nowMs: ctx.nowMs,
-    shortInterval: ctx.shortInterval ?? null,
-    midInterval: ctx.midInterval ?? null,
-    longInterval: ctx.longInterval ?? null,
+    // v0.9.4 — prefer explicit `intervals` dict (new dispatch path);
+    // fall back to folding flat `shortInterval` / `midInterval` /
+    // `longInterval` (legacy callers + existing tests). When neither
+    // is provided, treat as "all slots null" so per-module
+    // placeholders fire.
+    intervals:
+      ctx.intervals ??
+      (ctx.shortInterval != null || ctx.midInterval != null || ctx.longInterval != null
+        ? {
+            short: ctx.shortInterval ?? null,
+            mid: ctx.midInterval ?? null,
+            long: ctx.longInterval ?? null,
+          }
+        : {}),
     balance: ctx.balance ?? null,
     ageMs: ctx.ageMs,
     stale: ctx.stale,
