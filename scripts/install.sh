@@ -283,6 +283,8 @@ if [ "$DRY_RUN" = 1 ]; then
   else
     echo "  would ensure:  statusLine.refreshInterval = ${REFRESH_INTERVAL_MAX} (create if missing, clamp down if >${REFRESH_INTERVAL_MAX})"
     echo "  would record:  ${JOURNAL_PATH} (per-field action entries: create/mutate/clamp-down)"
+    echo "                 + settings.json:enabledPlugins + settings.json:extraKnownMarketplaces"
+    echo "                   (top-level block cleanup; both recorded as action=create / before=null)"
   fi
   SEED_TARGET="${CLAUDE_ROOT}/plugins/topgauge/config.json"
   if [ ! -f "$SEED_TARGET" ]; then
@@ -398,6 +400,31 @@ SL_AFTER_JSON="$(node -e '
   } catch (e) { process.stdout.write("null"); }
 ' "$TARGET")"
 
+# Snapshot enabledPlugins + extraKnownMarketplaces. Install itself
+# does NOT write these dicts — Claude Code's plugin loader adds the
+# `topgauge@topgauge` and `topgauge` keys during /plugin install —
+# but at the topgauge level we still own their cleanup. Recording
+# `before=null, after=<install-time snapshot>` lets uninstall treat
+# them as install-CREATED blocks: keys that match the snapshot get
+# removed on uninstall, keys the user touched get preserved. The
+# previous behaviour (always delete `topgauge@topgauge` / `topgauge`
+# regardless of user edits) silently dropped user customisations
+# such as `enabledPlugins["topgauge@topgauge"] = false`.
+EP_AFTER_JSON="$(node -e '
+  const fs = require("fs");
+  try {
+    const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(JSON.stringify(d.enabledPlugins === undefined ? null : d.enabledPlugins));
+  } catch (e) { process.stdout.write("null"); }
+' "$TARGET")"
+EKM_AFTER_JSON="$(node -e '
+  const fs = require("fs");
+  try {
+    const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(JSON.stringify(d.extraKnownMarketplaces === undefined ? null : d.extraKnownMarketplaces));
+  } catch (e) { process.stdout.write("null"); }
+' "$TARGET")"
+
 # Determine action: "create" if there was no statusLine before install;
 # "mutate" if there was one (foreign or otherwise). Either way the
 # entry drives uninstall to revert field-by-field against SL_BEFORE_JSON.
@@ -428,6 +455,36 @@ APPEND_OUT="$(node "$SCRIPT_DIR/lib/journal.mjs" append "$WIN_JOURNAL" "$ENTRY_J
   exit 1
 }
 echo "install.sh: journal statusLine entry: $APPEND_OUT"
+
+# Append enabledPlugins + extraKnownMarketplaces entries. action="create"
+# with before=null — install is recorded as the owner of these blocks
+# so uninstall can remove Claude-Loader-added keys without losing
+# user customisations (per-field revert via applyJournalEntry's
+# block-level branch in edit-settings.mjs). Skip when the top-level
+# dict is absent and no Claude-Loader signal exists (after=null),
+# which would be a meaningless no-op entry.
+append_top_level_entry() {
+  local id="$1"
+  local after_json="$2"
+  if [ "$after_json" = "null" ] || [ -z "$after_json" ]; then
+    echo "install.sh: skip journal $id (top-level dict absent)"
+    return 0
+  fi
+  local entry
+  entry="$(node -e '
+    const id = process.argv[1];
+    const after = JSON.parse(process.argv[2]);
+    process.stdout.write(JSON.stringify({ id, action: "create", before: null, after }));
+  ' "$id" "$after_json")"
+  local out
+  out="$(node "$SCRIPT_DIR/lib/journal.mjs" append "$WIN_JOURNAL" "$entry" 2>&1)" || {
+    echo "install.sh: failed to append $id journal entry: $out" >&2
+    exit 1
+  }
+  echo "install.sh: journal $id entry: $out"
+}
+append_top_level_entry "settings.json:enabledPlugins" "$EP_AFTER_JSON"
+append_top_level_entry "settings.json:extraKnownMarketplaces" "$EKM_AFTER_JSON"
 
 # ensure-refresh-interval — places statusLine.refreshInterval=10 if
 # missing or >10. Stdout is "create|10" / "clamp-down|30|10" / "no-op|5"

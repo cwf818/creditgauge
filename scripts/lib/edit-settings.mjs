@@ -175,11 +175,38 @@ function applyJournalEntry(data, entry) {
     return false;
   }
 
-  // Block-level entry (single key in path, value is an object, action
-  // is create/mutate and the post-install snapshot is an object —
-  // applies to `statusLine` as a whole).
+  // Block-level entry. Fires for any path whose `after` snapshot is a
+  // non-null, non-array object AND action is create/mutate. Covers:
+  //   - settings.json:statusLine              (replace-mode install)
+  //   - settings.json:enabledPlugins          (top-level plugin-enable dict)
+  //   - settings.json:extraKnownMarketplaces  (top-level marketplace-source dict)
+  //
+  // Per-field classification (universal rule across all three blocks):
+  //
+  //   for each key k seen in any of {current, before, after}:
+  //     inBefore && inAfter:
+  //       current[k] === after[k]  → user didn't touch, REVERT to before[k]
+  //       current[k] !== after[k]  → user touched, PRESERVE current[k]
+  //     inBefore && !inAfter:
+  //       install didn't write this key → user's territory → preserve as-is
+  //     !inBefore && inAfter:
+  //       install CREATED this key (was absent pre-install).
+  //       current[k] === after[k]  → user didn't touch, DELETE
+  //       current[k] !== after[k]  → user touched, PRESERVE current[k]
+  //       k ∉ current              → user deleted post-install, no-op
+  //     !inBefore && !inAfter:
+  //       k ∈ current → user added post-install, PRESERVE
+  //
+  // Final disposition:
+  //   create (before=null) + no user-touched fields + no user-added
+  //     fields + every after-key deleted → delete cur[leafKey] entirely
+  //     (the "fresh install → uninstall → block gone" path).
+  //   mutate + no user-touched + no user-added → restore whole block
+  //     to entry.before (every install-touched field reverted, no user
+  //     modifications). If entry.before is empty, delete the leaf.
+  //   otherwise (user touched/added anything) → write partial-revert
+  //     `next` back to cur[leafKey].
   if (
-    path.length === 1 &&
     typeof entry.after === "object" &&
     entry.after !== null &&
     !Array.isArray(entry.after) &&
@@ -187,38 +214,94 @@ function applyJournalEntry(data, entry) {
     (entry.action === "create" || entry.action === "mutate")
   ) {
     const current = cur[leafKey];
-    if (typeof current !== "object" || current === null) {
+    if (typeof current !== "object" || current === null || Array.isArray(current)) {
       return { action: "skipped:current-not-object", changed: false };
     }
-    // Compare EVERY field in after against current. Only fields that
-    // match `after` get reverted.
-    let anyChanged = false;
-    const next = { ...current };
-    for (const k of Object.keys(entry.after)) {
-      if (deepEq(next[k], entry.after[k])) {
-        // Untouched by user → revert.
-        if (entry.action === "create" && entry.before === null) {
-          delete next[k];
-          anyChanged = true;
-        } else if (entry.before && typeof entry.before === "object" && entry.before !== null && k in entry.before) {
-          next[k] = entry.before[k];
-          anyChanged = true;
+    const isCreate = entry.action === "create";
+    const beforeObj = (entry.before && typeof entry.before === "object" && !Array.isArray(entry.before))
+      ? entry.before
+      : null;
+
+    // Union of all keys touched by anyone (install, user-pre, user-post).
+    const keySet = new Set();
+    for (const k of Object.keys(current)) keySet.add(k);
+    for (const k of Object.keys(entry.after)) keySet.add(k);
+    if (beforeObj) for (const k of Object.keys(beforeObj)) keySet.add(k);
+
+    const next = {};
+    let anyReverted = false;
+    let anyUserTouched = false;
+    let anyUserAdded = false;
+
+    for (const k of keySet) {
+      const inBefore = beforeObj && Object.prototype.hasOwnProperty.call(beforeObj, k);
+      const inAfter = Object.prototype.hasOwnProperty.call(entry.after, k);
+      const inCurrent = Object.prototype.hasOwnProperty.call(current, k);
+
+      if (inBefore && inAfter) {
+        if (inCurrent && !deepEq(current[k], entry.after[k])) {
+          // User touched an install-modified field — preserve.
+          next[k] = current[k];
+          anyUserTouched = true;
+        } else if (inCurrent) {
+          // Untouched by user — restore to before.
+          next[k] = beforeObj[k];
+          anyReverted = true;
+        } else {
+          // User deleted post-install — preserve absence (don't re-add).
+          anyReverted = true;
         }
+      } else if (inBefore && !inAfter) {
+        // Install didn't touch this field — user's territory.
+        if (inCurrent) {
+          next[k] = current[k];
+          anyUserAdded = true;
+        }
+        // else: user deleted post-install; preserve absence.
+      } else if (!inBefore && inAfter) {
+        // Install CREATED this field.
+        if (inCurrent && !deepEq(current[k], entry.after[k])) {
+          // User touched — preserve.
+          next[k] = current[k];
+          anyUserTouched = true;
+        } else if (inCurrent) {
+          // Untouched — delete the install-added field.
+          anyReverted = true;
+        }
+        // else: user deleted post-install; already gone, no-op.
+      } else {
+        // !inBefore && !inAfter → k only in current → user added post-install.
+        next[k] = current[k];
+        anyUserAdded = true;
       }
-      // else: user touched this field — leave it.
     }
-    if (!anyChanged) return { action: "preserved:all-fields-user-touched", changed: false };
-    // Special case: when entry.action=create AND entry.before=null AND
-    // we ended up removing every field in `after`, drop the parent
-    // block entirely. This is the "fresh install → uninstall → no
-    // statusLine" path; leaving an empty object behind would be
-    // misleading.
-    const isFullCreate = entry.action === "create" && entry.before === null;
-    const allAfterGone = Object.keys(entry.after).every((k) => !(k in next));
-    if (isFullCreate && allAfterGone && Object.keys(next).length === 0) {
+
+    if (!anyReverted) {
+      return { action: "preserved:all-fields-user-touched", changed: false };
+    }
+
+    // mutate + no user modifications anywhere → restore whole block to before.
+    // Covers the "replace-mode install: user didn't touch anything → restore
+    // their foreign command and remove our marker" path that the previous
+    // version got wrong.
+    if (!isCreate && !anyUserTouched && !anyUserAdded) {
+      const restored = beforeObj ? { ...beforeObj } : {};
+      if (Object.keys(restored).length === 0) {
+        delete cur[leafKey];
+        return { action: "reverted:block-deleted", changed: true };
+      }
+      cur[leafKey] = restored;
+      return { action: "reverted:block-restored", changed: true };
+    }
+
+    // create + everything install-added is gone + no user modifications
+    // → delete the entire leaf. The "fresh install → uninstall → no
+    // statusLine" path; leaving an empty object behind would be misleading.
+    if (isCreate && !anyUserTouched && !anyUserAdded && Object.keys(next).length === 0) {
       delete cur[leafKey];
       return { action: "reverted:block-deleted", changed: true };
     }
+
     cur[leafKey] = next;
     return { action: "reverted:block-fields", changed: true };
   }
@@ -476,6 +559,40 @@ switch (op) {
     writeJson(target, data);
     if (applied.length > 0) {
       markApplied(journalPath, applied.map((s) => s.split("|")[0]));
+    }
+    // Empty-block cleanup: a block-level entry that fully reverted
+    // (every install-touched field deleted or restored to before) AND
+    // a sibling field-level entry that emptied the last user-added
+    // field can both leave the target as `{}`. Drop the empty block
+    // so callers don't see `{"statusLine": {}}` residues — Claude
+    // Code refuses to load settings.json with an empty statusLine.
+    // Only fires when the entry's `before` was null (create mode) —
+    // a mutate-mode entry with `before: {}` is legitimate user state
+    // and must be preserved.
+    let emptiedBlocks = 0;
+    for (const entry of targets) {
+      const leafKey = (entry.id || "").split(":").pop().split(".")[0];
+      if (
+        entry.action === "create" &&
+        entry.before === null &&
+        leafKey &&
+        data != null &&
+        typeof data === "object" &&
+        Object.prototype.hasOwnProperty.call(data, leafKey) &&
+        typeof data[leafKey] === "object" &&
+        data[leafKey] !== null &&
+        !Array.isArray(data[leafKey]) &&
+        Object.keys(data[leafKey]).length === 0
+      ) {
+        delete data[leafKey];
+        emptiedBlocks++;
+      }
+    }
+    if (emptiedBlocks > 0) writeJson(target, data);
+    if (emptiedBlocks > 0) {
+      for (let i = 0; i < emptiedBlocks; i++) {
+        process.stdout.write(`cleaned: empty-block-deleted\n`);
+      }
     }
     // Stdout: one line per entry decision, parseable from bash.
     for (const s of applied) process.stdout.write(`applied: ${s}\n`);

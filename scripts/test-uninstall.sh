@@ -693,6 +693,346 @@ assert_match_str "[legacy] settings.json.statusLine.command restored" \
   "ccstatusline" "$RI_VAL"
 rm -rf "$ROOT"
 
+# -- top-level block per-field revert (v0.9.x+) ---------------------------
+# When install records action=mutate for statusLine (replace-mode
+# install: foreign→managed), uninstall must restore the foreign command
+# and remove install-only fields (_topgauge_managed). The previous
+# implementation left the marker in place and the foreign command
+# untouched when refreshInterval also existed.
+
+echo "-- statusLine mutate: replace mode + user untouched → restore foreign command + drop marker --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+# Settings: managed wrapper + foreign-style marker (simulating the
+# post-install state, where refreshInterval was clamped 30→10).
+write_managed_settings "$SETTINGS" 30 "$WRAPPER_CMD"
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+TOPG_TEST_BEFORE='{"type":"command","command":"echo foreign","refreshInterval":30}' \
+node -e '
+  const fs = require("fs");
+  const before = JSON.parse(process.env.TOPG_TEST_BEFORE);
+  const settings = JSON.parse(fs.readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [{
+      id: "settings.json:statusLine", ts: "2026-07-15T07:00:00Z",
+      action: "mutate", before, after: settings.statusLine, applied: false
+    }]
+  };
+  fs.writeFileSync(process.env.TOPG_TEST_JOURNAL, JSON.stringify(j, null, 2) + "\n");
+'
+OUT=$(run_uninstall "$ROOT" 2>&1)
+assert_match_str "[mutate-block-restore] apply-journal-entry reported reverted" \
+  "reverted:block-restored" "$OUT"
+CMD=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.statusLine ? d.statusLine.command : "missing");
+')
+assert_eq "[mutate-block-restore] command restored to foreign" "echo foreign" "$CMD"
+MARKER=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.statusLine && d.statusLine._topgauge_managed === true ? "yes" : "no");
+')
+assert_eq "[mutate-block-restore] _topgauge_managed marker removed" "no" "$MARKER"
+RI=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(String(d.statusLine ? d.statusLine.refreshInterval : "missing"));
+')
+assert_eq "[mutate-block-restore] refreshInterval preserved (was in before)" "30" "$RI"
+rm -rf "$ROOT"
+
+echo "-- statusLine mutate: replace mode + user changed command → only marker removed --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+# Install snapshot (post-install, pre-user-touch): wrapper command +
+# marker + refreshInterval. User then customises the command. The
+# journal's `after` snapshot reflects the install-time post-install
+# state (wrapper); the current settings has user's modified command.
+write_managed_settings "$SETTINGS" 10 "$WRAPPER_CMD"
+TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const fs = require("fs");
+  const p = process.env.TOPG_TEST_SETTINGS;
+  const d = JSON.parse(fs.readFileSync(p, "utf8"));
+  d.statusLine.command = "echo mycustom";
+  fs.writeFileSync(p, JSON.stringify(d, null, 2) + "\n");
+'
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+TOPG_TEST_BEFORE='{"type":"command","command":"echo foreign","refreshInterval":30}' \
+TOPG_TEST_AFTER="$WRAPPER_CMD" \
+node -e '
+  const fs = require("fs");
+  const before = JSON.parse(process.env.TOPG_TEST_BEFORE);
+  // `after` reflects the install-time post-install state: wrapper
+  // command, marker, refreshInterval=10.
+  const after = {
+    type: "command",
+    command: process.env.TOPG_TEST_AFTER,
+    _topgauge_managed: true,
+    refreshInterval: 10
+  };
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [{
+      id: "settings.json:statusLine", ts: "2026-07-15T07:00:00Z",
+      action: "mutate", before, after, applied: false
+    }]
+  };
+  fs.writeFileSync(process.env.TOPG_TEST_JOURNAL, JSON.stringify(j, null, 2) + "\n");
+'
+run_uninstall "$ROOT" >/dev/null 2>&1
+CMD=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.statusLine ? d.statusLine.command : "missing");
+')
+assert_eq "[mutate-partial] user-custom command preserved" "echo mycustom" "$CMD"
+MARKER=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.statusLine && d.statusLine._topgauge_managed === true ? "yes" : "no");
+')
+assert_eq "[mutate-partial] _topgauge_managed marker removed" "no" "$MARKER"
+rm -rf "$ROOT"
+
+echo "-- enabledPlugins create: Claude-Loader-added key → block deleted entirely --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+# Pre-uninstall state: enabledPlugins.topgauge@topgauge=true
+# (added by Claude Code's plugin loader during /plugin install).
+# Install-time snapshot: same. action=create, before=null → uninstall
+# treats the block as install-CREATED.
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+node -e '
+  const fs = require("fs");
+  const settings = process.env.TOPG_TEST_SETTINGS;
+  const journal = process.env.TOPG_TEST_JOURNAL;
+  const d = { enabledPlugins: { "topgauge@topgauge": true } };
+  fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [{
+      id: "settings.json:enabledPlugins", ts: "2026-07-15T07:00:00Z",
+      action: "create", before: null, after: d.enabledPlugins, applied: false
+    }]
+  };
+  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+'
+OUT=$(run_uninstall "$ROOT" 2>&1)
+assert_match_str "[ep-create] apply-journal-entry reported reverted" \
+  "reverted:block-deleted" "$OUT"
+HAS_EP=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write("enabledPlugins" in d ? "yes" : "no");
+')
+assert_eq "[ep-create] enabledPlugins block deleted" "no" "$HAS_EP"
+rm -rf "$ROOT"
+
+echo "-- enabledPlugins create: user touched the key → preserve --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+# User flipped the value post-install (e.g. disabled the plugin manually).
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+node -e '
+  const fs = require("fs");
+  const settings = process.env.TOPG_TEST_SETTINGS;
+  const journal = process.env.TOPG_TEST_JOURNAL;
+  const d = { enabledPlugins: { "topgauge@topgauge": false } };
+  fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [{
+      id: "settings.json:enabledPlugins", ts: "2026-07-15T07:00:00Z",
+      action: "create", before: null, after: { "topgauge@topgauge": true },
+      applied: false
+    }]
+  };
+  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+'
+OUT=$(run_uninstall "$ROOT" 2>&1)
+assert_match_str "[ep-preserve] apply-journal-entry reported preserved" \
+  "preserved:all-fields-user-touched" "$OUT"
+EP=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  const v = d.enabledPlugins ? d.enabledPlugins["topgauge@topgauge"] : "missing";
+  process.stdout.write(String(v));
+')
+assert_eq "[ep-preserve] user-touched false preserved" "false" "$EP"
+rm -rf "$ROOT"
+
+echo "-- extraKnownMarketplaces create: Claude-Loader-added key → block deleted entirely --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+node -e '
+  const fs = require("fs");
+  const settings = process.env.TOPG_TEST_SETTINGS;
+  const journal = process.env.TOPG_TEST_JOURNAL;
+  const d = { extraKnownMarketplaces: { "topgauge": { "source": "github", "repo": "cwf818/topgauge" } } };
+  fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [{
+      id: "settings.json:extraKnownMarketplaces", ts: "2026-07-15T07:00:00Z",
+      action: "create", before: null, after: d.extraKnownMarketplaces, applied: false
+    }]
+  };
+  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+'
+OUT=$(run_uninstall "$ROOT" 2>&1)
+assert_match_str "[ekm-create] apply-journal-entry reported reverted" \
+  "reverted:block-deleted" "$OUT"
+HAS_EKM=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write("extraKnownMarketplaces" in d ? "yes" : "no");
+')
+assert_eq "[ekm-create] extraKnownMarketplaces block deleted" "no" "$HAS_EKM"
+rm -rf "$ROOT"
+
+echo "-- extraKnownMarketplaces create: user added a sub-field → block preserved --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+node -e '
+  const fs = require("fs");
+  const settings = process.env.TOPG_TEST_SETTINGS;
+  const journal = process.env.TOPG_TEST_JOURNAL;
+  // User added an installLocation field post-install.
+  const d = { extraKnownMarketplaces: {
+    "topgauge": { "source": "github", "repo": "cwf818/topgauge", "installLocation": "/custom" }
+  } };
+  fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [{
+      id: "settings.json:extraKnownMarketplaces", ts: "2026-07-15T07:00:00Z",
+      action: "create", before: null,
+      after: { "topgauge": { "source": "github", "repo": "cwf818/topgauge" } },
+      applied: false
+    }]
+  };
+  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+'
+run_uninstall "$ROOT" >/dev/null 2>&1
+LOC=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(
+    d.extraKnownMarketplaces && d.extraKnownMarketplaces.topgauge
+      ? d.extraKnownMarketplaces.topgauge.installLocation || "missing"
+      : "block-gone"
+  );
+')
+assert_eq "[ekm-preserve] user-added installLocation preserved" "/custom" "$LOC"
+rm -rf "$ROOT"
+
+# ============================================================================
+# JSON repair fallback (v0.10+)
+# ============================================================================
+#
+# Claude Code's plugin loader has occasionally written Windows-path
+# strings with bare backslashes (e.g. `"C:\Users\…"`), which Node's
+# strict JSON.parse rejects. uninstall.sh's strip functions run an
+# in-place repair when parse fails: inside string values, `\X` is
+# rewritten to `\\X` when X isn't a valid JSON escape char. The
+# pre-repair text is preserved as a sibling `.pre-repair-<ts>.bak`
+# so the user can recover if the repair misfires.
+
+echo "-- installed_plugins.json with bare backslashes → auto-repair + strip --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+INSTALLED="${ROOT}/plugins/installed_plugins.json"
+mkdir -p "${ROOT}/plugins"
+# No managed statusLine → uninstall hits the legacy restore-from-bak
+# path (no journal entries, no SL_PLAN). Install a foreign statusLine
+# so the SL restore-from-bak fallback kicks in and lets the rest of
+# the script reach the JSON-strip phase.
+cat > "${SETTINGS}" <<EOF
+{
+  "statusLine": {
+    "type": "command",
+    "command": "echo my-pre-topgauge",
+    "_topgauge_managed": true
+  }
+}
+EOF
+cp "${SETTINGS}" "${SETTINGS}.bak.20260701T000000"
+# Settings: no enabledPlugins block; install-journal: 1 entry for
+# statusLine only.
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [{
+      id: "settings.json:statusLine", ts: "2026-07-15T07:00:00Z",
+      action: "create", before: null,
+      after: d.statusLine, applied: false
+    }]
+  };
+  fs.writeFileSync(process.env.TOPG_TEST_JOURNAL, JSON.stringify(j, null, 2) + "\n");
+'
+# Malformed installed_plugins.json — bare backslashes in the topgauge
+# row's installPath (the exact shape Claude Code's loader has produced
+# in some upgrade chains).
+cat > "${INSTALLED}" <<EOF
+{
+  "version": 2,
+  "plugins": {
+    "topgauge@topgauge": [
+      {
+        "scope": "user",
+        "installPath": "C:\Users\test\.claude\plugins\cache\topgauge\topgauge\0.9.7",
+        "version": "0.9.7"
+      }
+    ]
+  }
+}
+EOF
+# Bare \X in JSON strings → strict JSON.parse refuses. Sanity-check.
+PARSE_FAIL=$(node -e '
+  try { JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write("no"); }
+  catch (e) { process.stdout.write("yes"); }
+' "$INSTALLED")
+assert_eq "[json-repair] fixture is intentionally malformed" "yes" "$PARSE_FAIL"
+
+OUT=$(run_uninstall "$ROOT" 2>&1)
+# A repair line should appear in the output.
+assert_match_str "[json-repair] stderr notes repair" \
+  "was malformed" "$OUT"
+# After repair + strip: row gone.
+ROW_COUNT=$(node -e '
+  const txt = require("fs").readFileSync(process.argv[1], "utf8");
+  process.stdout.write(String((txt.match(/"topgauge@topgauge"/g) || []).length));
+' "$INSTALLED")
+assert_eq "[json-repair] topgauge row stripped after auto-repair" "0" "$ROW_COUNT"
+# Repaired file is valid JSON.
+PARSE_OK=$(node -e '
+  try { JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write("yes"); }
+  catch (e) { process.stdout.write("no"); }
+' "$INSTALLED")
+assert_eq "[json-repair] repaired file parses cleanly" "yes" "$PARSE_OK"
+# Pre-repair backup saved.
+HAS_PRE_BAK=$(node -e '
+  const fs = require("fs");
+  const dir = process.argv[1];
+  const files = fs.readdirSync(dir);
+  process.stdout.write(files.some(f => f.startsWith("installed_plugins.json.pre-repair-")) ? "yes" : "no");
+' "$(dirname "$INSTALLED")")
+assert_eq "[json-repair] pre-repair sibling backup created" "yes" "$HAS_PRE_BAK"
+rm -rf "$ROOT"
+
 # ============================================================================
 # Summary
 # ============================================================================

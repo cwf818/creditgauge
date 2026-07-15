@@ -151,24 +151,30 @@ DRY_NOTHING=1  # becomes 0 if at least one planned action is meaningful
 
 # Action 1: restore statusLine (only if our marker is set)
 SL_PLAN=""
+# Module-scope STATE_DIR + JOURNAL_PATH — referenced by both the
+# SL_PLAN planning block (when MANAGED=1) and the EP/EKM planning
+# block (Action 2 below, which runs regardless of MANAGED). State
+# lives at the STABLE location (sibling of config.json) so a
+# future uninstall can find the journal even after the cache has
+# been cleaned.
+STATE_DIR="${PLUGINS_DIR}/topgauge/state"
+JOURNAL_PATH="${STATE_DIR}/install-journal.json"
+# Read the marker in pure bash via node (mirrors the install.sh
+# edit-settings.mjs status op, but inlined so we don't depend on
+# the cache being present). The marker is not enough: another plugin
+# or a human may have overwritten statusLine.command after install.
+# Trust the command shape (cache path + wrapper.sh suffix), not just
+# the marker. See scripts/lib/edit-settings.mjs#isOurWrapperCommand
+# for the matching logic — duplicated here only because we cannot
+# easily `require` an mjs from inside a node -e heredoc.
+MANAGED="0"
+WIN_TARGET=""
 if [ -f "$TARGET" ]; then
-  # Read the marker in pure bash via node (mirrors the install.sh
-  # edit-settings.mjs status op, but inlined so we don't depend on
-  # the cache being present).
-  WIN_TARGET=""
   if command -v cygpath >/dev/null 2>&1; then
     WIN_TARGET=$(cygpath -w "$TARGET" 2>/dev/null || echo "$TARGET")
   else
     WIN_TARGET="$TARGET"
   fi
-  # The marker is not enough: another plugin or a human may have
-  # overwritten statusLine.command after install. Trust the command
-  # shape (cache path + wrapper.sh suffix), not just the marker.
-  # See scripts/lib/edit-settings.mjs#isOurWrapperCommand for the
-  # matching logic — duplicated here only because we cannot easily
-  # `require` an mjs from inside a node -e heredoc.
-  STATE_DIR="${PLUGINS_DIR}/topgauge/state"
-  CACHE_DIR="${PLUGINS_DIR}/cache/topgauge"
   MANAGED=$(node -e '
     const fs = require("fs");
     const p = process.argv[1];
@@ -185,135 +191,140 @@ if [ -f "$TARGET" ]; then
       process.stdout.write(m ? "1" : "0");
     } catch (e) { process.stdout.write("0"); }
   ' "$WIN_TARGET" 2>/dev/null || echo "0")
-  if [ "$MANAGED" = "1" ]; then
-    # Priority for restoring settings.json.statusLine:
-    #   1. install-journal — if it exists with unapplied entries, it
-    #      is the AUTHORITATIVE record of every field-level change
-    #      install.sh made. Drives per-field revert (preserves any
-    #      field the user touched after install).
-    #   2. legacy restore-from-file — pre-journal installs may have
-    #      only upstream-cmd.txt to revert from. We keep this as a
-    #      fallback for users who never re-installed after the
-    #      journal was introduced.
-    #   3. legacy restore-from-bak — most recent pre-managed
-    #      settings.json.bak.<ts>.
-    JOURNAL_PATH="${STATE_DIR}/install-journal.json"
-    JOURNAL_HAS_ENTRIES=""
-    if [ -f "$JOURNAL_PATH" ]; then
-      JOURNAL_HAS_ENTRIES="$(node -e '
-        try {
-          const fs = require("fs");
-          const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-          const n = (j.entries || []).filter(e => e && e.applied !== true && e.action !== "rotate").length;
-          process.stdout.write(n > 0 ? "1" : "0");
-        } catch (e) { process.stdout.write("0"); }
-      ' "$JOURNAL_PATH" 2>/dev/null || echo "0")"
-    fi
+fi
 
-    if [ "$JOURNAL_HAS_ENTRIES" = "1" ]; then
-      SL_PLAN="restore-from-journal:${JOURNAL_PATH}"
-    else
-    # Find the upstream-cmd.txt to restore from. Priority:
-    #   1. The stable state dir (v0.2.19+): sibling of config.json,
-    #      survives cache wipes.
-    #   2. Any installed cache version's state/upstream-cmd.txt
-    #      (legacy v0.2.18 and older). Pick the NEWEST version's file
-    #      that exists — same ordering the statusLine wrapper uses.
-    #   3. Most recent pre-managed settings.json.bak.<ts>.
-    UPSTREAM_TXT=""
-    if [ -f "${STATE_DIR}/upstream-cmd.txt" ]; then
-      UPSTREAM_TXT="${STATE_DIR}/upstream-cmd.txt"
-    elif [ -d "$CACHE_DIR" ]; then
-      SELF_DIR=$(ls -d "${CACHE_DIR}/"*/ 2>/dev/null \
-        | awk -F/ '{ print $(NF-1) "\t" $(0) }' \
-        | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n \
-        | tail -1 | cut -f2-)
-      if [ -n "$SELF_DIR" ] && [ -f "${SELF_DIR%/}/state/upstream-cmd.txt" ]; then
-        UPSTREAM_TXT="${SELF_DIR%/}/state/upstream-cmd.txt"
-      fi
+# JOURNAL_HAS_ENTRIES — module-scope. Used by both the SL_PLAN branch
+# (when MANAGED=1) and the EP/EKM branch (always). The journal is the
+# authoritative record of every field-level change install.sh made;
+# apply-journal-entry drives per-field revert for statusLine AND for
+# the top-level enabledPlugins / extraKnownMarketplaces blocks.
+JOURNAL_HAS_ENTRIES="0"
+if [ -f "$JOURNAL_PATH" ]; then
+  JOURNAL_HAS_ENTRIES="$(node -e '
+    try {
+      const fs = require("fs");
+      const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const n = (j.entries || []).filter(e => e && e.applied !== true && e.action !== "rotate").length;
+      process.stdout.write(n > 0 ? "1" : "0");
+    } catch (e) { process.stdout.write("0"); }
+  ' "$JOURNAL_PATH" 2>/dev/null || echo "0")"
+fi
+
+# APPLY_JOURNAL — set whenever the journal has unapplied entries.
+# This is the gate for whether `apply-journal-entry` runs. It is
+# independent of MANAGED: even when statusLine is foreign/absent
+# (MANAGED=0), the journal can still drive enabledPlugins /
+# extraKnownMarketplaces cleanup. Without this OR, tests with only
+# an enabledPlugins key (no statusLine) would silently skip the
+# apply pass — leaving the block on disk and the user with a stale
+# `{}` residue after uninstall.
+APPLY_JOURNAL="0"
+[ "$JOURNAL_HAS_ENTRIES" = "1" ] && APPLY_JOURNAL="1"
+
+if [ "$MANAGED" = "1" ]; then
+  # Priority for restoring settings.json.statusLine:
+  #   1. install-journal — drives per-field revert (preserves any
+  #      field the user touched after install).
+  #   2. legacy restore-from-file — pre-journal installs may have
+  #      only upstream-cmd.txt to revert from.
+  #   3. legacy restore-from-bak — most recent pre-managed
+  #      settings.json.bak.<ts>.
+  if [ "$APPLY_JOURNAL" = "1" ]; then
+    SL_PLAN="restore-from-journal:${JOURNAL_PATH}"
+  else
+  # Find the upstream-cmd.txt to restore from. Priority:
+  #   1. The stable state dir (v0.2.19+): sibling of config.json,
+  #      survives cache wipes.
+  #   2. Any installed cache version's state/upstream-cmd.txt
+  #      (legacy v0.2.18 and older). Pick the NEWEST version's file
+  #      that exists — same ordering the statusLine wrapper uses.
+  #   3. Most recent pre-managed settings.json.bak.<ts>.
+  UPSTREAM_TXT=""
+  if [ -f "${STATE_DIR}/upstream-cmd.txt" ]; then
+    UPSTREAM_TXT="${STATE_DIR}/upstream-cmd.txt"
+  elif [ -d "$CACHE_DIR" ]; then
+    SELF_DIR=$(ls -d "${CACHE_DIR}/"*/ 2>/dev/null \
+      | awk -F/ '{ print $(NF-1) "\t" $(0) }' \
+      | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n \
+      | tail -1 | cut -f2-)
+    if [ -n "$SELF_DIR" ] && [ -f "${SELF_DIR%/}/state/upstream-cmd.txt" ]; then
+      UPSTREAM_TXT="${SELF_DIR%/}/state/upstream-cmd.txt"
     fi
-    if [ -n "$UPSTREAM_TXT" ]; then
-      SL_PLAN="restore-from-file:${UPSTREAM_TXT}"
-    else
-      # Fall back: most recent .bak.<ts> whose statusLine is NOT managed
-      BAK=""
-      for f in $(ls -t "${TARGET}.bak."* 2>/dev/null); do
-        if [ -z "$f" ]; then continue; fi
-        BWIN=""
-        if command -v cygpath >/dev/null 2>&1; then
-          BWIN=$(cygpath -w "$f" 2>/dev/null || echo "$f")
-        else
-          BWIN="$f"
-        fi
-        M=$(node -e '
-          const fs = require("fs");
-          try {
-            const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            const sl = d && d.statusLine;
-            process.stdout.write(sl && sl._topgauge_managed === true ? "1" : "0");
-          } catch (e) { process.stdout.write("0"); }
-        ' "$BWIN" 2>/dev/null || echo "0")
-        if [ "$M" = "0" ]; then
-          BAK="$f"
-          break
-        fi
-      done
-      if [ -n "$BAK" ]; then
-        SL_PLAN="restore-from-bak:${BAK}"
-      else
-        SL_PLAN="warning:no-restore-source"
-      fi
-    fi
-    fi  # close the legacy fallback else
   fi
+  if [ -n "$UPSTREAM_TXT" ]; then
+    SL_PLAN="restore-from-file:${UPSTREAM_TXT}"
+  else
+    # Fall back: most recent .bak.<ts> whose statusLine is NOT managed
+    BAK=""
+    for f in $(ls -t "${TARGET}.bak."* 2>/dev/null); do
+      if [ -z "$f" ]; then continue; fi
+      BWIN=""
+      if command -v cygpath >/dev/null 2>&1; then
+        BWIN=$(cygpath -w "$f" 2>/dev/null || echo "$f")
+      else
+        BWIN="$f"
+      fi
+      M=$(node -e '
+        const fs = require("fs");
+        try {
+          const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+          const sl = d && d.statusLine;
+          process.stdout.write(sl && sl._topgauge_managed === true ? "1" : "0");
+        } catch (e) { process.stdout.write("0"); }
+      ' "$BWIN" 2>/dev/null || echo "0")
+      if [ "$M" = "0" ]; then
+        BAK="$f"
+        break
+      fi
+    done
+    if [ -n "$BAK" ]; then
+      SL_PLAN="restore-from-bak:${BAK}"
+    else
+      SL_PLAN="warning:no-restore-source"
+    fi
+  fi
+  fi  # close the legacy fallback else
 fi
 if [ -n "$SL_PLAN" ]; then
   ACTIONS+=("statusLine: ${SL_PLAN}")
   DRY_NOTHING=0
 fi
 
-# Action 2: strip enabledPlugins row (if present).
-EP_PLAN=""
-if [ -f "$TARGET" ]; then
-  HAS_ROW=$(node -e '
-    const fs = require("fs");
+# Action 2: enabledPlugins + extraKnownMarketplaces are reverted via
+# the install-journal. install.sh writes two top-level block entries
+# (`settings.json:enabledPlugins`, `settings.json:extraKnownMarketplaces`)
+# with `action=create, before=null` so apply-journal-entry removes the
+# Claude-Loader-added keys while preserving any user customisations.
+# The apply pass below (`apply-journal-entry`) processes them in the
+# same loop as the statusLine entry — no separate apply step needed.
+# APPLY_JOURNAL was computed module-scoped above so it covers this
+# block even when MANAGED=0 (statusLine absent — only EP/EKM left to
+# revert).
+if [ "$APPLY_JOURNAL" = "1" ]; then
+  HAS_EP_ENTRY=$(node -e '
     try {
-      const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-      const k = process.argv[2];
-      process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, k) ? "1" : "0");
+      const fs = require("fs");
+      const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const hit = (j.entries || []).some(e => e && e.id === "settings.json:enabledPlugins" && e.applied !== true);
+      process.stdout.write(hit ? "1" : "0");
     } catch (e) { process.stdout.write("0"); }
-  ' "$WIN_TARGET" "topgauge@topgauge" 2>/dev/null || echo "0")
-  if [ "$HAS_ROW" = "1" ]; then
-    EP_PLAN="topgauge@topgauge"
+  ' "${JOURNAL_PATH}" 2>/dev/null || echo "0")
+  HAS_EKM_ENTRY=$(node -e '
+    try {
+      const fs = require("fs");
+      const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      const hit = (j.entries || []).some(e => e && e.id === "settings.json:extraKnownMarketplaces" && e.applied !== true);
+      process.stdout.write(hit ? "1" : "0");
+    } catch (e) { process.stdout.write("0"); }
+  ' "${JOURNAL_PATH}" 2>/dev/null || echo "0")
+  if [ "$HAS_EP_ENTRY" = "1" ]; then
+    ACTIONS+=("enabledPlugins: applied via install-journal (per-field revert)")
     DRY_NOTHING=0
   fi
-fi
-if [ -n "$EP_PLAN" ]; then
-  ACTIONS+=("enabledPlugins: strip ${EP_PLAN}")
-fi
-
-# Action 2b: strip extraKnownMarketplaces.topgauge.
-# Claude Code records the marketplace source under both known_marketplaces.json
-# AND settings.json.extraKnownMarketplaces (the latter is what shows up in
-# `claude plugin marketplace list`). Leaving it would re-add the marketplace
-# on next `/plugin marketplace add` with no visible diff.
-EKM_PLAN=""
-if [ -f "$TARGET" ]; then
-  HAS_ROW=$(node -e '
-    const fs = require("fs");
-    try {
-      const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-      const k = process.argv[2];
-      process.stdout.write(d.extraKnownMarketplaces && Object.prototype.hasOwnProperty.call(d.extraKnownMarketplaces, k) ? "1" : "0");
-    } catch (e) { process.stdout.write("0"); }
-  ' "$WIN_TARGET" "topgauge" 2>/dev/null || echo "0")
-  if [ "$HAS_ROW" = "1" ]; then
-    EKM_PLAN="topgauge"
+  if [ "$HAS_EKM_ENTRY" = "1" ]; then
+    ACTIONS+=("extraKnownMarketplaces: applied via install-journal (per-field revert)")
     DRY_NOTHING=0
   fi
-fi
-if [ -n "$EKM_PLAN" ]; then
-  ACTIONS+=("extraKnownMarketplaces: strip ${EKM_PLAN}")
 fi
 
 # Action 3: wipe dirs.
@@ -352,7 +363,6 @@ done
 # state/<projectHash>/state.json is the tickStatus cache — same logic,
 # always wiped. The .jsonl files ARE the token-sample history;
 # preserved by default, wiped under --completely.
-STATE_DIR="${PLUGINS_DIR}/topgauge/state"
 if [ -d "$STATE_DIR" ]; then
   ALWAYS_STATE_FILES=(
     "${STATE_DIR}/cache.json"
@@ -598,64 +608,27 @@ if [ -n "$SL_PLAN" ]; then
   esac
 fi
 
-# --- Apply: enabledPlugins strip --------------------------------------------
-if [ -n "$EP_PLAN" ]; then
-  IFS=',' read -r -a EP_KEYS <<< "$EP_PLAN"
-  for KEY in "${EP_KEYS[@]}"; do
-    KEY_TRIMMED=$(echo "$KEY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    [ -z "$KEY_TRIMMED" ] && continue
-    node -e '
-      const fs = require("fs");
-      const target = process.argv[1];
-      const key = process.argv[2];
-      const data = JSON.parse(fs.readFileSync(target, "utf8"));
-      if (data.enabledPlugins && Object.prototype.hasOwnProperty.call(data.enabledPlugins, key)) {
-        delete data.enabledPlugins[key];
-      }
-      let eol = "\n";
-      const size = fs.statSync(target).size;
-      if (size > 0) {
-        const fd = fs.openSync(target, "r");
-        const head = Buffer.alloc(Math.min(64, size));
-        fs.readSync(fd, head, 0, head.length, 0);
-        fs.closeSync(fd);
-        if (head.includes(0x0d)) eol = "\r\n";
-      }
-      const body = JSON.stringify(data, null, 2) + "\n";
-      fs.writeFileSync(target, body.replace(/\n/g, eol));
-    ' "$WIN_TARGET" "$KEY_TRIMMED"
-    echo "uninstall.sh: removed ${KEY_TRIMMED} from enabledPlugins"
-  done
-fi
-
-# --- Apply: extraKnownMarketplaces strip ------------------------------------
-if [ -n "$EKM_PLAN" ]; then
-  IFS=',' read -r -a EKM_KEYS <<< "$EKM_PLAN"
-  for KEY in "${EKM_KEYS[@]}"; do
-    KEY_TRIMMED=$(echo "$KEY" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    [ -z "$KEY_TRIMMED" ] && continue
-    node -e '
-      const fs = require("fs");
-      const target = process.argv[1];
-      const key = process.argv[2];
-      const data = JSON.parse(fs.readFileSync(target, "utf8"));
-      if (data.extraKnownMarketplaces && Object.prototype.hasOwnProperty.call(data.extraKnownMarketplaces, key)) {
-        delete data.extraKnownMarketplaces[key];
-      }
-      let eol = "\n";
-      const size = fs.statSync(target).size;
-      if (size > 0) {
-        const fd = fs.openSync(target, "r");
-        const head = Buffer.alloc(Math.min(64, size));
-        fs.readSync(fd, head, 0, head.length, 0);
-        fs.closeSync(fd);
-        if (head.includes(0x0d)) eol = "\r\n";
-      }
-      const body = JSON.stringify(data, null, 2) + "\n";
-      fs.writeFileSync(target, body.replace(/\n/g, eol));
-    ' "$WIN_TARGET" "$KEY_TRIMMED"
-    echo "uninstall.sh: removed ${KEY_TRIMMED} from extraKnownMarketplaces"
-  done
+# enabledPlugins + extraKnownMarketplaces cleanup runs through the
+# same apply-journal-entry path. When MANAGED=0 the SL_PLAN branch
+# above is skipped, but the EP/EKM entries still need to be applied
+# — fire the journal apply here unconditionally when APPLY_JOURNAL=1
+# AND SL_PLAN didn't already cover it.
+if [ "$APPLY_JOURNAL" = "1" ] && [ -z "$SL_PLAN" ]; then
+  WIN_JOURNAL=""
+  if command -v cygpath >/dev/null 2>&1; then
+    WIN_JOURNAL=$(cygpath -w "$JOURNAL_PATH" 2>/dev/null || echo "$JOURNAL_PATH")
+  else
+    WIN_JOURNAL="$JOURNAL_PATH"
+  fi
+  APPLY_OUT="$(node "$HELPER" "$WIN_TARGET" apply-journal-entry "$WIN_JOURNAL" 2>&1)" || {
+    echo "uninstall.sh: apply-journal-entry failed for top-level blocks" >&2
+    echo "$APPLY_OUT" >&2
+    APPLY_OUT=""
+  }
+  if [ -n "$APPLY_OUT" ]; then
+    echo "uninstall.sh: applied install-journal entries (top-level blocks)"
+    echo "$APPLY_OUT" | sed 's/^/  /'
+  fi
 fi
 
 # --- Apply: wipe dirs --------------------------------------------------------
@@ -770,22 +743,65 @@ if [ "$KEEP_STATE" != 1 ]; then
 fi
 
 # --- Apply: strip JSON rows --------------------------------------------------
-strip_plugin_row_from_json() {
-  local file="$1"
-  local key="$2"
-  local win_path=""
-  if command -v cygpath >/dev/null 2>&1; then
-    win_path=$(cygpath -w "$file" 2>/dev/null || echo "$file")
-  else
-    win_path="$file"
-  fi
-  node -e '
+#
+# Both strip_plugin_row_from_json and strip_plugin_key_from_json
+# share an in-place JSON repair path. Claude Code's plugin loader
+# has occasionally written strings containing bare backslashes
+# (e.g. `installPath: "C:\Users\…"` — Windows path with single
+# backslashes), which Node's strict JSON.parse rejects. The repair
+# pass walks the file content statefully: inside any string value,
+# escape `\X` to `\\X` when X is not one of the valid JSON escape
+# characters (`"` `\` `/` `b` `f` `n` `r` `t` `u`). Valid escapes
+# (e.g. `\\` `\"` `\n`) are passed through unchanged so the file
+# round-trips cleanly through JSON.stringify afterwards. The
+# pre-repair text is saved to a sibling `.pre-repair-<ts>.bak` so
+# the user can recover if the repair misfires.
+json_repair_bodies() {
+  cat <<'JS_BODY'
     const fs = require("fs");
     const file = process.argv[1];
-    const key = process.argv[2];
-    const data = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (data.plugins && Object.prototype.hasOwnProperty.call(data.plugins, key)) {
-      delete data.plugins[key];
+    const txt = fs.readFileSync(file, "utf8");
+    const VALID_ESC = new Set(["\"", "\\", "/", "b", "f", "n", "r", "t", "u"]);
+    function repairJson(s) {
+      let out = "";
+      let inStr = false;
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        if (inStr) {
+          if (ch === "\\") {
+            const next = s[i + 1];
+            if (next && VALID_ESC.has(next)) {
+              out += "\\" + next; i++;
+            } else if (next === undefined) {
+              out += "\\\\";
+            } else {
+              out += "\\\\" + next; i++;
+            }
+          } else if (ch === "\"") {
+            out += ch; inStr = false;
+          } else {
+            out += ch;
+          }
+        } else {
+          if (ch === "\"") { out += ch; inStr = true; }
+          else out += ch;
+        }
+      }
+      return out;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(txt);
+    } catch (e) {
+      const repaired = repairJson(txt);
+      parsed = JSON.parse(repaired);  // throws if repair can't fix it
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      fs.writeFileSync(file + ".pre-repair-" + ts + ".bak", txt);
+      fs.writeFileSync(file, repaired);
+      process.stderr.write(
+        "uninstall.sh: " + file + " was malformed (unescaped backslashes); " +
+        "repaired in place (original at " + file + ".pre-repair-" + ts + ".bak)\n"
+      );
     }
     let eol = "\n";
     const size = fs.statSync(file).size;
@@ -796,9 +812,44 @@ strip_plugin_row_from_json() {
       fs.closeSync(fd);
       if (head.includes(0x0d)) eol = "\r\n";
     }
-    const body = JSON.stringify(data, null, 2) + "\n";
-    fs.writeFileSync(file, body.replace(/\n/g, eol));
-  ' "$win_path" "$key"
+    function writeBack(obj) {
+      const body = JSON.stringify(obj, null, 2) + "\n";
+      fs.writeFileSync(file, body.replace(/\n/g, eol));
+    }
+    function deleteByPath(obj, path) {
+      if (!path.length) return false;
+      const head = path[0];
+      const tail = path.slice(1);
+      if (tail.length === 0) {
+        if (obj && Object.prototype.hasOwnProperty.call(obj, head)) {
+          delete obj[head];
+          return true;
+        }
+        return false;
+      }
+      if (obj == null || typeof obj !== "object" || !Object.prototype.hasOwnProperty.call(obj, head)) {
+        return false;
+      }
+      return deleteByPath(obj[head], tail);
+    }
+JS_BODY
+}
+
+strip_plugin_row_from_json() {
+  local file="$1"
+  local key="$2"
+  local win_path=""
+  if command -v cygpath >/dev/null 2>&1; then
+    win_path=$(cygpath -w "$file" 2>/dev/null || echo "$file")
+  else
+    win_path="$file"
+  fi
+  local body
+  body="$(json_repair_bodies)"
+  node -e "${body}
+    deleteByPath(parsed, ['plugins', process.argv[2]]);
+    writeBack(parsed);
+  " "$win_path" "$key"
 }
 
 strip_plugin_key_from_json() {
@@ -810,26 +861,12 @@ strip_plugin_key_from_json() {
   else
     win_path="$file"
   fi
-  node -e '
-    const fs = require("fs");
-    const file = process.argv[1];
-    const key = process.argv[2];
-    const data = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (Object.prototype.hasOwnProperty.call(data, key)) {
-      delete data[key];
-    }
-    let eol = "\n";
-    const size = fs.statSync(file).size;
-    if (size > 0) {
-      const fd = fs.openSync(file, "r");
-      const head = Buffer.alloc(Math.min(64, size));
-      fs.readSync(fd, head, 0, head.length, 0);
-      fs.closeSync(fd);
-      if (head.includes(0x0d)) eol = "\r\n";
-    }
-    const body = JSON.stringify(data, null, 2) + "\n";
-    fs.writeFileSync(file, body.replace(/\n/g, eol));
-  ' "$win_path" "$key"
+  local body
+  body="$(json_repair_bodies)"
+  node -e "${body}
+    deleteByPath(parsed, [process.argv[2]]);
+    writeBack(parsed);
+  " "$win_path" "$key"
 }
 
 if [ -f "$INSTALLED_JSON" ]; then
