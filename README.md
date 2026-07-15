@@ -23,7 +23,7 @@ ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / ora
 
 ## What's new
 
-**v0.9.6** — `m_sumEstQuota|term:short` projects the spent cost up to a full-period spend using the aligned plan window's `used%`. Renders `est:$30.20` (fixed 2dp, per-model currency). Prefix is configurable via `labels.labelEstQuota` (default `"est:"`).
+**v0.9.7** — Install-journal: `install.sh` records every per-field change to `settings.json.statusLine` to a write-ahead log; `uninstall.sh` reverts field-by-field, preserving any field the user touched after install. `statusLine.refreshInterval` is now managed (created at 10, clamped down from >10 with a notice). See [Install-journal](#install-journal-write-ahead-log) below.
 
 > Requires `tokenPrices.<modelId>` to be configured for the target model (see MANUAL §m_tokenCost). Without it, the module renders `est:n/a`.
 

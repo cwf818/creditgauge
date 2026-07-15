@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.9.7
+
+### Add
+
+- **Install-journal (write-ahead log) for settings.json.**
+  `scripts/install.sh` now records every per-field change it makes to `settings.json.statusLine` to `${STATE_DIR}/install-journal.json`. Three action kinds: `create` (field did not exist before install), `mutate` (existing field changed; before/after snapshot), `clamp-down` (over-threshold value clamped). `scripts/lib/journal.mjs` is the new module exposing `readEntries` / `appendEntries` / `markApplied` and 50-entry rotation. The journal is the **authoritative record** of what install did — uninstall reads it (see below) to revert only the parts the user hasn't touched since.
+- **`scripts/lib/edit-settings.mjs` — `ensure-refresh-interval` op.**
+  Reads `settings.json.statusLine.refreshInterval`: missing → create at 10; `<= 10` → no-op; `> 10` → clamp down to 10 with stdout notice. Idempotent. Invoked by `install.sh` immediately after `write-managed`.
+- **`scripts/lib/edit-settings.mjs` — `apply-journal-entry` op.**
+  Per-field revert driver. For each unapplied journal entry, compares the entry's `after` snapshot against the **current** `settings.json`: matching fields are reverted (created → removed, mutated/clamp-down → restored to `before`), fields the user changed after install are preserved. The whole `statusLine` block is deleted when a single `create` entry's full after-snapshot still matches.
+- **`scripts/uninstall.sh` — journal-driven restore is the new default.**
+  Priority chain is now (1) install-journal (default path), (2) legacy `restore-from-file` from `state/upstream-cmd.txt`, (3) `restore-from-bak` from pre-managed `settings.json.bak.<ts>`, (4) `warning:no-restore-source`. Legacy (2) and (3) are kept as fallbacks for installs that pre-date the journal.
+- **`statusLine.refreshInterval` is now managed by `install.sh`.**
+  Creates the field at `10` when missing; clamps down to `10` with a stdout notice (`install.sh: clamped statusLine.refreshInterval from N to 10 — set it back manually if you want to keep N`) when the user's value exceeds `10`. Values `<= 10` are left alone.
+- **Fresh-install no longer needs an `upstream-cmd.txt` placeholder.**
+  The journal's `create` entry IS the record. Uninstall deletes the whole `statusLine` block when no field has been user-touched.
+
+### Add (post-merge)
+
+- **`acc_eval` fragment renamed to `combline1`, `stat_eval` merged into `combline1`/`combline2` siblings.**
+  The session acc block and the 5h-align stat block are now a single `combline1` preset (separated by `s_move|pos:73` + `s_pipe|wrap:true`); the project acc block and 7d-align stat block are combined into `combline2` likewise. Same shape as before — fewer fragments, easier to compose.
+- **`s_move|pos:73` (was `pos:70`, then `pos:71`).**
+  Column cursor advanced by 3 cells to absorb the new 3-space pad after `🟢Session:` / `🟢Project:` (the wide-emoji compensation that `visibleCellLength` doesn't recognize as wide).
+- **Per-Project state layout: `install-journal.json` is in the preserved group.**
+  Sibling of `config.json` and `query_plugins/`; `:uninstall --completely` (or default) does NOT wipe it. Survives cache wipes because it lives in the STABLE state dir.
+
+### Internal
+
+- New `scripts/lib/journal.mjs` (no network, no side effects beyond `${STATE_DIR}/install-journal.json`).
+- `scripts/lib/edit-settings.mjs`: new ops `ensure-refresh-interval` + `apply-journal-entry`; existing `write-managed` / `restore-from-file` / `restore-from-bak` / `status` unchanged.
+- `scripts/install.sh`: captures `SL_BEFORE_JSON` / `SL_AFTER_JSON` around the `write-managed` call, appends a journal entry, then runs `ensure-refresh-interval`. Fresh-install path now also calls `mkdir -p "$STATE_DIR"` so the journal has somewhere to land.
+- `scripts/uninstall.sh`: `HELPER` resolution at top, `JOURNAL_PATH` discovery under `STATE_DIR`, journal-first `SL_PLAN`, `restore-from-journal:*` apply case that calls `apply-journal-entry`.
+
+### Tests
+
+- `scripts/test-install.sh` — 3 new cases (16 assertions): fresh install records journal `create` + refreshInterval `create`; replace with `refreshInterval=30` records `clamp-down`; replace with `refreshInterval=5` is no-op (no journal entry).
+- `scripts/test-uninstall.sh` — 5 new cases (8 assertions): fresh-journal-block-deleted, per-field-revert, clamp-down restore, clamp-down preserved, legacy fallback.
+- `scripts/test-edit-settings.sh` — new sections for `ensure-refresh-interval` (create|10, no-op|10, clamp-down|30|10) and `apply-journal-entry` (block-delete after first apply, applied flag survives re-run).
+- All 22 + 27 + 53 + 27 = 129 install/uninstall/edit-settings/clean-cache tests pass. `npm test` 1055/0.
+
 ## v0.9.6
 
 ### Add

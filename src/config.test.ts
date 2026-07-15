@@ -82,11 +82,15 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     // — the default `quota` template already owns the age slot via
     // `m_age`, and `m_version` was deemed redundant with the plugin
     // source glyph (`m_pluginSource`) for version visibility.
+    // v0.9.7+: acc_eval and stat_eval are merged into combline1 /
+    // combline2 (session acc + 5h-align stat share one line, project
+    // acc + 7d-align stat share the other).
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "standard" }));
     const cfg = await loadConfig();
     assert.ok(cfg.statuslineTemplate[0].startsWith("m_template|information"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|tick_eval"));
-    assert.ok(cfg.statuslineTemplate.includes("m_template|stat_eval"));
+    assert.ok(cfg.statuslineTemplate.includes("m_template|combline1"));
+    assert.ok(cfg.statuslineTemplate.includes("m_template|combline2"));
     assert.ok(cfg.statuslineTemplate.includes("m_pluginSource"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|quota|type:quota"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|balance|type:balance"));
@@ -112,12 +116,12 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     // vice-versa.
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "compact" }));
     const cfg = await loadConfig();
-    // Line 0: tick_eval; line 1: acc_eval; line 2: stat_eval (each
-    // followed by s_newline, so the array starts with the three
-    // fragments interleaved with newlines).
+    // Line 0: tick_eval; line 1: combline1 (session acc + 5h-align
+    // stat merged); line 2: combline2 (project acc + 7d-align stat
+    // merged). v0.9.7+ replaced acc_eval/stat_eval with these.
     assert.equal(cfg.statuslineTemplate[0], "m_template|tick_eval");
-    assert.ok(cfg.statuslineTemplate.includes("m_template|acc_eval"));
-    assert.ok(cfg.statuslineTemplate.includes("m_template|stat_eval"));
+    assert.ok(cfg.statuslineTemplate.includes("m_template|combline1"));
+    assert.ok(cfg.statuslineTemplate.includes("m_template|combline2"));
     // Final line: provider-type dispatch + mem_info (v0.4.x — m_age +
     // m_version were trimmed; m_pluginSource glyph carries the version
     // semantic now).
