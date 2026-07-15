@@ -116,6 +116,149 @@ function buildLatestCacheCommand(_upstreamCmdFileUnused) {
   ].join("");
 }
 
+// Apply a single install-journal entry to settings.json. Action semantics:
+//   - create: install added a field that didn't exist before.
+//       current == after → delete the field (or its parent block when it
+//                            was the whole `statusLine` block)
+//       current != after → preserve (user touched it after install)
+//   - mutate: install replaced an existing field's value.
+//       current == after → restore before (full revert)
+//       current != after → preserve
+//   - clamp-down: install shrunk a value (e.g. refreshInterval 30 → 10).
+//       current == after  → restore before
+//       current == before → already reverted, no-op
+//       otherwise          → preserve (user changed to something new)
+//
+// Per-field revert — the user's stated principle ("如果已经与install之后
+// 不同，说明用户或其他程序已修改，那么对比statusLine块里面的参数，删除
+// 与install之后备份的版本相同的，留下那些被修改的"). The id is a
+// dotted-path like `settings.json:statusLine.refreshInterval`; the
+// leading "settings.json:" prefix is informational and ignored.
+//
+// For whole-block entries (id="settings.json:statusLine"), we read the
+// current block and compare each key against after[]. Keys that match
+// after are reset to before (or removed when before=null); keys that
+// differ are left in place. This implements "整块 revert" — only the
+// exact post-install snapshot is considered "ours".
+function applyJournalEntry(data, entry) {
+  const rawId = entry.id || "";
+  const at = rawId.indexOf(":");
+  const path = at >= 0 ? rawId.slice(at + 1).split(".") : rawId.split(".");
+  if (path.length === 0 || path[0] === "") {
+    return { action: "skipped:bad-id", changed: false };
+  }
+
+  // Resolve the current value at `path`. Mutation is rejected if any
+  // intermediate node is missing OR not an object — this means we
+  // can't descend into a value that the user has already deleted.
+  let cur = data;
+  for (let i = 0; i < path.length - 1; i++) {
+    const k = path[i];
+    if (cur == null || typeof cur !== "object" || !(k in cur)) {
+      // Intermediate node missing → user deleted this branch already.
+      return { action: "skipped:missing-parent", changed: false };
+    }
+    cur = cur[k];
+  }
+  const leafKey = path[path.length - 1];
+  const hasKey = cur != null && typeof cur === "object" && Object.prototype.hasOwnProperty.call(cur, leafKey);
+
+  function deepEq(a, b) {
+    // Strict equality on JSON-shaped values. Looser than a full deepEq,
+    // but fits our use case: journal entries are produced by edit-
+    // settings.mjs itself so shape parity is guaranteed. Falls back to
+    // JSON.stringify for nested objects/arrays.
+    if (a === b) return true;
+    if (typeof a !== typeof b) return false;
+    if (a === null || b === null) return false;
+    if (typeof a === "object") return JSON.stringify(a) === JSON.stringify(b);
+    return false;
+  }
+
+  // Block-level entry (single key in path, value is an object, action
+  // is create/mutate and the post-install snapshot is an object —
+  // applies to `statusLine` as a whole).
+  if (
+    path.length === 1 &&
+    typeof entry.after === "object" &&
+    entry.after !== null &&
+    !Array.isArray(entry.after) &&
+    hasKey &&
+    (entry.action === "create" || entry.action === "mutate")
+  ) {
+    const current = cur[leafKey];
+    if (typeof current !== "object" || current === null) {
+      return { action: "skipped:current-not-object", changed: false };
+    }
+    // Compare EVERY field in after against current. Only fields that
+    // match `after` get reverted.
+    let anyChanged = false;
+    const next = { ...current };
+    for (const k of Object.keys(entry.after)) {
+      if (deepEq(next[k], entry.after[k])) {
+        // Untouched by user → revert.
+        if (entry.action === "create" && entry.before === null) {
+          delete next[k];
+          anyChanged = true;
+        } else if (entry.before && typeof entry.before === "object" && entry.before !== null && k in entry.before) {
+          next[k] = entry.before[k];
+          anyChanged = true;
+        }
+      }
+      // else: user touched this field — leave it.
+    }
+    if (!anyChanged) return { action: "preserved:all-fields-user-touched", changed: false };
+    // Special case: when entry.action=create AND entry.before=null AND
+    // we ended up removing every field in `after`, drop the parent
+    // block entirely. This is the "fresh install → uninstall → no
+    // statusLine" path; leaving an empty object behind would be
+    // misleading.
+    const isFullCreate = entry.action === "create" && entry.before === null;
+    const allAfterGone = Object.keys(entry.after).every((k) => !(k in next));
+    if (isFullCreate && allAfterGone && Object.keys(next).length === 0) {
+      delete cur[leafKey];
+      return { action: "reverted:block-deleted", changed: true };
+    }
+    cur[leafKey] = next;
+    return { action: "reverted:block-fields", changed: true };
+  }
+
+  // Field-level entry.
+  if (!hasKey) {
+    // Field doesn't exist on disk → either install wasn't run, or the
+    // user has already removed it (including, for create, the whole
+    // parent block). Nothing to revert, mark applied.
+    return { action: "skipped:absent", changed: false };
+  }
+  const currentVal = cur[leafKey];
+  if (entry.action === "create") {
+    if (deepEq(currentVal, entry.after)) {
+      delete cur[leafKey];
+      return { action: "reverted:create-delete", changed: true };
+    }
+    return { action: "preserved:user-touched", changed: false };
+  }
+  if (entry.action === "mutate") {
+    if (deepEq(currentVal, entry.after)) {
+      cur[leafKey] = entry.before;
+      return { action: "reverted:mutate-restore", changed: true };
+    }
+    return { action: "preserved:user-touched", changed: false };
+  }
+  if (entry.action === "clamp-down") {
+    if (deepEq(currentVal, entry.after)) {
+      cur[leafKey] = entry.before;
+      return { action: "reverted:clamp-down", changed: true };
+    }
+    if (deepEq(currentVal, entry.before)) {
+      return { action: "no-op:already-reverted", changed: false };
+    }
+    return { action: "preserved:user-touched", changed: false };
+  }
+  return { action: "skipped:unknown-action", changed: false };
+}
+
+
 // Fingerprint for the wrapper command install.sh writes. Two-part check:
 //   1. The command path lives inside our plugin cache (the only place
 //      install.sh points the wrapper at). Match either separator since
@@ -219,6 +362,124 @@ switch (op) {
       );
     }
     writeJson(target, data);
+    break;
+  }
+
+  case "ensure-refresh-interval": {
+    // Read-modify-write `settings.json.statusLine.refreshInterval`.
+    //   - missing  → write `maxSeconds` (default 10); record `create`
+    //   - > max    → clamp to `maxSeconds`; record `clamp-down`
+    //   - ≤ max    → no-op, no journal entry
+    //
+    // We intentionally don't touch any other field — including
+    // `_topgauge_managed`, which write-managed owns. If statusLine
+    // doesn't exist, this op errors out (install is calling us before
+    // write-managed; ordering matters).
+    //
+    // Args: [maxSeconds]
+    // Stdout (Bash-readable):
+    //   "create|10"          — field was created with the given value
+    //   "clamp-down|30|10"   — clamped from 30 down to 10
+    //   "no-op|5"            — already ≤ max
+    //   "error|<msg>"        — settings.json without statusLine
+    // Side effect on success:
+    //   - settings.json mutated in place (with CRLF preserved)
+    //   - journal entry appended to journalPath when provided
+    const [maxSecondsStr, journalPath] = rest;
+    const maxSeconds = Number.parseInt(maxSecondsStr, 10);
+    if (!Number.isFinite(maxSeconds) || maxSeconds <= 0) {
+      process.stderr.write(`ensure-refresh-interval: invalid max='${maxSecondsStr}'\n`);
+      process.exit(2);
+    }
+    const data = readJson(target);
+    if (!data.statusLine || typeof data.statusLine !== "object") {
+      process.stderr.write(
+        "ensure-refresh-interval: settings.json has no statusLine; run write-managed first\n"
+      );
+      process.exit(1);
+    }
+    const beforeRaw = data.statusLine.refreshInterval;
+    const before = typeof beforeRaw === "number" ? beforeRaw : null;
+    if (before === null) {
+      // Field was missing — create it.
+      data.statusLine.refreshInterval = maxSeconds;
+      writeJson(target, data);
+      if (journalPath) {
+        const { appendEntries } = await import("./journal.mjs");
+        appendEntries(
+          journalPath,
+          [
+            {
+              id: "settings.json:statusLine.refreshInterval",
+              action: "create",
+              before: null,
+              after: maxSeconds,
+            },
+          ],
+        );
+      }
+      process.stdout.write(`create|${maxSeconds}\n`);
+      break;
+    }
+    if (before > maxSeconds) {
+      // Clamp down.
+      data.statusLine.refreshInterval = maxSeconds;
+      writeJson(target, data);
+      if (journalPath) {
+        const { appendEntries } = await import("./journal.mjs");
+        appendEntries(
+          journalPath,
+          [
+            {
+              id: "settings.json:statusLine.refreshInterval",
+              action: "clamp-down",
+              before,
+              after: maxSeconds,
+            },
+          ],
+        );
+      }
+      process.stdout.write(`clamp-down|${before}|${maxSeconds}\n`);
+      break;
+    }
+    // Already ≤ max: no-op.
+    process.stdout.write(`no-op|${before}\n`);
+    break;
+  }
+
+  case "apply-journal-entry": {
+    // Args: [journalPath, entryId1, entryId2, ...]
+    // Iterates entries; for each, calls applyJournalEntry against the
+    // current settings.json. After each successful application, marks
+    // the entry as applied via journal.mjs#markApplied so re-runs are
+    // idempotent.
+    const [journalPath, ...ids] = rest;
+    if (!journalPath) {
+      process.stderr.write("apply-journal-entry: journalPath required\n");
+      process.exit(2);
+    }
+    const { readEntries, markApplied } = await import("./journal.mjs");
+    const all = readEntries(journalPath);
+    const idSet = ids.length > 0 ? new Set(ids) : null;
+    const targets = idSet
+      ? all.filter((e) => idSet.has(e.id))
+      : all.filter((e) => !e.applied && e.action !== "rotate");
+    const data = readJson(target);
+    const applied = [];
+    const skipped = [];
+    for (const entry of targets) {
+      const r = applyJournalEntry(data, entry);
+      const summary = `${entry.id}|${r.action}`;
+      if (r.changed) applied.push(summary);
+      else skipped.push(summary);
+    }
+    writeJson(target, data);
+    if (applied.length > 0) {
+      markApplied(journalPath, applied.map((s) => s.split("|")[0]));
+    }
+    // Stdout: one line per entry decision, parseable from bash.
+    for (const s of applied) process.stdout.write(`applied: ${s}\n`);
+    for (const s of skipped) process.stdout.write(`skipped: ${s}\n`);
     break;
   }
 

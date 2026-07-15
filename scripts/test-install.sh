@@ -257,6 +257,123 @@ fi
 assert_match_str "standard no-op message printed" "already managed" "$out"
 rm -rf "$root"
 
+# --- Journal + refreshInterval -----------------------------------------------
+#
+# v0.10: install-journal records every modification install.sh makes to
+# settings.json; uninstall reads entries field-by-field and only reverts
+# ones the user hasn't touched. statusLine.refreshInterval is forced to
+# be set (or clamped down) to 10 on install. These tests cover the
+# happy paths so a regression in either flow surfaces immediately.
+
+echo ""
+echo "== install.sh: install-journal + refreshInterval =="
+
+# Fixture: a "plugin cache" with only the script-under-test + dist
+# stubs + lib. Settings target is synthetic — we point CLAUDE_CONFIG_DIR
+# at the fixture root.
+build_journal_fixture() {
+  local with_status_line="$1"  # "yes" / "no" / "with-refresh"
+  local root
+  root="$(mktemp -d -t topgauge-journal-test-XXXXXX)"
+  local base="${root}/plugins/cache/topgauge/topgauge/0.9.6"
+  mkdir -p "${base}/scripts/lib" "${base}/dist/plugins/minimax" "${base}/dist/plugins/deepseek"
+  ln -sf "${SCRIPT_DIR}/wrapper.sh" "${base}/scripts/wrapper.sh"
+  ln -sf "${SCRIPT_DIR}/install.sh" "${base}/scripts/install.sh"
+  ln -sf "${SCRIPT_DIR}/lib/edit-settings.mjs" "${base}/scripts/lib/edit-settings.mjs"
+  ln -sf "${SCRIPT_DIR}/lib/journal.mjs" "${base}/scripts/lib/journal.mjs"
+  printf '# stub\n' > "${base}/dist/index.js"
+  printf '# stub\n' > "${base}/dist/plugins/minimax/index.js"
+  printf '# stub\n' > "${base}/dist/plugins/deepseek/index.js"
+  case "$with_status_line" in
+    no)
+      printf '{}\n' > "${root}/settings.json"
+      ;;
+    with-refresh)
+      printf '{}\n' > "${root}/settings.json"
+      # Caller injects refreshInterval after fixture build.
+      ;;
+  esac
+  FIXTURE_ROOT="$root"
+  CACHE_BASE="$base"
+}
+
+# Read a JSON field via node — same helper as test-edit-settings.sh.
+jget_field() {
+  local f="$1" path="$2"
+  node -e '
+    const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const parts = process.argv[2].split(".");
+    let v = j;
+    for (const p of parts) { v = v?.[p]; }
+    process.stdout.write(v === undefined ? "" : typeof v === "string" ? v : JSON.stringify(v));
+  ' "$f" "$path"
+}
+
+echo "-- fresh install: journal records statusLine create, refreshInterval create --"
+build_journal_fixture no
+out=$(HOME="$FIXTURE_ROOT" CLAUDE_CONFIG_DIR="$FIXTURE_ROOT" \
+      bash "$CACHE_BASE/scripts/install.sh" 2>&1) || true
+JOURNAL="$FIXTURE_ROOT/plugins/topgauge/state/install-journal.json"
+assert_file_exists "[journal] created on fresh install" "$JOURNAL"
+assert_eq "[journal] contains exactly 2 entries (create statusLine, create refreshInterval)" \
+  "2" \
+  "$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.entries.length)' "$JOURNAL")"
+assert_eq "[journal] first entry id = settings.json:statusLine" \
+  "settings.json:statusLine" \
+  "$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.entries[0].id)' "$JOURNAL")"
+assert_eq "[journal] statusLine action = create" \
+  "create" \
+  "$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.entries[0].action)' "$JOURNAL")"
+assert_eq "[journal] refreshInterval entry recorded" \
+  "settings.json:statusLine.refreshInterval" \
+  "$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.entries[1].id)' "$JOURNAL")"
+assert_eq "[journal] refreshInterval after = 10" \
+  "10" \
+  "$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.entries[1].after)' "$JOURNAL")"
+assert_eq "[settings] statusLine.refreshInterval = 10" \
+  "10" "$(jget_field "$FIXTURE_ROOT/settings.json" statusLine.refreshInterval)"
+assert_match_str "[stdout] clamp/create message printed" "refreshInterval" "$out"
+rm -rf "$FIXTURE_ROOT"
+
+echo "-- replace install with refreshInterval=30 -> journal records clamp-down --"
+build_journal_fixture with-refresh
+# Hand-build a settings.json with a non-managed statusLine + refreshInterval=30
+node -e '
+  const fs = require("fs");
+  const d = { statusLine: { type: "command", command: "echo alien", refreshInterval: 30 } };
+  fs.writeFileSync(process.argv[1], JSON.stringify(d, null, 2) + "\n");
+' "$FIXTURE_ROOT/settings.json"
+out=$(HOME="$FIXTURE_ROOT" CLAUDE_CONFIG_DIR="$FIXTURE_ROOT" \
+      bash "$CACHE_BASE/scripts/install.sh" 2>&1) || true
+JOURNAL="$FIXTURE_ROOT/plugins/topgauge/state/install-journal.json"
+assert_file_exists "[journal] created on replace" "$JOURNAL"
+assert_eq "[journal] refreshInterval entry action = clamp-down" \
+  "clamp-down" \
+  "$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.entries[1].action)' "$JOURNAL")"
+assert_eq "[journal] refreshInterval clamp-down before=30 after=10" \
+  "30" \
+  "$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.entries[1].before)' "$JOURNAL")"
+assert_eq "[settings] statusLine.refreshInterval clamped to 10" \
+  "10" "$(jget_field "$FIXTURE_ROOT/settings.json" statusLine.refreshInterval)"
+assert_match_str "[stdout] clamp-down 'clamp-down|30|10' line" "clamp-down|30|10" "$out"
+rm -rf "$FIXTURE_ROOT"
+
+echo "-- replace install with refreshInterval=5 (no-op) -> no journal entry for refreshInterval --"
+build_journal_fixture with-refresh
+node -e '
+  const fs = require("fs");
+  const d = { statusLine: { type: "command", command: "echo alien", refreshInterval: 5 } };
+  fs.writeFileSync(process.argv[1], JSON.stringify(d, null, 2) + "\n");
+' "$FIXTURE_ROOT/settings.json"
+out=$(HOME="$FIXTURE_ROOT" CLAUDE_CONFIG_DIR="$FIXTURE_ROOT" \
+      bash "$CACHE_BASE/scripts/install.sh" 2>&1) || true
+JOURNAL="$FIXTURE_ROOT/plugins/topgauge/state/install-journal.json"
+assert_file_exists "[journal] created on replace (no-op refreshInterval)" "$JOURNAL"
+COUNT=$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.entries.length)' "$JOURNAL")
+assert_eq "[journal] only 1 entry (statusLine mutate, refreshInterval skipped)" "1" "$COUNT"
+assert_match_str "[stdout] no-op 'refreshInterval' message" "no-op|5" "$out"
+rm -rf "$FIXTURE_ROOT"
+
 # --- Summary -----------------------------------------------------------------
 echo ""
 echo "test-install.sh: $PASS pass, $FAIL fail"

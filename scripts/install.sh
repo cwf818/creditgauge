@@ -85,6 +85,16 @@ PLUGIN_DIR=$(ls -d ${PLUGIN_BASE}/*/ 2>/dev/null \
 STATE_DIR="${CLAUDE_ROOT}/plugins/topgauge/state"
 UPSTREAM_CMD_FILE="${STATE_DIR}/upstream-cmd.sh"
 UPSTREAM_CMD_ONLY="${STATE_DIR}/upstream-cmd.txt"
+# Install-journal: a per-install write-ahead log of every modification
+# we make to settings.json (and to settings.json.statusLine in
+# particular). uninstall.sh reads it to revert install's changes
+# field-by-field, preserving any field the user touched after install.
+# Lives in STATE_DIR (stable, sibling of config.json) so it survives
+# /plugin install rolls. Preserved across uninstalls — the partial-
+# preserve branch already keeps user-owned STATE_DIR files; the
+# journal belongs with the user-owned set, not the always-wipe noise.
+JOURNAL_PATH="${STATE_DIR}/install-journal.json"
+REFRESH_INTERVAL_MAX=10  # seconds — see ensure-refresh-interval op
 # v0.9.0+ — bundled query_plugins drop-in dir. Users can drop
 # scripts at ~/.claude/plugins/topgauge/query_plugins/<provider>/
 # index.js and wire a custom data source via providers.<provider>.
@@ -175,6 +185,7 @@ WIN_TARGET=$(winpath "$TARGET")
 WIN_UPSTREAM=$(winpath "$UPSTREAM_CMD_FILE")
 WIN_UPSTREAM_ONLY=$(winpath "$UPSTREAM_CMD_ONLY")
 WIN_WRAPPER=$(winpath "$WRAPPER")
+WIN_JOURNAL=$(winpath "$JOURNAL_PATH")
 
 # --- Restoration path: replace target with most recent .bak.<ts> --------------
 if [ "$RESTORE" = 1 ]; then
@@ -267,6 +278,12 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "  would write:   ${UPSTREAM_CMD_FILE}"
     echo "  original cmd:  ${ORIGINAL_CMD}"
   fi
+  if [ "$INSTALL_MODE" = "managed" ]; then
+    echo "  mode=managed: skipping wrapper/refreshInterval writes (already ours)"
+  else
+    echo "  would ensure:  statusLine.refreshInterval = ${REFRESH_INTERVAL_MAX} (create if missing, clamp down if >${REFRESH_INTERVAL_MAX})"
+    echo "  would record:  ${JOURNAL_PATH} (per-field action entries: create/mutate/clamp-down)"
+  fi
   SEED_TARGET="${CLAUDE_ROOT}/plugins/topgauge/config.json"
   if [ ! -f "$SEED_TARGET" ]; then
     echo "  would seed:    ${SEED_TARGET} (cacheTtlMs=60000, statuslineTemplate=standard, providers={}, labels glyph overrides)"
@@ -301,7 +318,14 @@ if [ "$INSTALL_MODE" = "replace" ]; then
   else
     echo "install.sh: preserved existing upstream command at ${UPSTREAM_CMD_FILE}"
   fi
-  echo "install.sh: backed up ${TARGET} -> ${TARGET}.bak.<TS>"
+  echo "install.sh: backed up ${TARGET} -> ${TARGET}.bak.<TS}"
+fi
+
+# STATE_DIR must exist before we write the journal — covers the fresh
+# branch too (replace already mkdir'd above). Best-effort; if it
+# fails, the journal writes below will surface the error.
+if [ ! -d "$STATE_DIR" ]; then
+  mkdir -p "$STATE_DIR"
 fi
 
 # config.json seed: when the user has no config.json on disk, write a
@@ -345,5 +369,75 @@ SEED_EOF
   echo "install.sh: seeded basic config at ${SEED_FILE}"
 fi
 
-node "$HELPER" "$WIN_TARGET" write-managed "$WIN_WRAPPER" "$WIN_UPSTREAM"
-echo "install.sh: installed wrapper into ${TARGET}"
+# ----------------------------------------------------------------------------
+# install-journal: record every modification we are about to make so
+# uninstall can revert field-by-field against the user's stated
+# principle ("只恢复install的时候修改的项目内容"). The managed branch
+# (above) already exited 0; this block only runs for fresh / replace.
+#
+# Two journal entries are produced:
+#   1. settings.json:statusLine       — action=create (fresh) or
+#                                      action=mutate (foreign→ours)
+#   2. settings.json:statusLine.refreshInterval — appended by
+#      ensure-refresh-interval itself (decision is data-driven and
+#      the op knows how to record its own entry).
+# ----------------------------------------------------------------------------
+SL_BEFORE_JSON="$(node -e '
+  const fs = require("fs");
+  try {
+    const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(JSON.stringify(d.statusLine === undefined ? null : d.statusLine));
+  } catch (e) { process.stdout.write("null"); }
+' "$TARGET")"
+node "$HELPER" "$WIN_TARGET" write-managed "$WIN_WRAPPER" "$WIN_UPSTREAM" >/dev/null
+SL_AFTER_JSON="$(node -e '
+  const fs = require("fs");
+  try {
+    const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(JSON.stringify(d.statusLine === undefined ? null : d.statusLine));
+  } catch (e) { process.stdout.write("null"); }
+' "$TARGET")"
+
+# Determine action: "create" if there was no statusLine before install;
+# "mutate" if there was one (foreign or otherwise). Either way the
+# entry drives uninstall to revert field-by-field against SL_BEFORE_JSON.
+if [ "$SL_BEFORE_JSON" = "null" ] || [ -z "$SL_BEFORE_JSON" ]; then
+  SL_ACTION="create"
+  SL_BEFORE_JSON="null"
+else
+  SL_ACTION="mutate"
+fi
+
+# Append the statusLine journal entry. Invoke journal.mjs via its CLI
+# subcommand "append" — bash JSON quoting for nested objects is fragile,
+# and the CLI takes a single JSON string per entry. Win-path for
+# Node's fs API.
+WIN_JOURNAL="$(winpath "$JOURNAL_PATH")"
+ENTRY_ID="settings.json:statusLine"
+ENTRY_JSON="$(node -e '
+  const id = process.argv[1];
+  const action = process.argv[2];
+  const before = process.argv[3];
+  const after = process.argv[4];
+  const beforeVal = before === "null" ? null : JSON.parse(before);
+  const afterVal = after === "null" ? null : JSON.parse(after);
+  process.stdout.write(JSON.stringify({ id, action, before: beforeVal, after: afterVal }));
+' "$ENTRY_ID" "$SL_ACTION" "$SL_BEFORE_JSON" "$SL_AFTER_JSON")"
+APPEND_OUT="$(node "$SCRIPT_DIR/lib/journal.mjs" append "$WIN_JOURNAL" "$ENTRY_JSON" 2>&1)" || {
+  echo "install.sh: failed to append statusLine journal entry: $APPEND_OUT" >&2
+  exit 1
+}
+echo "install.sh: journal statusLine entry: $APPEND_OUT"
+
+# ensure-refresh-interval — places statusLine.refreshInterval=10 if
+# missing or >10. Stdout is "create|10" / "clamp-down|30|10" / "no-op|5"
+# — relay it to the user so they know whether their config was touched.
+RI_OUT="$(node "$HELPER" "$WIN_TARGET" ensure-refresh-interval "$REFRESH_INTERVAL_MAX" "$WIN_JOURNAL" 2>&1)" || {
+  echo "install.sh: failed to ensure refreshInterval" >&2
+  echo "$RI_OUT" >&2
+  exit 1
+}
+case "$RI_OUT" in
+  create\|*|clamp-down\|*|no-op\|*) echo "install.sh: refreshInterval $RI_OUT" ;;
+  *) echo "install.sh: refreshInterval: $RI_OUT" ;;
+esac

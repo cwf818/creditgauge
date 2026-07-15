@@ -127,6 +127,10 @@ PLUGINS_DIR="${CLAUDE_ROOT}/plugins"
 # clean.sh invocation is silently skipped (clean is a nice-to-have,
 # not a correctness requirement).
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+HELPER=""
+if [ -n "$SCRIPT_DIR" ] && [ -f "${SCRIPT_DIR}/lib/edit-settings.mjs" ]; then
+  HELPER="${SCRIPT_DIR}/lib/edit-settings.mjs"
+fi
 
 # --- Resolve settings target --------------------------------------------------
 if [ "$PROJECT_LEVEL" = 1 ]; then
@@ -178,6 +182,33 @@ if [ -f "$TARGET" ]; then
     } catch (e) { process.stdout.write("0"); }
   ' "$WIN_TARGET" 2>/dev/null || echo "0")
   if [ "$MANAGED" = "1" ]; then
+    # Priority for restoring settings.json.statusLine:
+    #   1. install-journal — if it exists with unapplied entries, it
+    #      is the AUTHORITATIVE record of every field-level change
+    #      install.sh made. Drives per-field revert (preserves any
+    #      field the user touched after install).
+    #   2. legacy restore-from-file — pre-journal installs may have
+    #      only upstream-cmd.txt to revert from. We keep this as a
+    #      fallback for users who never re-installed after the
+    #      journal was introduced.
+    #   3. legacy restore-from-bak — most recent pre-managed
+    #      settings.json.bak.<ts>.
+    JOURNAL_PATH="${STATE_DIR}/install-journal.json"
+    JOURNAL_HAS_ENTRIES=""
+    if [ -f "$JOURNAL_PATH" ]; then
+      JOURNAL_HAS_ENTRIES="$(node -e '
+        try {
+          const fs = require("fs");
+          const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+          const n = (j.entries || []).filter(e => e && e.applied !== true && e.action !== "rotate").length;
+          process.stdout.write(n > 0 ? "1" : "0");
+        } catch (e) { process.stdout.write("0"); }
+      ' "$JOURNAL_PATH" 2>/dev/null || echo "0")"
+    fi
+
+    if [ "$JOURNAL_HAS_ENTRIES" = "1" ]; then
+      SL_PLAN="restore-from-journal:${JOURNAL_PATH}"
+    else
     # Find the upstream-cmd.txt to restore from. Priority:
     #   1. The stable state dir (v0.2.19+): sibling of config.json,
     #      survives cache wipes.
@@ -229,6 +260,7 @@ if [ -f "$TARGET" ]; then
         SL_PLAN="warning:no-restore-source"
       fi
     fi
+    fi  # close the legacy fallback else
   fi
 fi
 if [ -n "$SL_PLAN" ]; then
@@ -492,6 +524,34 @@ if [ -n "$SL_PLAN" ]; then
       # where the cache isn't writable for some reason).
       rm -f "${SRC%.txt}.sh" "$SRC" 2>/dev/null || true
       echo "uninstall.sh: restored statusLine from ${SRC}"
+      ;;
+    restore-from-journal:*)
+      # Apply every unapplied entry from ${JOURNAL_PATH} via
+      # edit-settings.mjs#apply-journal-entry. Each entry is read-
+      # modify-written individually so the user's principle holds:
+      # only fields that match the post-install snapshot are reverted;
+      # fields the user touched are left as-is.
+      SRC="${SL_PLAN#restore-from-journal:}"
+      WIN_JOURNAL=""
+      if command -v cygpath >/dev/null 2>&1; then
+        WIN_JOURNAL=$(cygpath -w "$SRC" 2>/dev/null || echo "$SRC")
+      else
+        WIN_JOURNAL="$SRC"
+      fi
+      APPLY_OUT="$(node "$HELPER" "$WIN_TARGET" apply-journal-entry "$WIN_JOURNAL" 2>&1)" || {
+        echo "uninstall.sh: apply-journal-entry failed — falling back to legacy behaviour" >&2
+        echo "$APPLY_OUT" >&2
+        # Fall back: leave a warning but continue with the rest of the
+        # uninstall (cache wipe etc.). Restoring the wrapper to its
+        # pre-install state via the .bak cascade is no longer safe
+        # because the user has potentially been mutating settings.json
+        # post-install; the journal is the only authoritative record.
+        APPLY_OUT=""
+      }
+      if [ -n "$APPLY_OUT" ]; then
+        echo "uninstall.sh: applied install-journal entries"
+        echo "$APPLY_OUT" | sed 's/^/  /'
+      fi
       ;;
     restore-from-bak:*)
       BAK="${SL_PLAN#restore-from-bak:}"

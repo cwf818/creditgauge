@@ -430,6 +430,263 @@ assert_file_exists "[unknown-flag] .jsonl untouched" \
 rm -rf "$ROOT"
 
 # ============================================================================
+# Journal-driven statusLine restore (v0.10)
+# ============================================================================
+#
+# Uninstall now prefers the install-journal over the legacy
+# upstream-cmd.txt path. The journal is the authoritative record of
+# what install changed, and revert happens field-by-field: only fields
+# that match the post-install snapshot are undone. Tests below cover
+# the five cases the user enumerated in the redesign conversation.
+
+echo ""
+echo "== journal-driven restore: per-field revert =="
+
+# Build a fixture deliberately managing the underlying `uninstall.sh`
+# call: includes a stub scripts/lib so we can drive apply-journal-entry,
+# and pre-populates install-journal.json / settings.json in known
+# shapes.
+build_journal_fixture() {
+  local root
+  # Use Node's os.tmpdir() so the path is in the form Node can read
+  # when invoked by uninstall.sh: bash `mktemp -d -t ...` produces
+  # `/tmp/...` which Node sees as `D:\tmp\...` — wrong path. Use
+  # `mktemp -d` (Linux/Git Bash) for uniqueness, then forward through
+  # Node to canonicalize.
+  root="$(mktemp -d -t topgauge-ju-XXXXXX)"
+  # Normalize for Node: strip /tmp -> use os.tmpdir() instead.
+  root="$(node -e '
+    const os = require("os");
+    const inP = process.argv[1];
+    const base = os.tmpdir();
+    const leaf = inP.split(/[\\\\\/]/).pop();
+    const out = base + require("path").sep + leaf;
+    require("fs").mkdirSync(out, { recursive: true });
+    process.stdout.write(out);
+  ' "$root")"
+  local plugins="${root}/plugins"
+  local cache="${plugins}/cache/topgauge/topgauge/0.9.6"
+  local state="${plugins}/topgauge"
+  mkdir -p "${cache}/scripts/lib" "${cache}/dist" \
+           "${state}/state" "${state}/query_plugins/minimax"
+
+  # Stub so uninstall.sh can resolve scripts/lib/edit-settings.mjs.
+  cp "${SCRIPT_DIR}/lib/edit-settings.mjs" "${cache}/scripts/lib/edit-settings.mjs"
+  cp "${SCRIPT_DIR}/lib/journal.mjs"        "${cache}/scripts/lib/journal.mjs"
+  printf '# stub\n' > "${cache}/dist/index.js"
+  printf '# stub\n' > "${cache}/scripts/wrapper.sh"
+
+  # config.json + query_plugins preserved by default.
+  printf '{"providers":{"minimax":{"provider":"minimax"}}}\n' \
+    > "${state}/config.json"
+  printf '#!/usr/bin/env bash\necho user-override\n' \
+    > "${state}/query_plugins/minimax/index.js"
+  chmod +x "${state}/query_plugins/minimax/index.js"
+
+  # settings.json + initial journals filled in by the per-test block.
+  echo "$root"
+}
+
+# Write settings.json with a managed wrapper + optional refreshInterval.
+# Uses the SAME wrapper-shape install.sh writes so isOurWrapperCommand
+# matches.
+#
+# IMPORTANT: takes paths via env vars instead of argv because Git Bash
+# on Windows mangles leading-drive-letter arguments like `C:\…` into
+# nothing — the colon triggers path conversion, and the entire first
+# argument gets eaten. Env vars round-trip cleanly.
+write_managed_settings() {
+  local path="$1"
+  local refresh_value="$2"   # "absent" | numeric
+  local command_value="$3"   # the wrapper-shaped bash -c command
+  TOPG_TEST_PATH="$path" \
+  TOPG_TEST_REFRESH="$refresh_value" \
+  TOPG_TEST_COMMAND="$command_value" \
+  node -e '
+    const fs = require("fs");
+    const path = process.env["TOPG_TEST_PATH"];
+    const refresh = process.env["TOPG_TEST_REFRESH"];
+    const command = process.env["TOPG_TEST_COMMAND"];
+    const d = { statusLine: { type: "command", command, _topgauge_managed: true } };
+    if (refresh !== "absent") d.statusLine.refreshInterval = parseInt(refresh, 10);
+    fs.writeFileSync(path, JSON.stringify(d, null, 2) + "\n");
+  '
+}
+
+WRAPPER_CMD='bash -c '"'"'plugin_dir=/home/test/.claude/plugins/cache/topgauge/topgauge/0.9.6; exec bash "${plugin_dir}scripts/wrapper.sh"'"'"''
+
+echo "-- fresh uninstall: journal-driven, statusLine deleted entirely --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+write_managed_settings "$SETTINGS" absent "$WRAPPER_CMD"
+# Install-journal with a single create entry for statusLine.
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+node -e '
+  const fs = require("fs");
+  const settings = process.env["TOPG_TEST_SETTINGS"];
+  const journal = process.env["TOPG_TEST_JOURNAL"];
+  const sl = JSON.parse(fs.readFileSync(settings, "utf8")).statusLine;
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [{
+      id: "settings.json:statusLine", ts: "2026-07-15T07:00:00Z",
+      action: "create", before: null, after: sl, applied: false
+    }]
+  };
+  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+'
+run_uninstall "$ROOT" >/dev/null 2>&1
+HAS_SL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env["TOPG_TEST_SETTINGS"],"utf8"));
+  process.stdout.write("statusLine" in d ? "yes" : "no");
+')
+assert_eq "[fresh-journal] statusLine removed from settings.json" "no" "$HAS_SL"
+APPLIED=$(TOPG_TEST_JOURNAL="$JOURNAL" node -e '
+  const j = JSON.parse(require("fs").readFileSync(process.env["TOPG_TEST_JOURNAL"],"utf8"));
+  process.stdout.write(j.entries[0].applied ? "yes" : "no");
+')
+assert_eq "[fresh-journal] journal entry marked applied" "yes" "$APPLIED"
+rm -rf "$ROOT"
+
+echo "-- per-field revert: statusLine create entry -> user only touched refreshInterval --"
+# Settings: managed + refreshInterval=20 (user bumped from our default 10).
+# Journal: a create entry for statusLine (the snapshot AT install time,
+# when refreshInterval was 10), plus a create entry for
+# refreshInterval=10. Apply-journal-entry must restore refreshInterval
+# (because the snapshot equals current==20? no, current=20 vs after=10
+# → preserved; specifically the statusLine block create entry has
+# refreshInterval=10 in `after`, so current.refreshInterval=20 ≠ 10 →
+# skipped, preserved at 20).
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+write_managed_settings "$SETTINGS" 20 "$WRAPPER_CMD"
+TOPG_TEST_JOURNAL="$JOURNAL" \
+TOPG_TEST_COMMAND="$WRAPPER_CMD" \
+node -e '
+  const fs = require("fs");
+  const journal = process.env["TOPG_TEST_JOURNAL"];
+  const wrapper = process.env["TOPG_TEST_COMMAND"];
+  const before = null;
+  const after = {
+    type: "command",
+    command: wrapper,
+    _topgauge_managed: true,
+    refreshInterval: 10
+  };
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [
+      { id: "settings.json:statusLine", ts: "2026-07-15T07:00:00Z",
+        action: "create", before, after, applied: false },
+      { id: "settings.json:statusLine.refreshInterval", ts: "2026-07-15T07:00:00Z",
+        action: "create", before: null, after: 10, applied: false }
+    ]
+  };
+  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+'
+run_uninstall "$ROOT" >/dev/null 2>&1
+# Per-field revert must KEEP the user's 20 and KEEP the statusLine
+# block (the user touched a field). Verifies only the marker /
+# delete logic is intact.
+HAS_BLOCK=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env["TOPG_TEST_SETTINGS"],"utf8"));
+  process.stdout.write(d.statusLine ? "yes" : "no");
+')
+assert_eq "[per-field] statusLine preserved (user touched refreshInterval)" "yes" "$HAS_BLOCK"
+RI=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env["TOPG_TEST_SETTINGS"],"utf8"));
+  process.stdout.write(String(d.statusLine ? d.statusLine.refreshInterval : "missing"));
+')
+assert_eq "[per-field] refreshInterval preserved at user's value (20)" "20" "$RI"
+rm -rf "$ROOT"
+
+echo "-- clamp-down revert: user kept 10 -> restored to 30 --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+write_managed_settings "$SETTINGS" 10 "$WRAPPER_CMD"
+TOPG_TEST_JOURNAL="$JOURNAL" \
+TOPG_TEST_COMMAND="$WRAPPER_CMD" \
+node -e '
+  const fs = require("fs");
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [
+      { id: "settings.json:statusLine", ts: "2026-07-15T07:00:00Z",
+        action: "create", before: null,
+        after: { type: "command", command: process.env["TOPG_TEST_COMMAND"], _topgauge_managed: true },
+        applied: false },
+      { id: "settings.json:statusLine.refreshInterval", ts: "2026-07-15T07:00:00Z",
+        action: "clamp-down", before: 30, after: 10, applied: false }
+    ]
+  };
+  fs.writeFileSync(process.env["TOPG_TEST_JOURNAL"], JSON.stringify(j, null, 2) + "\n");
+'
+run_uninstall "$ROOT" >/dev/null 2>&1
+RI=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env["TOPG_TEST_SETTINGS"],"utf8"));
+  process.stdout.write(String(d.statusLine ? d.statusLine.refreshInterval : "missing"));
+')
+assert_eq "[clamp-down kept=10] refreshInterval restored to 30" "30" "$RI"
+rm -rf "$ROOT"
+
+echo "-- clamp-down revert: user changed to 50 -> preserved --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+write_managed_settings "$SETTINGS" 50 "$WRAPPER_CMD"
+TOPG_TEST_JOURNAL="$JOURNAL" \
+TOPG_TEST_COMMAND="$WRAPPER_CMD" \
+node -e '
+  const fs = require("fs");
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.6",
+    entries: [
+      { id: "settings.json:statusLine", ts: "2026-07-15T07:00:00Z",
+        action: "create", before: null,
+        after: { type: "command", command: process.env["TOPG_TEST_COMMAND"], _topgauge_managed: true },
+        applied: false },
+      { id: "settings.json:statusLine.refreshInterval", ts: "2026-07-15T07:00:00Z",
+        action: "clamp-down", before: 30, after: 10, applied: false }
+    ]
+  };
+  fs.writeFileSync(process.env["TOPG_TEST_JOURNAL"], JSON.stringify(j, null, 2) + "\n");
+'
+run_uninstall "$ROOT" >/dev/null 2>&1
+RI=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env["TOPG_TEST_SETTINGS"],"utf8"));
+  process.stdout.write(String(d.statusLine ? d.statusLine.refreshInterval : "missing"));
+')
+assert_eq "[clamp-down user=50] refreshInterval preserved at 50" "50" "$RI"
+rm -rf "$ROOT"
+
+echo "-- legacy fallback: no install-journal -> still restore-from-file --"
+# Pre-journal install: statusLine is managed, journal absent, but
+# state/upstream-cmd.txt has the pre-install original. uninstall.sh
+# detects "no journal entries" and falls back to the legacy path.
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+write_managed_settings "$SETTINGS" absent "$WRAPPER_CMD"
+printf '#!/usr/bin/env bash\necho ccstatusline\n' \
+  > "${ROOT}/plugins/topgauge/state/upstream-cmd.sh"
+printf 'echo ccstatusline\n' \
+  > "${ROOT}/plugins/topgauge/state/upstream-cmd.txt"
+chmod +x "${ROOT}/plugins/topgauge/state/upstream-cmd.sh"
+OUT=$(run_uninstall "$ROOT" 2>&1)
+assert_match_str "[legacy] stdout mentions legacy fallback" \
+  "restored statusLine from" "$OUT"
+RI_VAL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env["TOPG_TEST_SETTINGS"],"utf8"));
+  process.stdout.write(d.statusLine ? d.statusLine.command : "missing");
+')
+assert_match_str "[legacy] settings.json.statusLine.command restored" \
+  "ccstatusline" "$RI_VAL"
+rm -rf "$ROOT"
+
+# ============================================================================
 # Summary
 # ============================================================================
 

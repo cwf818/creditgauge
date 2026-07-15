@@ -67,8 +67,21 @@ This patches the active `settings.json` (user-level by default; pass `--project`
 2. Otherwise, the current `settings.json` is backed up to `settings.json.bak.<ISO-timestamp>`.
 3. The original `statusLine.command` is preserved at `<claude-root>/plugins/topgauge/state/upstream-cmd.sh` and `<claude-root>/plugins/topgauge/state/upstream-cmd.txt` — sibling of `config.json`, **stable** across `/plugin install` rolls and cache wipes.
 4. The `statusLine` is rewritten to invoke our wrapper, which sets `TOPGAUGE_UPSTREAM_CMD=<upstream-cmd.sh>` so the original statusline runs above our line.
+5. **`statusLine.refreshInterval` is managed**: if missing, it's created at `10`. If present and `> 10`, it's clamped down to `10` and a notice is printed to stdout (`install.sh: clamped statusLine.refreshInterval from N to 10 — set it back manually if you want to keep N`). Values `≤ 10` are left alone.
 
 `install.sh` auto-builds `dist/index.js` if it's missing (the marketplace install only copies source, not the bundle). Re-running the slash command is always a no-op once installed.
+
+### Install-journal (write-ahead log)
+
+Every change `install.sh` makes to `settings.json` is recorded as a per-field entry in `<claude-root>/plugins/topgauge/state/install-journal.json`. Three entry kinds:
+
+| `action`     | Meaning                                                            |
+| ------------ | ------------------------------------------------------------------ |
+| `create`     | The field did not exist before install; `after` is the value we wrote. |
+| `mutate`     | An existing field was changed; `before`/`after` snapshot both sides. |
+| `clamp-down` | An over-threshold value was clamped (e.g. `refreshInterval` 30 → 10). |
+
+Each entry has `{id, ts, action, before, after}`. The journal is the **authoritative record** of what install did — uninstall reads it (see below) to revert only the parts the user hasn't touched since. The journal itself lives in the **preserved** group (sibling of `config.json`), so `:uninstall` keeps it around unless you pass `--completely`. Hand-editing the file is supported; just keep the schema.
 
 If you want to preview what install will do, run `/topgauge:install --dry-run` first.
 
@@ -104,7 +117,8 @@ Each is a Pattern B2 slash command — the body is a `!`-fenced shell block that
 This is a self-contained cleanup that works even after the plugin's cache and marketplace have been wiped. It does all of the following:
 
 1. **Restore `statusLine`** — strategy in order:
-   - If `${CLAUDE_ROOT}/plugins/topgauge/state/upstream-cmd.txt` exists (the stable state dir, sibling of `config.json`), restore the original command byte-for-byte from that file.
+   - If `<claude-root>/plugins/topgauge/state/install-journal.json` has unapplied entries, apply them **field-by-field**: each entry's `after` is compared against the *current* `settings.json`; matching fields are reverted (created → removed, mutated → restored to `before`, clamped → restored to `before`), and fields the user changed after install are left alone. This is the journal-driven path — the **default for any install that ran with the journal writer enabled**.
+   - Else (legacy / pre-journal install), fall back to `${CLAUDE_ROOT}/plugins/topgauge/state/upstream-cmd.txt` (byte-for-byte restore of the original command).
    - Else, fall back to the most recent `settings.json.bak.<ts>` whose `statusLine` does **not** have `_topgauge_managed: true` (the state before the plugin was installed).
    - Else, strip the marker but leave the wrapper in place and print a warning.
 2. **Remove `topgauge@topgauge` from `settings.json.enabledPlugins`** (other plugins preserved).
@@ -330,7 +344,7 @@ The Claude Code statusline is updated in response to interaction events by defau
 
   Unit is **seconds** (not milliseconds — that's a frequent footgun; the harness will reject or misbehave on values like `30000`). For this plugin, **30–120 s is a sensible range**: shorter than the 60 s TTL is wasted, much longer and the line lags behind reality. The `refreshInterval` value does **not** affect the API-call TTL — they are independent knobs.
 
-  This plugin follows the **minimum-change principle**: it does not write `refreshInterval` into `settings.json`. Set it yourself if you want a non-default cadence.
+  This plugin **manages `statusLine.refreshInterval`** as part of `:install`: if the field is missing, it's created at `10`; if it exceeds `10`, it's clamped down to `10` (with a stdout notice). See [Install-journal](#install-journal-write-ahead-log) below. Set it back manually if you want a higher cadence — uninstall will respect whatever value you chose.
 
 ### Failure handling
 
