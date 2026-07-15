@@ -227,6 +227,14 @@ export type StatAggregate = {
   // no row carries a valid startAt (legacy / missing). Drives
   // m_sumStartTime's "earliest session start" rendering.
   firstAt: number;
+  // vX.X.X — used% of the plan window this aggregate was aligned
+  // to, captured at getStatAggregate time. Populated ONLY when the
+  // caller resolved an aligned scan (alignActive=true) AND the
+  // matched interval carries a usable percent; null otherwise
+  // (non-aligned / "all" / dhms scans, or a window with no
+  // percent). Read from the structurally-passed `filter.interval`,
+  // mirroring render.ts's intervalToWindow used%-pick rule.
+  alignedUsedPercent?: number | null;
   generatedAt: number;
 };
 
@@ -1225,8 +1233,38 @@ export function getStatAggregate(filter: SumFilter): StatAggregate {
       ? samples
       : samples.filter((s) => s.model === filter.modelFilter);
   const agg = aggregateSamples(filtered);
+  // vX.X.X — when the caller resolved an aligned scan
+  // (alignActive=true), stamp the aligned plan window's used% onto
+  // the aggregate so downstream renders can read it without a
+  // second interval lookup. `filter.interval` is passed
+  // structurally by the renderer (render.ts's SumFilter carries it;
+  // status-store's SumFilter deliberately doesn't redeclare it), so
+  // we read it defensively off an `unknown`-widened view.
+  const f = filter as SumFilter & {
+    alignActive?: boolean;
+    interval?: { usedPercent?: number | null; remainingPercent?: number | null } | null;
+  };
+  if (f.alignActive === true && f.interval != null) {
+    agg.alignedUsedPercent = intervalUsedPercent(f.interval);
+  }
   setStatCache(key, agg, STAT_CACHE_TTL_MS);
   return agg;
+}
+
+// vX.X.X — mirror of render.ts's intervalToWindow used%-pick rule:
+// used% wins when present; else derive from 100 - remaining%; else
+// null (no percent available). Kept here (not imported from
+// render.ts) to avoid a status-store → render dependency edge.
+function intervalUsedPercent(
+  iv: { usedPercent?: number | null; remainingPercent?: number | null },
+): number | null {
+  if (iv.usedPercent != null) {
+    return Math.max(0, Math.min(100, iv.usedPercent));
+  }
+  if (iv.remainingPercent != null) {
+    return Math.max(0, Math.min(100, 100 - iv.remainingPercent));
+  }
+  return null;
 }
 
 // ----- In-memory tick state ----------------------------------------------------

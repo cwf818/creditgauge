@@ -305,6 +305,13 @@ const DEFAULT_CONFIG: {
     // m_accTokenCost / m_sumTokenCost. Default "cost:" preserves
     // a clean axis to override via config.json.
     labelTokenCost: string;
+    // vX.X.X+ — m_sumEstQuota module prefix. Reads the plan
+    // window's aligned used% (captured on the StatAggregate at
+    // getStatAggregate time) to estimate the periodic quota.
+    // Renders as "est:$30.20" (fixed 2dp + per-model currency).
+    // Default "est:" preserves a clean axis to override via
+    // config.json.
+    labelEstQuota: string;
     // vX.X.X+ — glyph shown by `m_pluginSource` when the active
     // provider's plugin resolved to the bundled built-in tree
     // (`dist|src/plugins/<id>/index.js`). Default "📌" preserves
@@ -440,6 +447,10 @@ const DEFAULT_CONFIG: {
     // existing "labelFoo:" convention (trailing colon included
     // so the renderer can concat without a separator).
     labelTokenCost: "cost:",
+    // vX.X.X+ — m_sumEstQuota module prefix default. Matches the
+    // existing "labelFoo:" convention (trailing colon included
+    // so the renderer can concat without a separator).
+    labelEstQuota: "est:",
     // vX.X.X+ — m_pluginSource glyph defaults. These ARE the
     // v0.9.x ship literals (📌 / 🎨) — unlike the other label*
     // defaults which preserve v0.8.x hardcoded prefixes, these
@@ -765,6 +776,8 @@ function applyOverrides(base: Config, raw: Record<string, unknown>): Config {
         "labelQuota",
         // vX.X.X+ — token cost module prefix.
         "labelTokenCost",
+        // vX.X.X+ — m_sumEstQuota module prefix.
+        "labelEstQuota",
         // vX.X.X+ — m_pluginSource glyph axis (system / user / cc / missing).
         // The renderer reads these via `labelFor("pluginSystem")` /
         // `labelFor("pluginUserDefined")` /

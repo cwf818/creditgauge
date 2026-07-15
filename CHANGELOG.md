@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.9.6
+
+### Add
+
+- **`m_sumEstQuota` module — periodic quota estimate.**
+  Renders `est:$30.20` (fixed 2dp, per-model currency prefix). Computed as the cross-project `m_sumTokenCost` formula (sumIn*in + sumOut*out + sumCachedIn*cachedIn) divided by the aligned plan window's `used%`, projecting the spent cost up to a full-period spend: `est = cost / (alignedUsedPercent / 100)`. New `labels.labelEstQuota` (default `"est:"`) for prefix override. Inline args: `color`, `nulldrop`, `model`, `window`, `align`, `term`, `valueOnly`. Three short-circuits all funnel into the `est:n/a` placeholder body for layout stability: `rows === 0` (no JSONL samples in window), `alignedUsedPercent == null` (non-aligned scan), `alignedUsedPercent === 0` (divide-by-zero guard). Natural opt-in form: `m_sumEstQuota|term:short|model:active` — no explicit `|align|true` needed.
+- **`StatAggregate.alignedUsedPercent` field.**
+  `getStatAggregate` now stamps the aligned plan window's `used%` onto the cache entry when `alignActive=true` (existing `align=true` + `|window|<windowId>` resolved path, plus the new `|term|<key>` opt-in). Read by `m_sumEstQuota` and any future consumer that needs the aligned used% without re-running the interval lookup. Populated structurally off the renderer-passed `filter.interval` — mirrors `intervalToWindow`'s used%-pick rule (used% wins, else `100 - remaining%`, else null) so a window with only `remainingPercent` is handled symmetrically.
+- **`|term|<key>` inline arg for the m_sum* family.**
+  Opt-in plan-aligned scan shortcut: `|term:<key>|model:<not all>` is equivalent to `|window:<intervals[term].windowId>|align:true|model:<same>`. Looks up `ctx.intervals[term]`, runs the scan from the interval's `startAt`, and stamps `alignedUsedPercent` on the cache entry. Mirrors the m_windowQuota / m_countdown / m_quota `term` arg shape but **opt-in** (unlike those modules where `term` defaults to `"short"` unconditionally) — defaulting `term` would silently re-define every bare m_sum* module as a 5h-aligned scan and break existing `|window|<dhms>` users. Requires `|model| != "all"` (a per-term scan without a model filter is ambiguous). Failure modes (interval missing / no usable `startAt`+`endAt`) silently fall through to the existing `|window|`/`|align|`/`dhms` path. All 13 m_sum* INLINE_SCHEMAS entries gain `...TERM_PARAM.named`. The bare MODULES form is unchanged (no params, no term).
+
 ## v0.8.43
 
 ### Remove

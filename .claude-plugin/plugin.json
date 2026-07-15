@@ -1,6 +1,6 @@
 {
   "name": "topgauge",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "description": "Provider-agnostic Claude Code statusline plugin (ToPGauge) for token-plan usage and account balance. Picks the provider from ANTHROPIC_BASE_URL (currently MiniMax + DeepSeek); hides itself otherwise. Visibility of the age annotation follows a template-driven priority: if lineTemplate includes m_age it emits unconditionally (🔗 fresh / ⛓️‍💥 stale); otherwise the stale fallback appends ⛓️‍💥 X ago only when displaying cached data after a fetch failure. Falls back to 'Usage:/Balance: not available!' when no cached data exists. Composes with another statusline via the TOPGAUGE_UPSTREAM_CMD env var.",
   "license": "MIT",
   "commands": [
