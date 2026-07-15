@@ -16,22 +16,35 @@ import { fetchForProviderByIdWithKind } from "./api.ts";
 
 // ----- URL matching -----
 
-// Three modes, all case-insensitive (matches the v0.2.20 behavior of
-// the hardcoded MiniMax / DeepSeek matchers, both of which called
-// `.toLowerCase()` on the URL before comparing).
+// Three modes, all case-insensitive AND trailing-slash-insensitive
+// (matches the v0.2.20 behavior of the hardcoded MiniMax / DeepSeek
+// matchers, both of which called `.toLowerCase()` on the URL before
+// comparing, plus the 2026-07-15 trailing-slash normalization so a
+// user with `ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic/`
+// matches against the EXACT-registered
+// `https://api.minimaxi.com/anthropic` and vice versa).
 //
 // `STARTWITH` has an extra suffix-attack guard: the character right
 // after the prefix must be undefined (end of string), "/", "?", or
 // "#". This rejects `https://api.deepseek.com.evil.example` even
 // though it technically `startsWith("https://api.deepseek.com")` —
-// the "." immediately after the prefix is not a valid boundary.
+// the "." immediately after the prefix is not a valid boundary. The
+// guard indexes into the ORIGINAL `baseUrl` at `pattern.length` (not
+// the stripped length) so a trailing-slash variant like
+// `https://api.minimaxi.com/anthropic/` against a pattern
+// `https://api.minimaxi.com/anthropic` still has the boundary check
+// land on the trailing `/` (a legal boundary char).
+function stripTrailingSlashes(s: string): string {
+  return s.replace(/\/+$/, "");
+}
+
 export function compareUrl(
   method: CompareMethod,
   baseUrl: string,
   pattern: string,
 ): boolean {
-  const url = baseUrl.toLowerCase();
-  const pat = pattern.toLowerCase();
+  const url = stripTrailingSlashes(baseUrl.toLowerCase());
+  const pat = stripTrailingSlashes(pattern.toLowerCase());
   switch (method) {
     case "EXACT":
       return url === pat;

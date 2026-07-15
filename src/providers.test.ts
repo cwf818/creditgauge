@@ -200,6 +200,161 @@ describe("matchProvider — default config", () => {
   });
 });
 
+describe("matchProvider — trailing-slash normalization (2026-07-15)", () => {
+  // The matcher strips trailing slashes on BOTH sides before
+  // comparing, so a user with ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic/
+  // matches the EXACT-registered `https://api.minimaxi.com/anthropic`
+  // and vice versa. Affects all three compare methods uniformly.
+
+  it("EXACT: matches a base URL with a trailing slash against an unslashed pattern", () => {
+    assert.equal(
+      matchProvider("https://api.minimaxi.com/anthropic/"),
+      "minimax",
+    );
+  });
+
+  it("EXACT: matches an unslashed base URL against a slashed pattern (degenerate case)", () => {
+    // Providers normally register without trailing slashes; this
+    // case asserts the strip is symmetric — a future config that
+    // happens to carry a trailing slash in BASE_URL_COMPARED_TO
+    // still resolves correctly.
+    __resetForTest({
+      providers: {
+        slashed: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "https://api.example.com/anthropic/",
+          COMPARE_METHOD: "EXACT",
+          config: {},
+        },
+      },
+    } as never);
+    assert.equal(
+      matchProvider("https://api.example.com/anthropic"),
+      "slashed",
+    );
+  });
+
+  it("EXACT: strips multiple trailing slashes (defensive)", () => {
+    assert.equal(
+      matchProvider("https://api.minimaxi.com/anthropic///"),
+      "minimax",
+    );
+  });
+
+  it("INCLUDE: trailing slash on either side is normalized", () => {
+    // bigmodel is a user-defined provider (NOT in DEFAULT_PROVIDERS
+    // since the 2026-07-15 revert) — the loader resolves it only
+    // when the user has added it to config.json's providers block.
+    // This test exercises the same INCLUDE+strip pattern through a
+    // fresh __resetForTest entry so it doesn't depend on the
+    // default registry. The plugin comment header in
+    // query_plugins/bigmodel/index.js shows the exact config.json
+    // snippet a user has to add.
+    __resetForTest({
+      providers: {
+        bigmodel: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "https://bigmodel.cn/api/anthropic",
+          COMPARE_METHOD: "INCLUDE",
+          config: {},
+        },
+      },
+    } as never);
+    assert.equal(
+      matchProvider("https://bigmodel.cn/api/anthropic/"),
+      "bigmodel",
+    );
+  });
+
+  it("bigmodel is NOT in DEFAULT_PROVIDERS (2026-07-15 revert)", () => {
+    // After the revert, a fresh config with no providers block must
+    // NOT auto-route bigmodel URLs — the user has to opt in via
+    // config.json (see query_plugins/bigmodel/index.js header).
+    assert.equal(
+      matchProvider("https://bigmodel.cn/api/anthropic"),
+      null,
+    );
+  });
+
+  it("INCLUDE: trailing slash on the PATTERN side is normalized (user override)", () => {
+    // And the inverse: a user config that registers a provider
+    // with a trailing-slash BASE_URL_COMPARED_TO still resolves
+    // against an unslashed baseUrl. We use a brand-new provider id
+    // (`trailing`) to avoid hitting `bigmodel` first via iteration
+    // order — matchProvider returns the first matching provider.
+    __resetForTest({
+      providers: {
+        trailing: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "https://api.example.com/anthropic/",
+          COMPARE_METHOD: "INCLUDE",
+          config: {},
+        },
+      },
+    } as never);
+    assert.equal(
+      matchProvider("https://api.example.com/anthropic"),
+      "trailing",
+    );
+  });
+
+  it("STARTWITH: trailing slash on either side is normalized", () => {
+    __resetForTest({
+      providers: {
+        prefix: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "https://api.example.com/anthropic",
+          COMPARE_METHOD: "STARTWITH",
+          config: {},
+        },
+      },
+    } as never);
+    assert.equal(
+      matchProvider("https://api.example.com/anthropic/"),
+      "prefix",
+    );
+    assert.equal(
+      matchProvider("https://api.example.com/anthropic/v1/messages"),
+      "prefix",
+    );
+  });
+});
+
+describe("compareUrl — trailing-slash edge cases (2026-07-15)", () => {
+  it("EXACT: returns false when only one side has a trailing slash and the other doesn't, AFTER normalization they match", () => {
+    assert.equal(
+      compareUrl("EXACT", "https://api.foo.com/bar/", "https://api.foo.com/bar"),
+      true,
+    );
+    assert.equal(
+      compareUrl("EXACT", "https://api.foo.com/bar", "https://api.foo.com/bar/"),
+      true,
+    );
+  });
+
+  it("INCLUDE: trailing slashes don't break the substring search", () => {
+    assert.equal(
+      compareUrl("INCLUDE", "https://api.foo.com/bar/path/", "https://api.foo.com/bar"),
+      true,
+    );
+  });
+
+  it("STARTWITH: suffix-attack guard still works after trailing-slash normalization", () => {
+    // `https://api.deepseek.com.evil.example` should NOT match
+    // `https://api.deepseek.com` even after the slash strip —
+    // the guard looks at baseUrl[pattern.length] = '.', which is
+    // not a legal boundary char.
+    assert.equal(
+      compareUrl(
+        "STARTWITH",
+        "https://api.deepseek.com.evil.example",
+        "https://api.deepseek.com",
+      ),
+      false,
+    );
+  });
+});
+
 describe("matchProvider — custom config", () => {
   it("matches a custom provider added via __resetForTest", () => {
     __resetForTest({
