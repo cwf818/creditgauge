@@ -25,6 +25,8 @@ ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / ora
 
 **v0.9.6** — `m_sumEstQuota|term:short` projects the spent cost up to a full-period spend using the aligned plan window's `used%`. Renders `est:$30.20` (fixed 2dp, per-model currency). Prefix is configurable via `labels.labelEstQuota` (default `"est:"`).
 
+> Requires `tokenPrices.<modelId>` to be configured for the target model (see MANUAL §m_tokenCost). Without it, the module renders `est:n/a`.
+
 ## Snapshots
 
 **Simple preset** (default `statuslineTemplate`, working with a pre-installed `claude-hud`) — minimal layout, single Quota line on its own:
