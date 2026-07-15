@@ -37,6 +37,10 @@
 #        - marketplaces/topgauge/
 #        - marketplaces/cwf818-topgauge/   (alias)
 #        - state/{cache.json, cache.stat.json, upstream-cmd.{sh,txt}}
+#        - state/install-journal.json      (install.sh's private per-field journal;
+#                                           emptied after the apply pass, so it has
+#                                           zero value once settings are reverted —
+#                                           treated as cache noise, not user-owned)
 #        - state/<projectHash>/state.json (per-project tick status)
 #        PRESERVED in DEFAULT (no --completely):
 #        - state/<projectHash>/<sessionId>.jsonl (token samples)
@@ -72,7 +76,7 @@
 #     slate (re-install is then equivalent to a fresh install).
 #   - ALWAYS wipe: cache/topgauge/, marketplaces/topgauge/,
 #     marketplaces/cwf818-topgauge/, state/{cache.json,
-#     cache.stat.json, upstream-cmd.{sh,txt}},
+#     cache.stat.json, upstream-cmd.{sh,txt}, install-journal.json},
 #     state/<projectHash>/state.json.
 #
 # Usage:
@@ -340,9 +344,14 @@ done
 # Top-level state/{cache.json, cache.stat.json, upstream-cmd.sh,
 # upstream-cmd.txt} are cache noise that would confuse a re-install
 # (stale upstream-cmd.txt points at a now-foreign command), so they
-# go. Per-project state/<projectHash>/state.json is the tickStatus
-# cache — same logic, always wiped. The .jsonl files ARE the
-# token-sample history; preserved by default, wiped under --completely.
+# go. install-journal.json is install.sh's private per-field revert
+# log — once the apply-journal-entry pass above consumed every
+# `applied: false` entry, the file holds nothing meaningful and would
+# silently leak the user's settings.json history past uninstall.
+# Treat it as cache noise (always wipe). Per-project
+# state/<projectHash>/state.json is the tickStatus cache — same logic,
+# always wiped. The .jsonl files ARE the token-sample history;
+# preserved by default, wiped under --completely.
 STATE_DIR="${PLUGINS_DIR}/topgauge/state"
 if [ -d "$STATE_DIR" ]; then
   ALWAYS_STATE_FILES=(
@@ -350,6 +359,7 @@ if [ -d "$STATE_DIR" ]; then
     "${STATE_DIR}/cache.stat.json"
     "${STATE_DIR}/upstream-cmd.sh"
     "${STATE_DIR}/upstream-cmd.txt"
+    "${STATE_DIR}/install-journal.json"
   )
   for f in "${ALWAYS_STATE_FILES[@]}"; do
     if [ -f "$f" ]; then ACTIONS+=("rm -f ${f}"); DRY_NOTHING=0; fi

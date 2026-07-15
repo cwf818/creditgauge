@@ -537,17 +537,24 @@ node -e '
   };
   fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
 '
-run_uninstall "$ROOT" >/dev/null 2>&1
+# The on-disk install-journal is always wiped by uninstall (cache
+# noise), so post-run we cannot read `entries[i].applied` from disk.
+# Capture stdout instead — if uninstall.sh printed
+# `applied: settings.json:statusLine` then the apply-journal-entry
+# pass invoked markApplied (which writes `applied:true` synchronously
+# before the wipe), which is the side effect the original disk
+# assertion was checking.
+OUT=$(run_uninstall "$ROOT" 2>&1)
 HAS_SL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env["TOPG_TEST_SETTINGS"],"utf8"));
   process.stdout.write("statusLine" in d ? "yes" : "no");
 ')
 assert_eq "[fresh-journal] statusLine removed from settings.json" "no" "$HAS_SL"
-APPLIED=$(TOPG_TEST_JOURNAL="$JOURNAL" node -e '
-  const j = JSON.parse(require("fs").readFileSync(process.env["TOPG_TEST_JOURNAL"],"utf8"));
-  process.stdout.write(j.entries[0].applied ? "yes" : "no");
+assert_match_str "[fresh-journal] apply-journal-entry reported applied" "applied: settings.json:statusLine" "$OUT"
+JOURNAL_GONE=$(TOPG_TEST_JOURNAL="$JOURNAL" node -e '
+  process.stdout.write(require("fs").existsSync(process.env["TOPG_TEST_JOURNAL"]) ? "no" : "yes");
 ')
-assert_eq "[fresh-journal] journal entry marked applied" "yes" "$APPLIED"
+assert_eq "[fresh-journal] install-journal.json wiped after uninstall" "yes" "$JOURNAL_GONE"
 rm -rf "$ROOT"
 
 echo "-- per-field revert: statusLine create entry -> user only touched refreshInterval --"
