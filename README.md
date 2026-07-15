@@ -21,6 +21,10 @@ We deliberately don't reimplement the kitchen-sink statuslines that already exis
 
 ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / orange / red. Applied to the displayed value + the colored bar segment; the empty part of the bar stays uncolored so it remains readable.
 
+## What's new
+
+**v0.9.6** — `m_sumEstQuota|term:short` projects the spent cost up to a full-period spend using the aligned plan window's `used%`. Renders `est:$30.20` (fixed 2dp, per-model currency). Prefix is configurable via `labels.labelEstQuota` (default `"est:"`).
+
 ## Snapshots
 
 **Simple preset** (default `statuslineTemplate`, working with a pre-installed `claude-hud`) — minimal layout, single Quota line on its own:
