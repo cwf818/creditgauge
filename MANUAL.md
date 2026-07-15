@@ -110,6 +110,8 @@ Every key honored by the loader, with its type, default, and validator. Source-o
     "labelMemUsage":                "Mem:",
     "labelStartTime":               "start:",
     "labelEndTime":                 "end:",
+    "labelTokenCost":               "cost:",
+    "labelEstQuota":                "est:",
     "labelPluginSystem":            "📌",
     "labelPluginUserDefined":       "🎨",
     "labelPluginMissing":           "❗",
@@ -397,7 +399,7 @@ Source bodies: `src/config.template.ts:DEFAULT_STATUSLINE_PRESETS`.
 | `balance`      | `m_modeLabel` + `m_balance`. Matches `type:balance`.                                                                     |
 | `tokens_tick`  | Per-turn tick diagnostics: speed (in/out), hit rate, `m_apiMs`, in/out/cached/total tokens, `m_tokenCost`.              |
 | `tokens_acc`   | Session-scoped accumulator: speed (in/out), hit rate, `m_accApiMs`, in/out/cached/total tokens, `m_accApiCalls`, `m_accTokenCost`, `m_accStartTime`. Inline arg `:scope:<session\|project\|model>`. |
-| `tokens_stat`  | Cross-project sum/avg scan: speed (in/out), hit rate, `m_sumApiMs`, in/out/cached/total tokens, `m_sumApiCalls`, `m_sumTokenCost`, `m_sumStartTime`, `m_sumEndTime`. Inline args `:window:<dhms\|all>`, `:model:<active\|name\|all>`, `:align:<true\|false>`. |
+| `tokens_stat`  | Cross-project sum/avg scan: speed (in/out), hit rate, `m_sumApiMs`, in/out/cached/total tokens, `m_sumApiCalls`, `m_sumTokenCost`, `m_sumEstQuota`, `m_sumStartTime`, `m_sumEndTime`. Inline args `:window:<dhms\|all>`, `:model:<active\|name\|all>`, `:align:<true\|false>`, `:term:<key>` (opt-in plan-aligned scan shortcut; requires `:model:` != `all`). |
 | `information`  | `[m_model] Context: <bar> <used>/<cap> \| Memory: <bar> <used>/<total>`.                                                |
 | `mem_info`     | `Memory: <bar> <used>/<total>`.                                                                                          |
 | `git_info`     | `Git: <branch> <status> <linesAdded> <linesRemoved>`.                                                                    |
@@ -440,18 +442,19 @@ Three semantic variants per metric: **per-turn** (stdin-only, zero IO), **acc** 
 | ------ | ---------------------- | ----------------- | ----------------- |
 | `m_tokenIn` / `m_accTokenIn` / `m_sumTokenIn` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
 | `m_tokenOut` / `m_accTokenOut` / `m_sumTokenOut` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
-| `m_tokenCachedIn` / `m_accTokenCachedIn` / `m_sumTokenCachedIn` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
-| `m_tokenInTotal` / `m_accTokenTotalIn` / `m_sumTokenTotalIn` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
+| `m_tokenCachedIn` / `m_accTokenCachedIn` / `m_sumTokenCachedIn` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
+| `m_tokenInTotal` / `m_accTokenTotalIn` / `m_sumTokenTotalIn` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
 | `m_tokenTotalOut` | `color`, `nulldrop` | — | — |
-| `m_apiMs` / `m_accApiMs` / `m_sumApiMs` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
-| `m_apiCalls` / `m_accApiCalls` / `m_sumApiCalls` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
-| `m_tokenHitRate` / `m_accTokenHitRate` / `m_sumTokenHitRate` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
-| `m_tokenInSpeed` / `m_accTokenInSpeed` / `m_sumTokenInSpeed` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
-| `m_tokenOutSpeed` / `m_accTokenOutSpeed` / `m_sumTokenOutSpeed` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
-| `m_tokenCost` / `m_accTokenCost` / `m_sumTokenCost` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
+| `m_apiMs` / `m_accApiMs` / `m_sumApiMs` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
+| `m_apiCalls` / `m_accApiCalls` / `m_sumApiCalls` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
+| `m_tokenHitRate` / `m_accTokenHitRate` / `m_sumTokenHitRate` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
+| `m_tokenInSpeed` / `m_accTokenInSpeed` / `m_sumTokenInSpeed` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
+| `m_tokenOutSpeed` / `m_accTokenOutSpeed` / `m_sumTokenOutSpeed` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
+| `m_tokenCost` / `m_accTokenCost` / `m_sumTokenCost` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
+| `m_sumEstQuota` | — | — | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
 | `m_accStartTime` | — | `color`, `nulldrop`, `scope`, `abs` | — |
-| `m_sumStartTime` | — | — | `color`, `nulldrop`, `model`, `window`, `align`, `abs` |
-| `m_sumEndTime` | — | — | `color`, `nulldrop`, `model`, `window`, `align`, `abs` |
+| `m_sumStartTime` | — | — | `color`, `nulldrop`, `model`, `window`, `align`, `term`, `abs` |
+| `m_sumEndTime` | — | — | `color`, `nulldrop`, `model`, `window`, `align`, `term`, `abs` |
 
 **Per-turn value-zero rule**: value = 0 renders as `in:0` / `out:0` / `calls:0` (don't hide).
 
@@ -508,7 +511,7 @@ Three semantic variants per metric: **per-turn** (stdin-only, zero IO), **acc** 
 | `color`     | SGR string OR shortcut (`red`, `green`, `yellow`, `blue`, `cyan`, `magenta`, `white`, `gray`, `orange`, `purple`, plus `rainbow`/`rand-rainbow`/`hue` for `m_quote`) | module's natural palette | All `m_*` modules. Replaces the module's band color. Always wins. |
 | `nulldrop`  | `true` \| `false`                                                              | `false`            | All `m_*` modules. `false` → keep placeholder slot; `true` → drop the chunk.        |
 | `display`   | `used` \| `remaining`                                                          | global `display`   | Window modules only (`m_windowQuota`/`m_windowContext`/`m_windowMemUsage`). Flip which side of the bar is colored and which percentage is shown. Inline wins over config. |
-| `term`      | any non-empty string (reserved: `short` / `mid` / `long`)                     | `short`            | `m_windowQuota` / `m_countdown` / `m_quota`. Selects the intervals dict key — three reserved plus any plugin-declared (`monthly`, `yearly`, …). |
+| `term`      | any non-empty string (reserved: `short` / `mid` / `long`)                     | `short`            | `m_windowQuota` / `m_countdown` / `m_quota`: selects the intervals dict key — three reserved plus any plugin-declared (`monthly`, `yearly`, …). `m_sum*` family: opt-in **plan-aligned scan shortcut** — `\|term:<key>\|model:<not all>` is equivalent to `\|window:<intervals[term].windowId>\|align:true\|model:<same>`. Stamp `intervals[<key>]`'s `startAt` as the scan anchor and populate `StatAggregate.alignedUsedPercent` so `m_sumEstQuota` gets a usable estimate without the explicit `\|align\|true` opt-in. Requires `\|model\| != "all"` (a per-term scan without a model filter is ambiguous). Failures (interval missing / no usable `startAt`+`endAt`) silently fall through to the existing `\|window\|`/`\|align\|`/`dhms` path. |
 | `type`      | `quota` \| `balance`                                                           | (provider-agnostic) | `m_template` only. Filter sub-template by provider TYPE. Absent = universal.        |
 | `provider`  | any non-empty string                                                           | (no per-instance gate) | `m_template` only. Gates to one specific provider instance.                  |
 | `scope`     | `session` \| `project` \| `model`                                              | `session`          | `m_acc*` only. Pick which slot of the three-layer accumulator.                       |
@@ -704,7 +707,9 @@ Three-layer in-memory accumulator (session / project / model). Each tick's `curr
 
 ### Sum modules
 
-Cross-project JSONL scan. Inline args `model` (default `active`), `window` (default `all`), `align` (default `false`). With `align=true` and a `<interval.windowId>` declared in the active provider's plugin output, the scan runs plan-anchored against that interval's `resetStartAt`.
+Cross-project JSONL scan. Inline args `model` (default `active`), `window` (default `all`), `align` (default `false`), `term` (opt-in, see below). With `align=true` and a `<interval.windowId>` declared in the active provider's plugin output, the scan runs plan-anchored against that interval's `resetStartAt`.
+
+`|term|<key>` is a shorthand for `|window|<intervals[term].windowId>|align:true` plus the `|model|` filter — it looks up `ctx.intervals[term]` and runs the plan-aligned scan from that interval's `startAt`. Requires `|model| != "all"` (a per-term scan without a model filter is ambiguous; the user should write the explicit `|window|...|align|true` form for `|model|all` scans). Stamps `StatAggregate.alignedUsedPercent` on the cache entry, which `m_sumEstQuota` reads to compute the periodic quota estimate without an explicit `|align|true`. Failure modes (interval missing / no usable `startAt`+`endAt`) silently fall through to the existing `|window|`/`|align|`/`dhms` path.
 
 ### `m_tokenCost` / `m_accTokenCost` / `m_sumTokenCost`
 
@@ -715,6 +720,26 @@ Tiered precision via `tokenFormat.precision`:
 - `value >= 0.01`        → `12.345` (3 dp)
 - `value >= 0.0001`      → `1.23` (2 dp)
 - `value < 0.0001`       → `1.2` (1 dp)
+
+### `m_sumEstQuota`
+
+Periodic quota **estimate**, computed as the cross-project cost (the `m_sumTokenCost` formula above) divided by the aligned plan window's `used%` — projecting the spent cost up to a full-period spend:
+
+```
+est = (sumIn*in + sumOut*out + sumCachedIn*cachedIn) / (alignedUsedPercent / 100)
+```
+
+Output is fixed 2dp (e.g. `est:$30.20`) regardless of magnitude, prefixed with the per-model currency (USD renders bare; other currencies get a `<code>` prefix like `est:CNY30.20`). Prefix is configurable via `labels.labelEstQuota` (default `"est:"`).
+
+The aligned used% is read from `StatAggregate.alignedUsedPercent`, which `getStatAggregate` stamps on the cache entry when `alignActive=true`. The module has three short-circuits that all funnel into the `est:n/a` placeholder body for layout stability:
+
+- `rows === 0` (no JSONL samples in window) — placeholder.
+- `alignedUsedPercent == null` (non-aligned scan: `|window|all`, free-form dhms, or `|align|false` with no declared match) — placeholder. **Use `|term|<key>|model|<not all>` to opt in.**
+- `alignedUsedPercent === 0` (divide-by-zero guard) — placeholder.
+
+The natural opt-in is `|term|<key>|model|<not all>` (e.g. `m_sumEstQuota|term:short|model:active`), which makes `m_sumEstQuota` usable without writing `|align|true` explicitly. The full form `|window|<windowId>|align:true|model:<id>` also works and is the equivalent for `|model|all` scans.
+
+Inline args: `color`, `nulldrop`, `model`, `window`, `align`, `term`, `valueOnly`.
 
 ---
 
