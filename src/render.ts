@@ -176,6 +176,7 @@ type LabelAxis =
   | "startTime" | "endTime" // v0.8.24+ — start/end of the tick statistics window
   | "quota"   // v0.9.0+ — quota module prefix ("quota(5h):123/500")
   | "cost"    // vX.X.X+ — token cost module prefix ("cost:$0.0123")
+  | "est"     // vX.X.X+ — periodic quota estimate prefix ("est:$30.20")
   | "pluginSystem"        // vX.X.X+ — m_pluginSource glyph when built-in (default "⚙")
   | "pluginUserDefined"   // vX.X.X+ — m_pluginSource glyph when user override (default "🎨")
   | "pluginCC"            // vX.X.X+ — m_pluginSource glyph reserved for the
@@ -221,6 +222,10 @@ function labelFor(axis: LabelAxis): string {
     // config.ts:DEFAULT_CONFIG.labels.labelTokenCost). Read by
     // m_tokenCost / m_accTokenCost / m_sumTokenCost.
     case "cost": return labels.labelTokenCost;
+    // vX.X.X+ — periodic quota estimate prefix. Default "est:" (set
+    // in config.ts:DEFAULT_CONFIG.labels.labelEstQuota). Read by
+    // m_sumEstQuota.
+    case "est": return labels.labelEstQuota;
     // vX.X.X+ — m_pluginSource glyph axes. Defaults "📌" / "🎨" /
     // "🔖" / "❗" (set in config.ts:DEFAULT_CONFIG.labels). Users
     // override via labels.labelPluginSystem /
@@ -2600,6 +2605,50 @@ m_quota: Object.assign(
     const cost = ((tp.in / 1_000_000) * agg.sumIn) + ((tp.out / 1_000_000) * agg.sumOut) + ((tp.cachedIn / 1_000_000) * agg.sumCached);
     return wrapValueDefault("m_sumTokenCost", cost, `${prefix}${formatCostWithCurrency(cost, tp.currency)}`, undefined);
   },
+  // vX.X.X+ — periodic quota estimate. Same price math as
+  // m_sumTokenCost (sumIn*in + sumOut*out + sumCached*cachedIn) but
+  // divided by the aligned plan window's used% (captured on the
+  // StatAggregate by getStatAggregate when alignActive=true) to
+  // project the spent cost up to a full-period spend:
+  //   est = cost / (alignedUsedPercent / 100)
+  // Output uses fixed 2dp ("$30.20") regardless of magnitude so
+  // the render stays stable across a window's lifetime. Three
+  // short-circuit cases:
+  //   - rows === 0            → placeholder (m_sum* family default)
+  //   - alignedUsedPercent==null (non-aligned / no percent) → "n/a"
+  //   - alignedUsedPercent==0                              → "--"
+  // m_sumEstQuota requires alignActive=true to read the aligned
+  // used%; non-aligned / "all" / dhms scans render "n/a". Users
+  // who want a usable estimate must pass |window|<declared id>|
+  // align|true so parseWindowScope returns a filter with
+  // alignActive=true and the matched interval.
+  m_sumEstQuota: (c) => {
+    const filter = parseWindowScope(c, c.passThrough ?? {});
+    if (!filter) return null;
+    const agg = fetchSumAggregate(filter);
+    if (agg.rows === 0) return placeholderBare("m_sumEstQuota", c);
+    // v0.9.x — explicit |model|<literal> wins; otherwise active
+    // model id. (Same rule as the m_tokenCost family.)
+    const lookupId = filter.modelFilter !== undefined ? filter.modelFilter : c.tokens?.modelId;
+    const tp = resolveTokenPrice(lookupId ?? null);
+    if (!tp || tp.in + tp.out + tp.cachedIn <= 0) return placeholderBare("m_sumEstQuota", c);
+    // vX.X.X+ — the aligned used% is stamped on the aggregate by
+    // getStatAggregate. null on every non-aligned path (window=all
+    // / dhms / no plan window matched). The user contract: null →
+    // "n/a" (no aligned plan to project against).
+    const pct = agg.alignedUsedPercent;
+    if (pct == null) return placeholderBare("m_sumEstQuota", c);
+    // vX.X.X+ — the user contract: alignedUsedPercent===0 →
+    // "--" (no data yet / window just started; dividing by 0
+    // would be infinity). Distinct from null ("n/a") which means
+    // "no aligned plan matched" rather than "data is zero".
+    if (pct === 0) return placeholderBare("m_sumEstQuota", c);
+    // vX.X.X+ — |valueOnly|true drops the "est:" prefix.
+    const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("est");
+    const cost = ((tp.in / 1_000_000) * agg.sumIn) + ((tp.out / 1_000_000) * agg.sumOut) + ((tp.cachedIn / 1_000_000) * agg.sumCached);
+    const est = cost / (pct / 100);
+    return wrapValueDefault("m_sumEstQuota", est, `${prefix}${formatEstCostWithCurrency(est, tp.currency)}`, undefined);
+  },
   m_sumApiMs: (c) => {
     // v0.8.7+ — bare m_sum* reads c.passThrough (forwarded by an outer m_template); v0.8.14+ — zero-row renders placeholder (was: drop)
     const filter = parseWindowScope(c, c.passThrough ?? {});
@@ -3215,6 +3264,30 @@ function formatCostWithCurrency(cost: number, currency: string): string {
   return `${currency}${body}`;
 }
 
+// vX.X.X+ — fixed-2dp cost formatter for m_sumEstQuota. The
+// m_tokenCost family uses tiered precision (2-5dp) because the
+// per-call cost can be tiny; the periodic-quota estimate lives at
+// a much larger magnitude (e.g. $30.20 / period) so always-2dp
+// matches the user's "保留2位小数" contract and keeps the render
+// stable across the lifetime of a window. Non-finite / negative
+// values collapse to "0.00" (matches formatCost's defensive
+// floor).
+function formatEstCost(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return "0.00";
+  return n.toFixed(2);
+}
+
+// vX.X.X+ — currency-aware wrapper for the periodic quota
+// estimate. Mirrors formatCostWithCurrency's "USD → bare body,
+// other currency → ${currency}${body}" rule so a user with
+// "CNY" / "￥" prices sees the same prefix shape for cost and
+// est. Co-located with formatEstCost.
+function formatEstCostWithCurrency(cost: number, currency: string): string {
+  const body = formatEstCost(cost);
+  if (!currency || currency === "USD") return body;
+  return `${currency}${body}`;
+}
+
 // v0.4.0+ — 5-band color picker for the speed scale.
 // Faster = greener; slower = redder. Same color palette
 // shape as the existing 5-band gauge modules
@@ -3718,6 +3791,10 @@ const DEFAULT_COLORS: Record<string, string> = {
   m_tokenCost: configStore.get().colors.yellow,
   m_accTokenCost: configStore.get().colors.yellow,
   m_sumTokenCost: configStore.get().colors.yellow,
+  // vX.X.X+ — m_sumEstQuota sits in the same monetary yellow/orange
+  // family as the m_tokenCost family; reusing yellow keeps the
+  // visual contract consistent for users composing both modules.
+  m_sumEstQuota: configStore.get().colors.yellow,
 };
 
 // Snapshot of `cfg().colors` + the `brightBlack` input shortcut. Read
@@ -4627,6 +4704,15 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   m_tokenCost: placeholderLabelOr("cost"),
   m_accTokenCost: placeholderLabelOr("cost"),
   m_sumTokenCost: placeholderLabelOr("cost"),
+  // vX.X.X+ — m_sumEstQuota placeholder. Same shape as
+  // m_sumTokenCost (prefix + "n/a") so users composing both
+  // modules see a uniform "no reading yet" body. The renderer's
+  // three short-circuits (rows===0, alignedUsedPercent==null,
+  // alignedUsedPercent===0) all funnel into this body — the
+  // distinction between "no data" and "no plan" is collapsed into
+  // a single n/a for layout stability, matching the rest of the
+  // m_sum* family.
+  m_sumEstQuota: placeholderLabelOr("est"),
 };
 
 // Render a placeholder body unless the user has explicitly opted
@@ -5288,6 +5374,9 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // surface as the other m_sum* modules (color + nulldrop + model +
   // window + align).
   m_sumTokenCost: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
+  // vX.X.X+ — m_sumEstQuota reuses the m_sum* param surface
+  // (color / nulldrop / model / window / align / valueOnly).
+  m_sumEstQuota: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
   // v0.4.0+ — sub-template reference. First argument is the key
   // into cfg().lineTemplates (the user's reusable-fragment
   // registry). Optional `:type|<plan|balance>` filter (default
@@ -6124,6 +6213,27 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     // v0.8.40+ — |valueOnly|true drops the "cost:" prefix.
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("cost");
     return wrapValueDefault("m_sumTokenCost", cost, `${prefix}${formatCostWithCurrency(cost, tp.currency)}`, passThroughOr<string>(params, ctx, "color"));
+  },
+  // vX.X.X+ — inline form of m_sumEstQuota. Mirrors the bare form
+  // verbatim except placeholderWithColor + passThroughOr<color>
+  // (matches the m_sumTokenCost / m_sumApiMs family contract).
+  m_sumEstQuota: (params, ctx) => {
+    const merged = mergePassThrough(params, ctx);
+    const filter = parseWindowScope(ctx, merged);
+    if (!filter) return INLINE_BADARG;
+    const agg = fetchSumAggregate(filter);
+    if (agg.rows === 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
+    const lookupId = filter.modelFilter !== undefined ? filter.modelFilter : ctx.tokens?.modelId;
+    const tp = resolveTokenPrice(lookupId ?? null);
+    if (!tp || tp.in + tp.out + tp.cachedIn <= 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
+    const pct = agg.alignedUsedPercent;
+    if (pct == null) return placeholderWithColor("m_sumEstQuota", params, ctx);
+    if (pct === 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
+    const cost = ((tp.in / 1_000_000) * agg.sumIn) + ((tp.out / 1_000_000) * agg.sumOut) + ((tp.cachedIn / 1_000_000) * agg.sumCached);
+    const est = cost / (pct / 100);
+    // vX.X.X+ — |valueOnly|true drops the "est:" prefix.
+    const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("est");
+    return wrapValueDefault("m_sumEstQuota", est, `${prefix}${formatEstCostWithCurrency(est, tp.currency)}`, passThroughOr<string>(params, ctx, "color"));
   },
   m_sumApiMs: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
@@ -7086,6 +7196,15 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
         // startsWith("m_sumTokenOut|").
         // v0.8.13+ — fixed skipLen from buggy 20 to 19 (off-by-one).
         inline = expandInlineToken(tok, "m_sumTokenOutSpeed", 19, ctx);
+      } else if (tok.startsWith("m_sumEstQuota|")) {
+        // vX.X.X+ — m_sumEstQuota → skip prefix+pipe (14 chars).
+        // Listed before m_sumTokenCost (also 14 chars + "|" = 15)
+        // because both share the "m_sum" + 14-char stem and differ
+        // at position 5 ('E' vs 'T'); whichever branch runs first
+        // is fine (the startsWith guards make them disjoint), but
+        // grouping all est-related tokens near the top of the
+        // m_sum* cluster keeps related logic co-located.
+        inline = expandInlineToken(tok, "m_sumEstQuota", 14, ctx);
       } else if (tok.startsWith("m_sumTokenCost|")) {
         // vX.X.X+ — m_sumTokenCost → skip prefix+pipe (15 chars).
         // Listed before m_sumTokenCachedIn (19) / m_sumTokenIn (13) /

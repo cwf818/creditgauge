@@ -7195,6 +7195,241 @@ describe("renderTemplate — m_tokenCost family (v0.9.x per-model prices)", () =
     // formatCost: ≥0.1 < 1 → 3dp → "0.750"
     assert.equal(strip(out), "cost:0.750");
   });
+
+  // ------------------------------------------------------------------
+  // m_sumEstQuota (periodic quota estimate)
+  // est = sum(in*price + out*price + cached*price) / (alignedUsedPercent / 100)
+  // Renders fixed 2dp with per-model currency prefix.
+  // Requires |window|<declared id>|align|true so parseWindowScope
+  // returns alignActive=true and getStatAggregate stamps
+  // alignedUsedPercent on the aggregate. Three short-circuits:
+  //   rows===0, alignedUsedPercent==null, alignedUsedPercent===0.
+  // ------------------------------------------------------------------
+  it("m_sumEstQuota with no samples → placeholder", () => {
+    __resetStatCacheForTest();
+    const snap = fakeSnapshot();
+    const out = renderTemplate(["m_sumEstQuota|window:5h|align:true|model:all"], ctxFor(snap)).join("\n");
+    assert.match(strip(out), /est:n\/a/);
+  });
+
+  it("m_sumEstQuota|window|<declared>|align|true → cost / alignedUsedPercent, fixed 2dp", () => {
+    __resetStatCacheForTest();
+    // Seed the aggregate at the aligned key (stat:all:5h:true).
+    // alignedUsedPercent=25 → divide cost by 0.25.
+    setStatCacheForTest(
+      "stat:all:5h:true",
+      {
+        sumIn: 300,
+        sumOut: 150,
+        sumCached: 70,
+        sumTotalIn: 450,
+        sumApiMs: 120_000,
+        rows: 2,
+        calls: 2,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 10_000,
+        generatedAt: Date.now(),
+        alignedUsedPercent: 25,
+      },
+      300_000,
+    );
+    // Build a ctx with a declared interval that has usedPercent=25,
+    // matching what the runtime would have seen. parseWindowScope
+    // reads `intervals.short.windowId === "5h"` and matches against
+    // the `|window|5h` arg, so a 5h interval with usedPercent=25
+    // produces a filter with alignActive=true.
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        short: {
+          windowId: "5h",
+          label: "5h",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 5 * 3600 * 1000,
+          intervalMs: 5 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const out = renderTemplate(["m_sumEstQuota|window:5h|align:true|model:all"], ctx).join("\n");
+    // cost = 300*0.01 + 150*0.02 + 70*0.005 = 3.0 + 3.0 + 0.35 = 6.35
+    // est = 6.35 / 0.25 = 25.40
+    // formatEstCost: 2dp → "25.40"
+    assert.equal(strip(out), "est:25.40");
+  });
+
+  it("m_sumEstQuota|align|false (default) → placeholder (no aligned used% stamped)", () => {
+    // alignActive=false (no align=true inline arg) → getStatAggregate
+    // does NOT stamp alignedUsedPercent → null on the aggregate →
+    // placeholder. The user must opt into align=true to get a
+    // usable estimate.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:all:5h:false",
+      {
+        sumIn: 100,
+        sumOut: 50,
+        sumCached: 20,
+        sumTotalIn: 120,
+        sumApiMs: 30_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+        // NO alignedUsedPercent → null on the aggregate.
+      },
+      300_000,
+    );
+    const snap = fakeSnapshot();
+    const out = renderTemplate(["m_sumEstQuota|window:5h|model:all"], ctxFor(snap)).join("\n");
+    assert.match(strip(out), /est:n\/a/);
+  });
+
+  it("m_sumEstQuota with alignedUsedPercent===0 → placeholder", () => {
+    // The user contract: alignedUsedPercent===0 → "--" placeholder
+    // (divide-by-zero would otherwise yield Infinity). Tests via
+    // the STALE_COLOR-wrapped "est:n/a" body; the renderer's
+    // three short-circuits all funnel into the same placeholder
+    // body for layout stability.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:all:5h:true",
+      {
+        sumIn: 100,
+        sumOut: 50,
+        sumCached: 20,
+        sumTotalIn: 120,
+        sumApiMs: 30_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+        alignedUsedPercent: 0,
+      },
+      300_000,
+    );
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        short: {
+          windowId: "5h",
+          label: "5h",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 5 * 3600 * 1000,
+          intervalMs: 5 * 3600 * 1000,
+          remainingPercent: 100,
+          usedPercent: 0,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const out = renderTemplate(["m_sumEstQuota|window:5h|align:true|model:all"], ctx).join("\n");
+    assert.match(strip(out), /est:n\/a/);
+  });
+
+  it("m_sumEstQuota with non-USD currency → 'est:<code><value>'", () => {
+    // v0.9.x — non-USD currencies get a bare currency-code prefix
+    // (no separator), matching the m_tokenCost family's
+    // formatCostWithCurrency contract. CNY is one of the historical
+    // test fixtures.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:all:5h:true",
+      {
+        sumIn: 100,
+        sumOut: 50,
+        sumCached: 20,
+        sumTotalIn: 120,
+        sumApiMs: 30_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+        alignedUsedPercent: 50,
+      },
+      300_000,
+    );
+    const cfg = configStore.get();
+    cfg.tokenPrices = {
+      "MiniMax-M3": { in: 10_000, out: 20_000, cachedIn: 5_000, currency: "CNY" },
+    };
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        short: {
+          windowId: "5h",
+          label: "5h",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 5 * 3600 * 1000,
+          intervalMs: 5 * 3600 * 1000,
+          remainingPercent: 50,
+          usedPercent: 50,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const out = renderTemplate(["m_sumEstQuota|window:5h|align:true|model:all"], ctx).join("\n");
+    // cost = 100*0.01 + 50*0.02 + 20*0.005 = 1.0 + 1.0 + 0.1 = 2.1
+    // est = 2.1 / 0.5 = 4.20
+    // formatEstCost: 2dp → "4.20" → CNY prefix → "CNY4.20"
+    assert.equal(strip(out), "est:CNY4.20");
+  });
+
+  it("m_sumEstQuota|valueOnly|true drops the 'est:' prefix", () => {
+    // |valueOnly|true is the value-only knob shared by every
+    // m_sum* module with a label. Mirror m_sumTokenCost's contract.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:all:5h:true",
+      {
+        sumIn: 50,
+        sumOut: 25,
+        sumCached: 5,
+        sumTotalIn: 55,
+        sumApiMs: 15_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+        alignedUsedPercent: 25,
+      },
+      300_000,
+    );
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        short: {
+          windowId: "5h",
+          label: "5h",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 5 * 3600 * 1000,
+          intervalMs: 5 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const out = renderTemplate(["m_sumEstQuota|window:5h|align:true|model:all|valueOnly:true"], ctx).join("\n");
+    // cost = 50*0.01 + 25*0.02 + 5*0.005 = 0.5 + 0.5 + 0.025 = 1.025
+    // est = 1.025 / 0.25 = 4.10
+    // |valueOnly|true drops the "est:" prefix.
+    assert.equal(strip(out), "4.10");
+  });
 });
 
 describe("renderTemplate — |valueOnly| inline arg — label strip on label-using m_* modules (vX.X.X+)", () => {
