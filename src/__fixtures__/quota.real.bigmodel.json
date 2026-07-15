@@ -1,0 +1,25 @@
+{
+  "success": true,
+  "data": {
+    "level": "pro",
+    "limits": [
+      {
+        "type": "TOKENS_LIMIT",
+        "percentage": 42,
+        "nextResetTime": 1751898000000
+      },
+      {
+        "type": "TOKENS_LIMIT",
+        "percentage": 18,
+        "nextResetTime": 1752230400000
+      },
+      {
+        "type": "TIME_LIMIT",
+        "remaining": 800,
+        "currentValue": 200,
+        "usage": 1000,
+        "nextResetTime": 1753200000000
+      }
+    ]
+  }
+}
