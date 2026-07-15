@@ -21,28 +21,6 @@ We deliberately don't reimplement the kitchen-sink statuslines that already exis
 
 ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / orange / red. Applied to the displayed value + the colored bar segment; the empty part of the bar stays uncolored so it remains readable.
 
-## What's new
-
-### v0.9.6 — 额度预估 `m_sumEstQuota|term:short`
-
-新增 `m_sumEstQuota` 模块 —— 把当前窗口已花费的 token 成本，按计划窗口的 `used%` 反推成**整周期的额度预估**：
-
-```
-est = (sumIn*in + sumOut*out + sumCachedIn*cachedIn) / (alignedUsedPercent / 100)
-```
-
-输出固定 2 位小数 + 按模型的货币前缀（USD 裸显示，其他货币如 `CNY30.20` 前缀加 `<code>`）。无需再手写 `|align|true`：
-
-```jsonc
-// 行模板里加一条：
-["...", "m_sumEstQuota|term:short|model:active", "..."]
-// 渲染示例：
-//   est:$30.20
-//   est:CNY30.20
-```
-
-`labels.labelEstQuota`（默认 `"est:"`）可改前缀。配套的 `|term|<key>` 参数也给整个 `m_sum*` 家族用上了 —— 显式 `|term|short|model:active` 等价于 `|window|5h|align|true|model:active`，少敲两个参数。详见 [MANUAL §m_sumEstQuota](./MANUAL.md#m_sumestquota) 和 [§Sum modules](./MANUAL.md#sum-modules)。
-
 ## Snapshots
 
 **Simple preset** (default `statuslineTemplate`, working with a pre-installed `claude-hud`) — minimal layout, single Quota line on its own:
