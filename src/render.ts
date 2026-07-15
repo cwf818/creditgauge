@@ -3512,6 +3512,69 @@ function parseWindowScope(
     modelFilter = modelRaw;
   }
 
+  // vX.X.X+ — `|term|<key>` for the m_sum* family. Looks up
+  // `ctx.intervals[term]` and, on a hit, runs a plan-aligned
+  // scan from the interval's `startAt` with the matched
+  // interval stamped on the filter (so downstream
+  // `getStatAggregate` populates `alignedUsedPercent` and
+  // m_sumEstQuota gets a usable estimate).
+  //
+  // User contract: `term` is equivalent to writing
+  //   `|window|<intervals[term].windowId>|align|true`
+  // — but `term` ALSO requires `model != "all"` (a per-term
+  // scan without a model filter is ambiguous: per-model
+  // sum-in vs. all-model sum-in over the same window give
+  // very different readings, and the per-term short-circuit
+  // picks the per-model reading). When `model=all` the user
+  // should write the explicit `|window|...|align|true` form
+  // instead, and parseWindowScope silently falls through to
+  // that path (no warn — the user may have legitimately set
+  // both).
+  //
+  // Opt-in: `term` only takes effect when the user EXPLICITLY
+  // sets `|term|<key>`. Unlike m_windowQuota (where the term
+  // axis is the primary selector with a "short" default), the
+  // m_sum* family already has a "no time anchor" default via
+  // `|window|`-omitted → "all" sentinel. Defaulting `term` to
+  // "short" unconditionally would silently change every bare
+  // m_sum* module to a 5h-aligned scan (breaking existing
+  // `|window|<dhms>` users who depend on the wall-clock
+  // default). The opt-in contract is the safer reading of the
+  // user spec — `term` is a NEW axis, not a re-definition of
+  // the existing `window` default.
+  //
+  // Failure modes (interval missing / no usable startAt+endAt)
+  // also fall through to the existing window/align/dhms logic
+  // below — `term` is a CONVENIENCE, not a hard requirement.
+  const termRaw = params.term;
+  if (
+    typeof termRaw === "string" &&
+    termRaw !== "all" &&
+    modelFilter !== undefined
+  ) {
+    const iv = intervalForTerm(termRaw, ctx);
+    if (iv != null) {
+      const w = intervalToWindow(iv);
+      if (
+        w != null &&
+        typeof w.resetStartAt === "string" &&
+        typeof w.resetDurationMs === "number" &&
+        w.resetDurationMs > 0
+      ) {
+        const anchorMs = Date.parse(w.resetStartAt);
+        if (Number.isFinite(anchorMs)) {
+          return {
+            windowKey: termRaw,
+            sinceMs: anchorMs,
+            interval: iv,
+            alignActive: true,
+            modelFilter,
+          };
+        }
+      }
+    }
+  }
+
   // Bare form defaults to "all" (no time anchor) — opposite of the
   // legacy v0.8.x "5h" default. A bare `m_sumTokenIn` now reads
   // the entire cross-project JSONL; explicit `|window|<dhms>` is
@@ -5281,15 +5344,15 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // resolver rejects malformed dhms strings at parse time →
   // badarg → dispatcher warn + drop. Same for the MODEL/ALIGN
   // schemas.
-  m_sumTokenIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_sumTokenOut: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_sumTokenCachedIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_sumTokenTotalIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_sumApiMs: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_sumTokenHitRate: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_sumTokenInSpeed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_sumTokenOutSpeed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_sumApiCalls: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumTokenIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumTokenOut: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumTokenCachedIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumTokenTotalIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumApiMs: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumTokenHitRate: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumTokenInSpeed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumTokenOutSpeed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumApiCalls: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
   // v0.8.24+ — start/end of the tick statistics window. Same 5-axis
   // arg surface as the other m_sum* modules (model/window/align +
   // color/nulldrop). Empty window / all-legacy rows → placeholder
@@ -5297,8 +5360,8 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // PLACEHOLDERS entry — see `placeholderBare` at the dispatcher).
   // v0.8.25+ — |abs|<true|false> toggles YYYY-MM-DD HH:MM:SS vs HH:MM:SS.
   // vX.X.X+ — |valueOnly|<true|false> strips the label prefix (default false).
-  m_sumStartTime: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...ABS_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_sumEndTime: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...ABS_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumStartTime: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...ABS_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumEndTime: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...ABS_PARAM.named, ...VALUEONLY_PARAM.named } },
   // v0.3.6+ — quote module. Accepts `:freq|<numeric-time>` and
   // `:color|<sgr|shortcut|rainbow|rand-rainbow|hue>`. The freq
   // grammar is the single-unit time format `<digits><unit>` (bare
@@ -5373,10 +5436,10 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // vX.X.X+ — windowed token cost inline-args. Same 5-axis arg
   // surface as the other m_sum* modules (color + nulldrop + model +
   // window + align).
-  m_sumTokenCost: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_sumTokenCost: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
   // vX.X.X+ — m_sumEstQuota reuses the m_sum* param surface
-  // (color / nulldrop / model / window / align / valueOnly).
-  m_sumEstQuota: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...VALUEONLY_PARAM.named } },
+  // (color / nulldrop / model / window / align / term / valueOnly).
+  m_sumEstQuota: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
   // v0.4.0+ — sub-template reference. First argument is the key
   // into cfg().lineTemplates (the user's reusable-fragment
   // registry). Optional `:type|<plan|balance>` filter (default

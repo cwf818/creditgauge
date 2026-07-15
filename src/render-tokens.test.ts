@@ -7430,6 +7430,186 @@ describe("renderTemplate — m_tokenCost family (v0.9.x per-model prices)", () =
     // |valueOnly|true drops the "est:" prefix.
     assert.equal(strip(out), "4.10");
   });
+
+  // ------------------------------------------------------------------
+  // m_sum*|term| (plan-aligned scan via the term short-circuit)
+  // When |term|<key> is set AND model != "all" AND the resolved
+  // interval has a valid startAt+endAt, parseWindowScope returns
+  // a filter with alignActive=true and the matched interval. The
+  // downstream aggregate carries alignedUsedPercent so m_sumEstQuota
+  // becomes usable without the explicit |align|true opt-in.
+  // ------------------------------------------------------------------
+  it("m_sumTokenIn|term|short|model|active → aligned scan on intervals.short", () => {
+    // The aggregate cache key for an aligned scan with active
+    // model filter is "stat:<modelId>:short:true" (windowKey="short",
+    // alignActive=true). Seed at that key with rows>0.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:short:true",
+      {
+        sumIn: 1000,
+        sumOut: 500,
+        sumCached: 100,
+        sumTotalIn: 1100,
+        sumApiMs: 60_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+      },
+      300_000,
+    );
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        short: {
+          windowId: "5h",
+          label: "5h",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 5 * 3600 * 1000,
+          intervalMs: 5 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const out = renderTemplate(["m_sumTokenIn|term:short|model:active"], ctx).join("\n");
+    // sumIn=1000 → formatThousands (≥1k < 1m) → "1.0k"
+    assert.equal(strip(out), "in:1.0k");
+  });
+
+  it("m_sumEstQuota|term|short|model|active → cost / alignedUsedPercent (term is the align shortcut)", () => {
+    // The headline use case for |term|: with the term short-circuit,
+    // m_sumEstQuota no longer needs explicit |align|true to get a
+    // usable estimate. Same math as the explicit
+    // |window:5h|align:true|model:all| case.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:short:true",
+      {
+        sumIn: 300,
+        sumOut: 150,
+        sumCached: 70,
+        sumTotalIn: 450,
+        sumApiMs: 120_000,
+        rows: 2,
+        calls: 2,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 10_000,
+        generatedAt: Date.now(),
+        alignedUsedPercent: 25,
+      },
+      300_000,
+    );
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        short: {
+          windowId: "5h",
+          label: "5h",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 5 * 3600 * 1000,
+          intervalMs: 5 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const out = renderTemplate(["m_sumEstQuota|term:short|model:active"], ctx).join("\n");
+    // cost = 300*0.01 + 150*0.02 + 70*0.005 = 3.0 + 3.0 + 0.35 = 6.35
+    // est = 6.35 / 0.25 = 25.40
+    // formatEstCost: 2dp → "25.40"
+    assert.equal(strip(out), "est:25.40");
+  });
+
+  it("m_sumTokenIn|term|short|model|all → falls through to window/align (term requires model != all)", () => {
+    // |term|short|model|all: the term short-circuit requires a
+    // model filter (model != "all"). When model=all, parseWindowScope
+    // falls through to the existing |window|/|align| path. The user
+    // should write |window|5h|align|true explicitly for an
+    // all-model aligned scan. Verify the term is silently ignored
+    // (no warn) and the existing |window|5h dhms path runs as a
+    // safe default.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:all:5h:false",
+      {
+        sumIn: 50,
+        sumOut: 25,
+        sumCached: 5,
+        sumTotalIn: 55,
+        sumApiMs: 15_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+      },
+      300_000,
+    );
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        short: {
+          windowId: "5h",
+          label: "5h",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 5 * 3600 * 1000,
+          intervalMs: 5 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    // Explicit |window|5h (no align) → dhms wall-clock scan, the
+    // existing path. |term|short|model|all: term is silently
+    // dropped because model=all, so the dhms path runs untouched.
+    const out = renderTemplate(["m_sumTokenIn|term:short|model:all|window:5h"], ctx).join("\n");
+    // 50 → formatThousands → "50"
+    assert.equal(strip(out), "in:50");
+  });
+
+  it("m_sumTokenIn|term|<unknown> → falls through to window/align (term miss is not fatal)", () => {
+    // |term|monthly with no monthly interval in ctx → intervalForTerm
+    // returns null → fall through to the existing window/align
+    // path. No warn (the term is just absent). Mirrors the
+    // "term is a CONVENIENCE, not a hard requirement" contract.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:5h:false",
+      {
+        sumIn: 100,
+        sumOut: 50,
+        sumCached: 20,
+        sumTotalIn: 120,
+        sumApiMs: 30_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+      },
+      300_000,
+    );
+    // ctx has no "monthly" interval — intervalForTerm returns null.
+    // |window|5h (dhms) takes over.
+    const out = renderTemplate(
+      ["m_sumTokenIn|term:monthly|model:active|window:5h"],
+      ctxFor(fakeSnapshot()),
+    ).join("\n");
+    // dhms 5h scan → 100 → "100"
+    assert.equal(strip(out), "in:100");
+  });
 });
 
 describe("renderTemplate — |valueOnly| inline arg — label strip on label-using m_* modules (vX.X.X+)", () => {
