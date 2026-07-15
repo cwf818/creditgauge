@@ -11,6 +11,16 @@
 - **`|term|<key>` inline arg for the m_sum* family.**
   Opt-in plan-aligned scan shortcut: `|term:<key>|model:<not all>` is equivalent to `|window:<intervals[term].windowId>|align:true|model:<same>`. Looks up `ctx.intervals[term]`, runs the scan from the interval's `startAt`, and stamps `alignedUsedPercent` on the cache entry. Mirrors the m_windowQuota / m_countdown / m_quota `term` arg shape but **opt-in** (unlike those modules where `term` defaults to `"short"` unconditionally) — defaulting `term` would silently re-define every bare m_sum* module as a 5h-aligned scan and break existing `|window|<dhms>` users. Requires `|model| != "all"` (a per-term scan without a model filter is ambiguous). Failure modes (interval missing / no usable `startAt`+`endAt`) silently fall through to the existing `|window|`/`|align|`/`dhms` path. All 13 m_sum* INLINE_SCHEMAS entries gain `...TERM_PARAM.named`. The bare MODULES form is unchanged (no params, no term).
 
+### Add (post-merge)
+
+- **`bigmodel` (智谱) user-defined QUOTA provider.**
+  Ship `query_plugins/bigmodel/index.js` — a user-side plugin (alongside kimi / copilot-api, NOT in `DEFAULT_PROVIDERS`) that projects `GET https://bigmodel.cn/api/monitor/usage/quota/limit` onto the canonical Quota shape: `short` (5h) ← first `TOKENS_LIMIT` sorted by `nextResetTime` ASC, `mid` (7d) ← second `TOKENS_LIMIT` when present (new plans have a weekly cap; old plans only ship one), `long` (MCP monthly) ← `TIME_LIMIT` entry with absolute unit counts. `nextResetTime` is the only time anchor the API ships; back-derive `startAt = nextResetTime − intervalMs` so the renderer can pick a window-fill-aware reset arrow. `success:false` / empty `limits[]` returns null (host falls back to stale cache row). Registration snippet lives in the plugin header comment — the user adds it to `~/.claude/plugins/topgauge/config.json`'s `providers` block: `BASE_URL_COMPARED_TO=https://bigmodel.cn/api/anthropic`, `COMPARE_METHOD=INCLUDE`, `TYPE=QUOTA`. An experimental implementation by AI (referring to the BigModel `/v1/token_plan/remains` API documented at the cc-switch mirror); verify against a real BigModel API key before relying on it.
+
+### Fix
+
+- **`compareUrl` trailing-slash normalization.**
+  `compareUrl(method, baseUrl, pattern)` now strips trailing slashes on both sides (`.replace(/\/+$/, "")`) after the existing `.toLowerCase()`, applied uniformly to all three compare methods (EXACT / INCLUDE / STARTWITH). A user with `ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic/` now matches the EXACT-registered `https://api.minimaxi.com/anthropic` and vice versa — same for any custom provider with a trailing-slash variant on either side. The `STARTWITH` suffix-attack guard (`api.deepseek.com.evil.example` must NOT match `api.deepseek.com`) is preserved by indexing the ORIGINAL `baseUrl` at `pattern.length` so a trailing `/` lands exactly on the boundary character. Net effect: copy-pasting a base URL with or without a trailing slash no longer silently breaks provider routing.
+
 ## v0.8.43
 
 ### Remove
