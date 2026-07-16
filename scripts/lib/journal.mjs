@@ -32,6 +32,34 @@
 //     ]
 //   }
 //
+// Semantics of `before` / `after` for block-level entries
+// (settings.json:enabledPlugins, settings.json:extraKnownMarketplaces):
+//
+//   `before` and `after` are INNER-KEY MAPS restricted to the keys
+//   install actually touched. Pre-existing sibling keys (e.g.
+//   claude-hud@claude-hud in enabledPlugins) appear in NEITHER map
+//   and are therefore invisible to applyJournalEntry's keySet union
+//   (edit-settings.mjs:209-307) — they are preserved on uninstall
+//   per the user's principle ("只恢复install的时候修改的项目内容").
+//   Per-key classification:
+//     absent in B, present in A           → install CREATED   → after[k] = A[k]
+//     present in B, absent in A           → install REMOVED   → before[k] = B[k]
+//     present in B ∩ A, deepEqual(B,A)    → untouched sibling → OMIT
+//     present in B ∩ A, differs          → install MUTATED  → before[k] = B[k], after[k] = A[k]
+//   `action: "create"` is still used (the top-level block is owned
+//   by install).
+//
+//   `before` and `after` are always non-null objects. applyJournalEntry
+//   refuses legacy-style entries (entry.before === null) with
+//   `skipped:legacy-entry` — they would silently drop pre-existing
+//   sibling keys. If a journal on disk is from a pre-fix install, the
+//   legacy entries are marked applied but settings.json is left
+//   untouched; the user manually removes any residual topgauge keys.
+//
+//   An empty `before` AND empty `after` (install touched nothing of
+//   either category) means install.sh SKIPPED the entry entirely —
+//   no journal row is written for that block.
+//
 // Caller contract:
 //   appendEntries(<journal-file-path>, [...entries])       — write
 //   readEntries(<journal-file-path>)                       → entries[]

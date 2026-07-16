@@ -216,6 +216,244 @@ APPLIED_FINAL=$(TOPG_TEST_PATH="$JOURNAL" node -e "
 assert_eq "re-run leaves applied flag intact" "true" "$APPLIED_FINAL"
 
 echo ""
+echo "=== apply-journal-entry: per-key-diff format (block-level) ==="
+# v0.10+: enabledPlugins / extraKnownMarketplaces journal entries use a
+# per-key diff (`before`/`after` are inner-key maps of the keys install
+# actually touched). Pre-existing sibling keys (e.g. claude-hud@claude-hud)
+# appear in NEITHER map and must be preserved on uninstall — they never
+# enter the keySet union in applyJournalEntry (edit-settings.mjs:209-307).
+# Regression coverage for the silent sibling-drop bug.
+
+# Setup: settings.json with a pre-existing claude-hud sibling + the
+# topgauge@topgauge key install added. Journal entry uses the NEW
+# per-key diff format (before:{}, after:{topgauge@topgauge:true}).
+SETTINGS_EP="$TMPDIR/settings-ep.json"
+WIN_SETTINGS_EP="$(winpath "$SETTINGS_EP")"
+cat > "$SETTINGS_EP" <<'JSON'
+{
+  "enabledPlugins": {
+    "claude-hud@claude-hud": true,
+    "topgauge@topgauge": true
+  }
+}
+JSON
+
+JOURNAL_EP="$TMPDIR/journal-ep.json"
+WIN_JOURNAL_EP="$(winpath "$JOURNAL_EP")"
+cat > "$JOURNAL_EP" <<'JSON'
+{
+  "version": 1, "scope": "user", "pluginVersion": "0.10.0",
+  "entries": [{
+    "id": "settings.json:enabledPlugins",
+    "ts": "2026-07-15T07:00:00.000Z",
+    "action": "create",
+    "before": {},
+    "after": { "topgauge@topgauge": true },
+    "applied": false
+  }]
+}
+JSON
+
+# Apply — topgauge@topgauge removed, claude-hud@claude-hud preserved,
+# block survives (it still has the sibling).
+node "$LIB" "$WIN_SETTINGS_EP" apply-journal-entry "$WIN_JOURNAL_EP" >/dev/null 2>&1
+HAS_HUD=$(node -e "
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(d.enabledPlugins && d.enabledPlugins['claude-hud@claude-hud'] === true ? 'yes' : 'no');
+" "$SETTINGS_EP")
+assert_eq "ep-sibling-preserved: claude-hud@claude-hud survives" "yes" "$HAS_HUD"
+HAS_TOPGAUGE=$(node -e "
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, 'topgauge@topgauge') ? 'yes' : 'no');
+" "$SETTINGS_EP")
+assert_eq "ep-sibling-preserved: topgauge@topgauge removed" "no" "$HAS_TOPGAUGE"
+HAS_BLOCK=$(node -e "
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write('enabledPlugins' in d ? 'yes' : 'no');
+" "$SETTINGS_EP")
+assert_eq "ep-sibling-preserved: enabledPlugins block survives with sibling" "yes" "$HAS_BLOCK"
+
+# --- ep-fresh-create-empty: empty before+after means install touched nothing
+# of either category. The broadened empty-block cleanup guard should still
+# delete the block (no user state to preserve).
+SETTINGS_EMPTY="$TMPDIR/settings-empty.json"
+WIN_SETTINGS_EMPTY="$(winpath "$SETTINGS_EMPTY")"
+cat > "$SETTINGS_EMPTY" <<'JSON'
+{
+  "enabledPlugins": {}
+}
+JSON
+JOURNAL_EMPTY="$TMPDIR/journal-empty.json"
+WIN_JOURNAL_EMPTY="$(winpath "$JOURNAL_EMPTY")"
+cat > "$JOURNAL_EMPTY" <<'JSON'
+{
+  "version": 1, "scope": "user", "pluginVersion": "0.10.0",
+  "entries": [{
+    "id": "settings.json:enabledPlugins",
+    "ts": "2026-07-15T07:00:00.000Z",
+    "action": "create",
+    "before": {},
+    "after": {},
+    "applied": false
+  }]
+}
+JSON
+node "$LIB" "$WIN_SETTINGS_EMPTY" apply-journal-entry "$WIN_JOURNAL_EMPTY" >/dev/null 2>&1
+HAS_EP_EMPTY=$(node -e "
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write('enabledPlugins' in d ? 'yes' : 'no');
+" "$SETTINGS_EMPTY")
+assert_eq "ep-fresh-create-empty: empty diff → block deleted" "no" "$HAS_EP_EMPTY"
+
+# --- ep-user-touched-install-key: user manually disabled topgauge after
+# install. Uninstall should NOT re-enable it (user's territory).
+SETTINGS_TOUCHED="$TMPDIR/settings-touched.json"
+WIN_SETTINGS_TOUCHED="$(winpath "$SETTINGS_TOUCHED")"
+cat > "$SETTINGS_TOUCHED" <<'JSON'
+{
+  "enabledPlugins": {
+    "topgauge@topgauge": false
+  }
+}
+JSON
+JOURNAL_TOUCHED="$TMPDIR/journal-touched.json"
+WIN_JOURNAL_TOUCHED="$(winpath "$JOURNAL_TOUCHED")"
+cat > "$JOURNAL_TOUCHED" <<'JSON'
+{
+  "version": 1, "scope": "user", "pluginVersion": "0.10.0",
+  "entries": [{
+    "id": "settings.json:enabledPlugins",
+    "ts": "2026-07-15T07:00:00.000Z",
+    "action": "create",
+    "before": {},
+    "after": { "topgauge@topgauge": true },
+    "applied": false
+  }]
+}
+JSON
+node "$LIB" "$WIN_SETTINGS_TOUCHED" apply-journal-entry "$WIN_JOURNAL_TOUCHED" >/dev/null 2>&1
+TOPGAUGE_VAL=$(node -e "
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(JSON.stringify(d.enabledPlugins && d.enabledPlugins['topgauge@topgauge']));
+" "$SETTINGS_TOUCHED")
+assert_eq "ep-user-touched-install-key: topgauge@topgauge stays false" "false" "$TOPGAUGE_VAL"
+
+# --- ep-user-added-sibling: user added a new plugin post-install. Uninstall
+# preserves it (anyUserAdded path).
+SETTINGS_ADDED="$TMPDIR/settings-added.json"
+WIN_SETTINGS_ADDED="$(winpath "$SETTINGS_ADDED")"
+cat > "$SETTINGS_ADDED" <<'JSON'
+{
+  "enabledPlugins": {
+    "topgauge@topgauge": true,
+    "user-new-plugin@user-new-plugin": true
+  }
+}
+JSON
+JOURNAL_ADDED="$TMPDIR/journal-added.json"
+WIN_JOURNAL_ADDED="$(winpath "$JOURNAL_ADDED")"
+cat > "$JOURNAL_ADDED" <<'JSON'
+{
+  "version": 1, "scope": "user", "pluginVersion": "0.10.0",
+  "entries": [{
+    "id": "settings.json:enabledPlugins",
+    "ts": "2026-07-15T07:00:00.000Z",
+    "action": "create",
+    "before": {},
+    "after": { "topgauge@topgauge": true },
+    "applied": false
+  }]
+}
+JSON
+node "$LIB" "$WIN_SETTINGS_ADDED" apply-journal-entry "$WIN_JOURNAL_ADDED" >/dev/null 2>&1
+USER_NEW=$(node -e "
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(d.enabledPlugins && d.enabledPlugins['user-new-plugin@user-new-plugin'] === true ? 'yes' : 'no');
+" "$SETTINGS_ADDED")
+assert_eq "ep-user-added-sibling: user-added sibling preserved" "yes" "$USER_NEW"
+HAS_TOPGAUGE_ADDED=$(node -e "
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, 'topgauge@topgauge') ? 'yes' : 'no');
+" "$SETTINGS_ADDED")
+assert_eq "ep-user-added-sibling: topgauge@topgauge removed" "no" "$HAS_TOPGAUGE_ADDED"
+
+# --- ep-mutated-sibling: install flipped a sibling from true → false.
+# Uninstall restores it to true.
+SETTINGS_MUTATED="$TMPDIR/settings-mutated.json"
+WIN_SETTINGS_MUTATED="$(winpath "$SETTINGS_MUTATED")"
+cat > "$SETTINGS_MUTATED" <<'JSON'
+{
+  "enabledPlugins": {
+    "claude-hud@claude-hud": false
+  }
+}
+JSON
+JOURNAL_MUTATED="$TMPDIR/journal-mutated.json"
+WIN_JOURNAL_MUTATED="$(winpath "$JOURNAL_MUTATED")"
+cat > "$JOURNAL_MUTATED" <<'JSON'
+{
+  "version": 1, "scope": "user", "pluginVersion": "0.10.0",
+  "entries": [{
+    "id": "settings.json:enabledPlugins",
+    "ts": "2026-07-15T07:00:00.000Z",
+    "action": "create",
+    "before": { "claude-hud@claude-hud": true },
+    "after":  { "claude-hud@claude-hud": false },
+    "applied": false
+  }]
+}
+JSON
+node "$LIB" "$WIN_SETTINGS_MUTATED" apply-journal-entry "$WIN_JOURNAL_MUTATED" >/dev/null 2>&1
+HUD_VAL=$(node -e "
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(JSON.stringify(d.enabledPlugins && d.enabledPlugins['claude-hud@claude-hud']));
+" "$SETTINGS_MUTATED")
+assert_eq "ep-mutated-sibling: install-mutated sibling restored to true" "true" "$HUD_VAL"
+
+# --- legacy-rejection: before:null entries are SKIPPED, not applied.
+# The old install.sh wrote `before:null, after:<full dict>` entries
+# that silently dropped pre-existing siblings. applyJournalEntry now
+# rejects them outright — settings.json is left untouched (user can
+# manually clean up) rather than risk data loss.
+SETTINGS_LEGACY="$TMPDIR/settings-legacy.json"
+WIN_SETTINGS_LEGACY="$(winpath "$SETTINGS_LEGACY")"
+cat > "$SETTINGS_LEGACY" <<'JSON'
+{
+  "enabledPlugins": {
+    "claude-hud@claude-hud": true,
+    "topgauge@topgauge": true
+  }
+}
+JSON
+JOURNAL_LEGACY="$TMPDIR/journal-legacy.json"
+WIN_JOURNAL_LEGACY="$(winpath "$JOURNAL_LEGACY")"
+cat > "$JOURNAL_LEGACY" <<'JSON'
+{
+  "version": 1, "scope": "user", "pluginVersion": "0.9.6",
+  "entries": [{
+    "id": "settings.json:enabledPlugins",
+    "ts": "2026-07-15T07:00:00.000Z",
+    "action": "create",
+    "before": null,
+    "after": { "topgauge@topgauge": true },
+    "applied": false
+  }]
+}
+JSON
+OUT_LEGACY=$(node "$LIB" "$WIN_SETTINGS_LEGACY" apply-journal-entry "$WIN_JOURNAL_LEGACY" 2>&1)
+assert_match "legacy-rejection: stdout reports skipped:legacy-entry" "skipped:legacy-entry" "$OUT_LEGACY"
+LEGACY_HUD=$(node -e "
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(d.enabledPlugins && d.enabledPlugins['claude-hud@claude-hud'] === true ? 'yes' : 'no');
+" "$SETTINGS_LEGACY")
+assert_eq "legacy-rejection: claude-hud@claude-hud untouched" "yes" "$LEGACY_HUD"
+LEGACY_TOPGAUGE=$(node -e "
+  const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, 'topgauge@topgauge') ? 'yes' : 'no');
+" "$SETTINGS_LEGACY")
+assert_eq "legacy-rejection: topgauge@topgauge left in place (settings untouched)" "yes" "$LEGACY_TOPGAUGE"
+
+echo ""
 echo "=== Summary ==="
 echo "  pass: $PASS"
 echo "  fail: $FAIL"

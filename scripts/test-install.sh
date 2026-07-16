@@ -374,6 +374,94 @@ assert_eq "[journal] only 1 entry (statusLine mutate, refreshInterval skipped)" 
 assert_match_str "[stdout] no-op 'refreshInterval' message" "no-op|5" "$out"
 rm -rf "$FIXTURE_ROOT"
 
+echo "-- fresh install with pre-existing sibling: per-key diff excludes sibling --"
+# v0.10+ install-journal writes a per-key diff for enabledPlugins so
+# pre-existing sibling keys (e.g. claude-hud@claude-hud) are preserved on
+# uninstall. The diff is computed by projecting the live settings.json
+# down to the keys topgauge owns (topgauge@topgauge in EP, topgauge in
+# EKM) — every other key is the user's and never enters the journal.
+# Simulate the Claude-Code loader's behaviour: settings.json has both
+# the sibling AND the topgauge@topgauge key (loader added it before
+# install.sh ran). After install, journal EP entry should be:
+#   before: {} (install didn't remove any pre-existing key)
+#   after:  { "topgauge@topgauge": true } (install created exactly one key)
+# The sibling claude-hud@claude-hud must NOT appear in either map.
+build_journal_fixture no
+node -e '
+  const fs = require("fs");
+  const d = {
+    enabledPlugins: {
+      "claude-hud@claude-hud": true,
+      "topgauge@topgauge": true
+    },
+    extraKnownMarketplaces: {
+      "claude-hud": { source: { source: "github", repo: "jarrodwatts/claude-hud" } },
+      "topgauge":  { source: { source: "github", repo: "cwf818/topgauge" } }
+    }
+  };
+  fs.writeFileSync(process.argv[1], JSON.stringify(d, null, 2) + "\n");
+' "${FIXTURE_ROOT}/settings.json"
+out=$(HOME="$FIXTURE_ROOT" CLAUDE_CONFIG_DIR="$FIXTURE_ROOT" \
+      bash "$CACHE_BASE/scripts/install.sh" 2>&1) || true
+JOURNAL="$FIXTURE_ROOT/plugins/topgauge/state/install-journal.json"
+assert_file_exists "[journal-ep-diff] journal created" "$JOURNAL"
+# Locate the EP entry.
+EP_BEFORE=$(node -e '
+  const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const e = j.entries.find(x => x.id === "settings.json:enabledPlugins");
+  process.stdout.write(JSON.stringify(e ? e.before : null));
+' "$JOURNAL")
+assert_eq "[journal-ep-diff] EP before = {} (sibling absent from before)" "{}" "$EP_BEFORE"
+EP_AFTER=$(node -e '
+  const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const e = j.entries.find(x => x.id === "settings.json:enabledPlugins");
+  process.stdout.write(JSON.stringify(e ? e.after : null));
+' "$JOURNAL")
+assert_eq "[journal-ep-diff] EP after only has topgauge@topgauge (sibling absent from after)" \
+  '{"topgauge@topgauge":true}' "$EP_AFTER"
+# Same shape for EKM.
+EKM_BEFORE=$(node -e '
+  const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const e = j.entries.find(x => x.id === "settings.json:extraKnownMarketplaces");
+  process.stdout.write(JSON.stringify(e ? e.before : null));
+' "$JOURNAL")
+assert_eq "[journal-ekm-diff] EKM before = {} (claude-hud absent from before)" "{}" "$EKM_BEFORE"
+EKM_AFTER=$(node -e '
+  const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const e = j.entries.find(x => x.id === "settings.json:extraKnownMarketplaces");
+  process.stdout.write(JSON.stringify(e ? e.after : null));
+' "$JOURNAL")
+assert_eq "[journal-ekm-diff] EKM after only has topgauge (claude-hud absent from after)" \
+  '{"topgauge":{"source":{"source":"github","repo":"cwf818/topgauge"}}}' "$EKM_AFTER"
+rm -rf "$FIXTURE_ROOT"
+
+echo "-- fresh install with no loader keys: both EP and EKM entries skipped --"
+# Loader didn't populate either dict (degenerate: only happens if
+# /plugin install ran but somehow topgauge wasn't added — e.g. a
+# half-completed install). After = {} → entry skipped entirely.
+build_journal_fixture no
+node -e '
+  const fs = require("fs");
+  fs.writeFileSync(process.argv[1], "{}\n");
+' "${FIXTURE_ROOT}/settings.json"
+out=$(HOME="$FIXTURE_ROOT" CLAUDE_CONFIG_DIR="$FIXTURE_ROOT" \
+      bash "$CACHE_BASE/scripts/install.sh" 2>&1) || true
+JOURNAL="$FIXTURE_ROOT/plugins/topgauge/state/install-journal.json"
+assert_file_exists "[journal-no-loader] journal created" "$JOURNAL"
+HAS_EP=$(node -e '
+  const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const e = j.entries.find(x => x.id === "settings.json:enabledPlugins");
+  process.stdout.write(e ? "yes" : "no");
+' "$JOURNAL")
+assert_eq "[journal-no-loader] EP entry skipped (loader didn't add topgauge@topgauge)" "no" "$HAS_EP"
+HAS_EKM=$(node -e '
+  const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const e = j.entries.find(x => x.id === "settings.json:extraKnownMarketplaces");
+  process.stdout.write(e ? "yes" : "no");
+' "$JOURNAL")
+assert_eq "[journal-no-loader] EKM entry skipped (loader didn't add topgauge)" "no" "$HAS_EKM"
+rm -rf "$FIXTURE_ROOT"
+
 # --- Summary -----------------------------------------------------------------
 echo ""
 echo "test-install.sh: $PASS pass, $FAIL fail"

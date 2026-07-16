@@ -218,6 +218,29 @@ function applyJournalEntry(data, entry) {
       return { action: "skipped:current-not-object", changed: false };
     }
     const isCreate = entry.action === "create";
+    // Format expectations differ by entry id:
+    //   settings.json:statusLine — single block; install writes the
+    //     whole statusLine dict as `after`. `before === null` is a
+    //     legitimate fresh-create signal (no prior statusLine). No
+    //     sibling keys exist outside the block, so the legacy
+    //     full-dict snapshot semantics don't cause data loss here.
+    //   settings.json:enabledPlugins / settings.json:extraKnownMarketplaces
+    //     — dicts of sibling entries (one per plugin / marketplace).
+    //     A legacy `before === null` full-dict snapshot would silently
+    //     drop pre-existing siblings, so those entries are REJECTED
+    //     here; the new install.sh always writes them as per-key diffs
+    //     (`before: {}` or a non-empty inner-key map).
+    const isPluginDictEntry =
+      rawId.endsWith(":enabledPlugins") ||
+      rawId.endsWith(":extraKnownMarketplaces");
+    if (isPluginDictEntry) {
+      if (entry.before === null) {
+        return { action: "skipped:legacy-entry", changed: false };
+      }
+      if (typeof entry.before !== "object" || Array.isArray(entry.before)) {
+        return { action: "skipped:malformed-before", changed: false };
+      }
+    }
     const beforeObj = (entry.before && typeof entry.before === "object" && !Array.isArray(entry.before))
       ? entry.before
       : null;
@@ -566,15 +589,28 @@ switch (op) {
     // field can both leave the target as `{}`. Drop the empty block
     // so callers don't see `{"statusLine": {}}` residues — Claude
     // Code refuses to load settings.json with an empty statusLine.
-    // Only fires when the entry's `before` was null (create mode) —
-    // a mutate-mode entry with `before: {}` is legitimate user state
+    //
+    // Fires when install OWNED the entire block (no pre-existing user
+    // state to preserve). The journal is per-key-diff: install
+    // touched nothing of either category iff both `before` and `after`
+    // are empty objects. A non-empty `before` means install actually
+    // removed a pre-existing key — in that case the block is the
+    // user's and must be preserved as `{}` (don't auto-delete).
+    // A mutate-mode entry with `before: {}` is legitimate user state
     // and must be preserved.
     let emptiedBlocks = 0;
     for (const entry of targets) {
       const leafKey = (entry.id || "").split(":").pop().split(".")[0];
+      const beforeIsObj = entry.before && typeof entry.before === "object" && !Array.isArray(entry.before);
+      const bothEmpty = beforeIsObj
+        && Object.keys(entry.before).length === 0
+        && entry.after
+        && typeof entry.after === "object"
+        && !Array.isArray(entry.after)
+        && Object.keys(entry.after).length === 0;
       if (
         entry.action === "create" &&
-        entry.before === null &&
+        bothEmpty &&
         leafKey &&
         data != null &&
         typeof data === "object" &&

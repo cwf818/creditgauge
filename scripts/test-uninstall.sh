@@ -796,14 +796,17 @@ MARKER=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
 assert_eq "[mutate-partial] _topgauge_managed marker removed" "no" "$MARKER"
 rm -rf "$ROOT"
 
-echo "-- enabledPlugins create: Claude-Loader-added key → block deleted entirely --"
+echo "-- enabledPlugins create (legacy before:null) → SKIPPED, settings untouched --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
 JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
-# Pre-uninstall state: enabledPlugins.topgauge@topgauge=true
-# (added by Claude Code's plugin loader during /plugin install).
-# Install-time snapshot: same. action=create, before=null → uninstall
-# treats the block as install-CREATED.
+# Pre-uninstall state: enabledPlugins.topgauge@topgauge=true (added by
+# Claude Code's plugin loader during /plugin install). Legacy journal
+# format: action=create, before=null, after=<full post-install dict>.
+# applyJournalEntry now REJECTS legacy entries outright (they would
+# silently drop pre-existing siblings). The entry is marked applied but
+# settings.json is left untouched — the user manually removes any
+# residual topgauge keys.
 TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
 node -e '
@@ -822,28 +825,36 @@ node -e '
   fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
 '
 OUT=$(run_uninstall "$ROOT" 2>&1)
-assert_match_str "[ep-create] apply-journal-entry reported reverted" \
-  "reverted:block-deleted" "$OUT"
+assert_match_str "[ep-legacy] apply-journal-entry reported skipped" \
+  "skipped:legacy-entry" "$OUT"
 HAS_EP=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
   process.stdout.write("enabledPlugins" in d ? "yes" : "no");
 ')
-assert_eq "[ep-create] enabledPlugins block deleted" "no" "$HAS_EP"
+assert_eq "[ep-legacy] enabledPlugins block survives (legacy entries don't touch settings)" "yes" "$HAS_EP"
+EP_VAL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.enabledPlugins && d.enabledPlugins["topgauge@topgauge"] === true ? "yes" : "no");
+')
+assert_eq "[ep-legacy] topgauge@topgauge stays untouched" "yes" "$EP_VAL"
 rm -rf "$ROOT"
 
-echo "-- enabledPlugins create: user touched the key → preserve --"
+echo "-- enabledPlugins create (legacy) with sibling → sibling + key both untouched --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
 JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
-# User flipped the value post-install (e.g. disabled the plugin manually).
+# Mixed scenario: legacy entry on disk + a sibling in settings.json.
+# Critical regression coverage: under the old code, this would drop
+# the sibling silently. Under the new code, settings.json is untouched.
 TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
 node -e '
   const fs = require("fs");
-  const settings = process.env.TOPG_TEST_SETTINGS;
-  const journal = process.env.TOPG_TEST_JOURNAL;
-  const d = { enabledPlugins: { "topgauge@topgauge": false } };
-  fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
+  const d = { enabledPlugins: {
+    "claude-hud@claude-hud": true,
+    "topgauge@topgauge": false
+  } };
+  fs.writeFileSync(process.env.TOPG_TEST_SETTINGS, JSON.stringify(d, null, 2) + "\n");
   const j = {
     version: 1, scope: "user", pluginVersion: "0.9.6",
     entries: [{
@@ -852,20 +863,18 @@ node -e '
       applied: false
     }]
   };
-  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+  fs.writeFileSync(process.env.TOPG_TEST_JOURNAL, JSON.stringify(j, null, 2) + "\n");
 '
-OUT=$(run_uninstall "$ROOT" 2>&1)
-assert_match_str "[ep-preserve] apply-journal-entry reported preserved" \
-  "preserved:all-fields-user-touched" "$OUT"
+run_uninstall "$ROOT" >/dev/null 2>&1
 EP=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
-  const v = d.enabledPlugins ? d.enabledPlugins["topgauge@topgauge"] : "missing";
-  process.stdout.write(String(v));
+  process.stdout.write(JSON.stringify(d.enabledPlugins));
 ')
-assert_eq "[ep-preserve] user-touched false preserved" "false" "$EP"
+assert_eq "[ep-legacy-with-sibling] enabledPlugins fully preserved (no silent drops)" \
+  '{"claude-hud@claude-hud":true,"topgauge@topgauge":false}' "$EP"
 rm -rf "$ROOT"
 
-echo "-- extraKnownMarketplaces create: Claude-Loader-added key → block deleted entirely --"
+echo "-- extraKnownMarketplaces create (legacy before:null) → SKIPPED, settings untouched --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
 JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
@@ -873,10 +882,8 @@ TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
 node -e '
   const fs = require("fs");
-  const settings = process.env.TOPG_TEST_SETTINGS;
-  const journal = process.env.TOPG_TEST_JOURNAL;
   const d = { extraKnownMarketplaces: { "topgauge": { "source": "github", "repo": "cwf818/topgauge" } } };
-  fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
+  fs.writeFileSync(process.env.TOPG_TEST_SETTINGS, JSON.stringify(d, null, 2) + "\n");
   const j = {
     version: 1, scope: "user", pluginVersion: "0.9.6",
     entries: [{
@@ -884,19 +891,35 @@ node -e '
       action: "create", before: null, after: d.extraKnownMarketplaces, applied: false
     }]
   };
-  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+  fs.writeFileSync(process.env.TOPG_TEST_JOURNAL, JSON.stringify(j, null, 2) + "\n");
 '
 OUT=$(run_uninstall "$ROOT" 2>&1)
-assert_match_str "[ekm-create] apply-journal-entry reported reverted" \
-  "reverted:block-deleted" "$OUT"
+assert_match_str "[ekm-legacy] apply-journal-entry reported skipped" \
+  "skipped:legacy-entry" "$OUT"
 HAS_EKM=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
   process.stdout.write("extraKnownMarketplaces" in d ? "yes" : "no");
 ')
-assert_eq "[ekm-create] extraKnownMarketplaces block deleted" "no" "$HAS_EKM"
+assert_eq "[ekm-legacy] extraKnownMarketplaces block survives" "yes" "$HAS_EKM"
+LOC=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(
+    d.extraKnownMarketplaces && d.extraKnownMarketplaces.topgauge ? "present" : "missing"
+  );
+')
+assert_eq "[ekm-legacy] topgauge marketplace stays in place" "present" "$LOC"
 rm -rf "$ROOT"
 
-echo "-- extraKnownMarketplaces create: user added a sub-field → block preserved --"
+# ============================================================================
+# Per-key-diff format (v0.10+): enabledPlugins / extraKnownMarketplaces
+# journal entries use a per-key diff instead of a full-dict snapshot.
+# Pre-existing sibling keys (e.g. claude-hud@claude-hud) appear in
+# NEITHER map and must be preserved on uninstall — they never enter
+# the keySet union in applyJournalEntry (edit-settings.mjs:209-307).
+# Regression coverage for the silent sibling-drop bug.
+# ============================================================================
+
+echo "-- per-key-diff: EP sibling preserved on uninstall --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
 JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
@@ -906,32 +929,157 @@ node -e '
   const fs = require("fs");
   const settings = process.env.TOPG_TEST_SETTINGS;
   const journal = process.env.TOPG_TEST_JOURNAL;
-  // User added an installLocation field post-install.
-  const d = { extraKnownMarketplaces: {
-    "topgauge": { "source": "github", "repo": "cwf818/topgauge", "installLocation": "/custom" }
-  } };
+  // Live settings: sibling + topgauge@topgauge.
+  const d = {
+    enabledPlugins: {
+      "claude-hud@claude-hud": true,
+      "topgauge@topgauge": true
+    }
+  };
   fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
+  // New-format journal: per-key diff. before:{} (install removed nothing);
+  // after only has the keys topgauge owns.
   const j = {
-    version: 1, scope: "user", pluginVersion: "0.9.6",
+    version: 1, scope: "user", pluginVersion: "0.10.0",
     entries: [{
-      id: "settings.json:extraKnownMarketplaces", ts: "2026-07-15T07:00:00Z",
-      action: "create", before: null,
-      after: { "topgauge": { "source": "github", "repo": "cwf818/topgauge" } },
+      id: "settings.json:enabledPlugins", ts: "2026-07-15T07:00:00Z",
+      action: "create",
+      before: {},
+      after: { "topgauge@topgauge": true },
       applied: false
     }]
   };
   fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
 '
-run_uninstall "$ROOT" >/dev/null 2>&1
-LOC=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+OUT=$(run_uninstall "$ROOT" 2>&1)
+HAS_HUD=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
-  process.stdout.write(
-    d.extraKnownMarketplaces && d.extraKnownMarketplaces.topgauge
-      ? d.extraKnownMarketplaces.topgauge.installLocation || "missing"
-      : "block-gone"
-  );
+  process.stdout.write(d.enabledPlugins && d.enabledPlugins["claude-hud@claude-hud"] === true ? "yes" : "no");
 ')
-assert_eq "[ekm-preserve] user-added installLocation preserved" "/custom" "$LOC"
+assert_eq "[ep-diff-sibling-preserved] claude-hud@claude-hud survives" "yes" "$HAS_HUD"
+HAS_TOPGAUGE=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, "topgauge@topgauge") ? "yes" : "no");
+')
+assert_eq "[ep-diff-sibling-preserved] topgauge@topgauge removed" "no" "$HAS_TOPGAUGE"
+HAS_BLOCK=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write("enabledPlugins" in d ? "yes" : "no");
+')
+assert_eq "[ep-diff-sibling-preserved] enabledPlugins block survives with sibling" "yes" "$HAS_BLOCK"
+rm -rf "$ROOT"
+
+echo "-- per-key-diff: EKM sibling preserved on uninstall --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+node -e '
+  const fs = require("fs");
+  const settings = process.env.TOPG_TEST_SETTINGS;
+  const journal = process.env.TOPG_TEST_JOURNAL;
+  const d = {
+    extraKnownMarketplaces: {
+      "claude-hud": { source: { source: "github", repo: "jarrodwatts/claude-hud" } },
+      "topgauge":  { source: { source: "github", repo: "cwf818/topgauge" } }
+    }
+  };
+  fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.10.0",
+    entries: [{
+      id: "settings.json:extraKnownMarketplaces", ts: "2026-07-15T07:00:00Z",
+      action: "create",
+      before: {},
+      after: { "topgauge": { source: { source: "github", repo: "cwf818/topgauge" } } },
+      applied: false
+    }]
+  };
+  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+'
+OUT=$(run_uninstall "$ROOT" 2>&1)
+HAS_HUD_EKM=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.extraKnownMarketplaces && d.extraKnownMarketplaces["claude-hud"] ? "yes" : "no");
+')
+assert_eq "[ekm-diff-sibling-preserved] claude-hud marketplace survives" "yes" "$HAS_HUD_EKM"
+HAS_TOPGAUGE_EKM=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.extraKnownMarketplaces && Object.prototype.hasOwnProperty.call(d.extraKnownMarketplaces, "topgauge") ? "yes" : "no");
+')
+assert_eq "[ekm-diff-sibling-preserved] topgauge marketplace removed" "no" "$HAS_TOPGAUGE_EKM"
+rm -rf "$ROOT"
+
+echo "-- per-key-diff: user added a sibling plugin post-install → preserved --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+node -e '
+  const fs = require("fs");
+  const d = {
+    enabledPlugins: {
+      "topgauge@topgauge": true,
+      "user-new-plugin@user-new-plugin": true
+    }
+  };
+  fs.writeFileSync(process.env.TOPG_TEST_SETTINGS, JSON.stringify(d, null, 2) + "\n");
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.10.0",
+    entries: [{
+      id: "settings.json:enabledPlugins", ts: "2026-07-15T07:00:00Z",
+      action: "create",
+      before: {},
+      after: { "topgauge@topgauge": true },
+      applied: false
+    }]
+  };
+  fs.writeFileSync(process.env.TOPG_TEST_JOURNAL, JSON.stringify(j, null, 2) + "\n");
+'
+run_uninstall "$ROOT" >/dev/null 2>&1
+HAS_USER_NEW=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.enabledPlugins && d.enabledPlugins["user-new-plugin@user-new-plugin"] === true ? "yes" : "no");
+')
+assert_eq "[ep-diff-user-added-sibling] user-added sibling preserved" "yes" "$HAS_USER_NEW"
+HAS_TOPGAUGE_ADDED=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, "topgauge@topgauge") ? "yes" : "no");
+')
+assert_eq "[ep-diff-user-added-sibling] topgauge@topgauge removed" "no" "$HAS_TOPGAUGE_ADDED"
+rm -rf "$ROOT"
+
+echo "-- per-key-diff: user disabled topgauge post-install → preserved --"
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+node -e '
+  const fs = require("fs");
+  fs.writeFileSync(process.env.TOPG_TEST_SETTINGS, JSON.stringify({
+    enabledPlugins: { "topgauge@topgauge": false }
+  }, null, 2) + "\n");
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.10.0",
+    entries: [{
+      id: "settings.json:enabledPlugins", ts: "2026-07-15T07:00:00Z",
+      action: "create",
+      before: {},
+      after: { "topgauge@topgauge": true },
+      applied: false
+    }]
+  };
+  fs.writeFileSync(process.env.TOPG_TEST_JOURNAL, JSON.stringify(j, null, 2) + "\n");
+'
+run_uninstall "$ROOT" >/dev/null 2>&1
+TOPGAUGE_VAL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(JSON.stringify(d.enabledPlugins && d.enabledPlugins["topgauge@topgauge"]));
+')
+assert_eq "[ep-diff-user-touched] topgauge@topgauge stays false" "false" "$TOPGAUGE_VAL"
 rm -rf "$ROOT"
 
 # ============================================================================

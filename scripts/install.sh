@@ -284,7 +284,8 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "  would ensure:  statusLine.refreshInterval = ${REFRESH_INTERVAL_MAX} (create if missing, clamp down if >${REFRESH_INTERVAL_MAX})"
     echo "  would record:  ${JOURNAL_PATH} (per-field action entries: create/mutate/clamp-down)"
     echo "                 + settings.json:enabledPlugins + settings.json:extraKnownMarketplaces"
-    echo "                   (top-level block cleanup; both recorded as action=create / before=null)"
+    echo "                   (top-level block cleanup; per-key diff — only the keys topgauge owns"
+    echo "                    enter the journal; pre-existing siblings are preserved)"
   fi
   SEED_TARGET="${CLAUDE_ROOT}/plugins/topgauge/config.json"
   if [ ! -f "$SEED_TARGET" ]; then
@@ -322,6 +323,16 @@ if [ "$INSTALL_MODE" = "replace" ]; then
   fi
   echo "install.sh: backed up ${TARGET} -> ${TARGET}.bak.<TS}"
 fi
+
+# (No fresh-mode baseline backup needed for install-journal.)
+# Earlier versions took a .bak.<TS> here to compute the enabledPlugins
+# diff, but the Claude-Code plugin loader populates those dicts BEFORE
+# install.sh runs, so any .bak we write at this point has the same
+# content as the live file. Instead, the EP/EKM journal entries below
+# compute the diff against the literal set of keys topgauge writes
+# (`topgauge@topgauge` / `topgauge`); every other key in those dicts is
+# pre-existing user state and never enters the journal. See
+# append_top_level_entry comments for the full classification.
 
 # STATE_DIR must exist before we write the journal — covers the fresh
 # branch too (replace already mkdir'd above). Best-effort; if it
@@ -403,27 +414,48 @@ SL_AFTER_JSON="$(node -e '
 # Snapshot enabledPlugins + extraKnownMarketplaces. Install itself
 # does NOT write these dicts — Claude Code's plugin loader adds the
 # `topgauge@topgauge` and `topgauge` keys during /plugin install —
-# but at the topgauge level we still own their cleanup. Recording
-# `before=null, after=<install-time snapshot>` lets uninstall treat
-# them as install-CREATED blocks: keys that match the snapshot get
-# removed on uninstall, keys the user touched get preserved. The
-# previous behaviour (always delete `topgauge@topgauge` / `topgauge`
-# regardless of user edits) silently dropped user customisations
-# such as `enabledPlugins["topgauge@topgauge"] = false`.
-EP_AFTER_JSON="$(node -e '
-  const fs = require("fs");
-  try {
-    const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    process.stdout.write(JSON.stringify(d.enabledPlugins === undefined ? null : d.enabledPlugins));
-  } catch (e) { process.stdout.write("null"); }
-' "$TARGET")"
-EKM_AFTER_JSON="$(node -e '
-  const fs = require("fs");
-  try {
-    const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    process.stdout.write(JSON.stringify(d.extraKnownMarketplaces === undefined ? null : d.extraKnownMarketplaces));
-  } catch (e) { process.stdout.write("null"); }
-' "$TARGET")"
+# but at the topgauge level we still own their cleanup.
+#
+# We record a PER-KEY DIFF (not the entire post-install dict) so that
+# pre-existing sibling keys like `claude-hud@claude-hud` are NEVER in
+# the journal's key set — they appear in neither `before` nor `after`,
+# so applyJournalEntry (edit-settings.mjs:209-307) doesn't even see
+# them in its keySet union. The legacy `before=null, after=<full
+# snapshot>` regime silently dropped sibling keys; the new format
+# preserves them per the user's principle ("只恢复install的时候修改的
+# 项目内容").
+#
+# Classification source of truth: topgauge installs ONLY these two
+# keys in those two dicts — `topgauge@topgauge` in enabledPlugins and
+# `topgauge` in extraKnownMarketplaces. We read the live file and
+# project out those keys into `after`; `before` is empty (we never
+# remove user state). For uninstall, this partition tells
+# applyJournalEntry "delete topgauge@topgauge if it still exists and
+# still equals the install snapshot; otherwise preserve user edits".
+snap_topgauge_key() {
+  local key="$1"
+  local topgauge_key="$2"
+  node -e '
+    const fs = require("fs");
+    const dictKey  = process.argv[1];
+    const innerKey = process.argv[2];
+    try {
+      const d = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+      const dict = d[dictKey];
+      if (dict && typeof dict === "object" && !Array.isArray(dict)
+          && Object.prototype.hasOwnProperty.call(dict, innerKey)) {
+        const out = {}; out[innerKey] = dict[innerKey];
+        process.stdout.write(JSON.stringify(out));
+      } else {
+        process.stdout.write("{}");
+      }
+    } catch (e) { process.stdout.write("{}"); }
+  ' "$key" "$topgauge_key" "$TARGET"
+}
+EP_AFTER_JSON="$(snap_topgauge_key enabledPlugins 'topgauge@topgauge')"
+EKM_AFTER_JSON="$(snap_topgauge_key extraKnownMarketplaces topgauge)"
+EP_BEFORE_JSON='{}'
+EKM_BEFORE_JSON='{}'
 
 # Determine action: "create" if there was no statusLine before install;
 # "mutate" if there was one (foreign or otherwise). Either way the
@@ -457,25 +489,69 @@ APPEND_OUT="$(node "$SCRIPT_DIR/lib/journal.mjs" append "$WIN_JOURNAL" "$ENTRY_J
 echo "install.sh: journal statusLine entry: $APPEND_OUT"
 
 # Append enabledPlugins + extraKnownMarketplaces entries. action="create"
-# with before=null — install is recorded as the owner of these blocks
-# so uninstall can remove Claude-Loader-added keys without losing
-# user customisations (per-field revert via applyJournalEntry's
-# block-level branch in edit-settings.mjs). Skip when the top-level
-# dict is absent and no Claude-Loader signal exists (after=null),
-# which would be a meaningless no-op entry.
+# with a per-key DIFF before/after — never the full post-install dict.
+# The partition ensures that pre-existing sibling keys (e.g.
+# claude-hud@claude-hud) appear in neither map and are therefore not
+# touched by applyJournalEntry's block-level revert (edit-settings.mjs:
+# 209-307). Skip when both maps are empty (no install-touched keys —
+# nothing to revert).
+#
+# Classification (B = before, A = after; both are dicts):
+#   - absent in B, present in A           → install CREATED   → after[k] = A[k]
+#   - present in B, absent in A           → install REMOVED   → before[k] = B[k]
+#   - present in both, deepEqual(B[k],A[k]) → untouched sibling → omit
+#   - present in both, differ             → install MUTATED  → before[k] = B[k], after[k] = A[k]
+# Empty partitions on either side mean "install didn't touch keys of
+# that category"; the entry is still useful as a "we touched nothing
+# of this kind" marker if at least one side has any keys. If BOTH are
+# empty, skip the entry entirely — there's nothing to revert.
 append_top_level_entry() {
   local id="$1"
-  local after_json="$2"
-  if [ "$after_json" = "null" ] || [ -z "$after_json" ]; then
-    echo "install.sh: skip journal $id (top-level dict absent)"
-    return 0
-  fi
+  local before_json="$2"
+  local after_json="$3"
   local entry
   entry="$(node -e '
     const id = process.argv[1];
-    const after = JSON.parse(process.argv[2]);
-    process.stdout.write(JSON.stringify({ id, action: "create", before: null, after }));
-  ' "$id" "$after_json")"
+    const before = JSON.parse(process.argv[2]);
+    const after  = JSON.parse(process.argv[3]);
+    function deepEq(a, b) {
+      if (a === b) return true;
+      if (typeof a !== typeof b) return false;
+      if (a === null || b === null) return false;
+      if (typeof a === "object") return JSON.stringify(a) === JSON.stringify(b);
+      return false;
+    }
+    const beforeOut = {};
+    const afterOut  = {};
+    const beforeKeys = Object.keys(before);
+    const afterKeys  = Object.keys(after);
+    const allKeys = new Set([...beforeKeys, ...afterKeys]);
+    for (const k of allKeys) {
+      const inB = Object.prototype.hasOwnProperty.call(before, k);
+      const inA = Object.prototype.hasOwnProperty.call(after,  k);
+      if (inB && !inA) {
+        beforeOut[k] = before[k];
+      } else if (!inB && inA) {
+        afterOut[k] = after[k];
+      } else if (inB && inA && !deepEq(before[k], after[k])) {
+        beforeOut[k] = before[k];
+        afterOut[k]  = after[k];
+      }
+      // else: inB && inA && deepEqual → untouched sibling, omit entirely.
+    }
+    const beforeEmpty = Object.keys(beforeOut).length === 0;
+    const afterEmpty  = Object.keys(afterOut).length === 0;
+    if (beforeEmpty && afterEmpty) {
+      // Sentinel: no install-touched keys → caller skips journal write.
+      process.stdout.write("__SKIP__");
+    } else {
+      process.stdout.write(JSON.stringify({ id, action: "create", before: beforeOut, after: afterOut }));
+    }
+  ' "$id" "$before_json" "$after_json")"
+  if [ "$entry" = "__SKIP__" ]; then
+    echo "install.sh: skip journal $id (no install-touched inner keys)"
+    return 0
+  fi
   local out
   out="$(node "$SCRIPT_DIR/lib/journal.mjs" append "$WIN_JOURNAL" "$entry" 2>&1)" || {
     echo "install.sh: failed to append $id journal entry: $out" >&2
@@ -483,8 +559,8 @@ append_top_level_entry() {
   }
   echo "install.sh: journal $id entry: $out"
 }
-append_top_level_entry "settings.json:enabledPlugins" "$EP_AFTER_JSON"
-append_top_level_entry "settings.json:extraKnownMarketplaces" "$EKM_AFTER_JSON"
+append_top_level_entry "settings.json:enabledPlugins" "$EP_BEFORE_JSON" "$EP_AFTER_JSON"
+append_top_level_entry "settings.json:extraKnownMarketplaces" "$EKM_BEFORE_JSON" "$EKM_AFTER_JSON"
 
 # ensure-refresh-interval — places statusLine.refreshInterval=10 if
 # missing or >10. Stdout is "create|10" / "clamp-down|30|10" / "no-op|5"
