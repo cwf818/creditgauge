@@ -583,24 +583,48 @@ switch (op) {
     if (applied.length > 0) {
       markApplied(journalPath, applied.map((s) => s.split("|")[0]));
     }
-    // Empty-block cleanup: a block-level entry that fully reverted
-    // (every install-touched field deleted or restored to before) AND
-    // a sibling field-level entry that emptied the last user-added
-    // field can both leave the target as `{}`. Drop the empty block
-    // so callers don't see `{"statusLine": {}}` residues — Claude
-    // Code refuses to load settings.json with an empty statusLine.
+    // Empty-block cleanup. Two passes; both observe the post-apply
+    // shape of `data[leafKey]` rather than the journal-entry shape.
     //
-    // Fires when install OWNED the entire block (no pre-existing user
-    // state to preserve). The journal is per-key-diff: install
-    // touched nothing of either category iff both `before` and `after`
-    // are empty objects. A non-empty `before` means install actually
-    // removed a pre-existing key — in that case the block is the
-    // user's and must be preserved as `{}` (don't auto-delete).
-    // A mutate-mode entry with `before: {}` is legitimate user state
-    // and must be preserved.
+    // Pass 1 (legacy / EP-EKM): a per-key-diff entry where install
+    // touched nothing of either category (before={}, after={}) means
+    // the entry was the sentinel install.sh uses for "no keys touched
+    // on this top-level dict". If the block on disk is empty we drop
+    // it.
+    //
+    // Pass 2 (post-apply invariant): a sibling field-level entry can
+    // delete the last remaining key of a block after the block-level
+    // entry ran, leaving `{}`. The classic example is
+    // settings.json:statusLine (create, before=null, after=
+    // {type, command, _topgauge_managed}) immediately followed by
+    // settings.json:statusLine.refreshInterval (create, before=null,
+    // after=10). Pass 1 misses these because Pass 1's bothEmpty gate
+    // requires before/after to be `{}`, but `before=null` for
+    // statusLine's create entry is a legitimate fresh-create signal —
+    // gate fails. Pass 2 doesn't gate on entry shape at all; it just
+    // asks "is the block empty now?" and, if so, drops it.
+    //
+    // Claude Code refuses to load settings.json with an empty
+    // statusLine, so the residual `{}` is not just cosmetic — it's
+    // a load-failure. Mutate-mode entries with `before: {}` are
+    // legitimate user state and must NOT be auto-deleted by Pass 2;
+    // we restrict Pass 2 to entries whose leaf block install actually
+    // owned (action=create with before=null, OR the leaf was empty
+    // pre-apply — captured by `beforeEmptyObj`).
     let emptiedBlocks = 0;
+    const seenLeaf = new Set();
     for (const entry of targets) {
-      const leafKey = (entry.id || "").split(":").pop().split(".")[0];
+      const rawId = entry.id || "";
+      const at = rawId.indexOf(":");
+      const idTail = at >= 0 ? rawId.slice(at + 1) : rawId;
+      const leafKey = idTail.split(".")[0] || idTail;
+      if (!leafKey || seenLeaf.has(leafKey)) continue;
+
+      // Read the current shape; the decision hinges on it.
+      const v = data && typeof data === "object" ? data[leafKey] : undefined;
+
+      // Pass 1: per-key-diff create + bothEmpty (existing behaviour —
+      // covers EP/EKM when neither sibling added a key).
       const beforeIsObj = entry.before && typeof entry.before === "object" && !Array.isArray(entry.before);
       const bothEmpty = beforeIsObj
         && Object.keys(entry.before).length === 0
@@ -611,17 +635,39 @@ switch (op) {
       if (
         entry.action === "create" &&
         bothEmpty &&
-        leafKey &&
-        data != null &&
-        typeof data === "object" &&
-        Object.prototype.hasOwnProperty.call(data, leafKey) &&
-        typeof data[leafKey] === "object" &&
-        data[leafKey] !== null &&
-        !Array.isArray(data[leafKey]) &&
-        Object.keys(data[leafKey]).length === 0
+        v && typeof v === "object" && !Array.isArray(v) &&
+        Object.keys(v).length === 0
       ) {
         delete data[leafKey];
         emptiedBlocks++;
+        seenLeaf.add(leafKey);
+        continue;
+      }
+
+      // Pass 2: post-apply shape check. Only fire when install owned
+      // the entire block. "Owned" here means the entry's before is
+      // either null (create on absent block, as fresh-install statusLine
+      // is) OR an empty object (the block was empty pre-install and
+      // install replaced it with a non-empty dict — auto-revert the
+      // auto-replace). Mutate-mode entries with `before: {}` look
+      // ambiguous: pre-install the block may have been a legitimate
+      // user-empty config, so we DON'T auto-delete. We also skip when
+      // `before` is a populated object — install only mutated keys
+      // the user had; preserving a post-revert `{}` honours the
+      // user's intent.
+      const beforeIsEmptyObj = beforeIsObj && Object.keys(entry.before).length === 0;
+      const installOwnedBlock =
+        entry.action === "create" && entry.before === null
+        || (entry.action === "create" && beforeIsEmptyObj)
+        || (entry.action === "mutate" && beforeIsEmptyObj);
+      if (
+        installOwnedBlock &&
+        v && typeof v === "object" && !Array.isArray(v) &&
+        Object.keys(v).length === 0
+      ) {
+        delete data[leafKey];
+        emptiedBlocks++;
+        seenLeaf.add(leafKey);
       }
     }
     if (emptiedBlocks > 0) writeJson(target, data);

@@ -557,6 +557,143 @@ JOURNAL_GONE=$(TOPG_TEST_JOURNAL="$JOURNAL" node -e '
 assert_eq "[fresh-journal] install-journal.json wiped after uninstall" "yes" "$JOURNAL_GONE"
 rm -rf "$ROOT"
 
+echo "-- install-shape replay: statusLine block entry without refreshInterval + sibling refreshInterval entry -> block fully removed --"
+# install.sh writes the statusLine block-level entry with `after`
+# captured BEFORE ensure-refresh-interval (so the after dict does NOT
+# contain refreshInterval), then writes the refreshInterval entry as a
+# separate field-level sibling. The post-apply empty-block sweep in
+# edit-settings.mjs#apply-journal-entry handles the residual {}; this
+# is the actual regression case the user reported on v0.9.7.
+#
+# The fixture has ON-DISK refreshInterval=10 (the post-install state)
+# but the journal's statusLine entry `after` excludes refreshInterval
+# (the install-time bug-shape). Apply pass: block-level writes back
+# {refreshInterval: 10} (treats refreshInterval as user-added); field-
+# level then deletes refreshInterval; Pass 2 sees {} and removes it.
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+write_managed_settings "$SETTINGS" 10 "$WRAPPER_CMD"
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+TOPG_TEST_COMMAND="$WRAPPER_CMD" \
+node -e '
+  const fs = require("fs");
+  const settings = process.env.TOPG_TEST_SETTINGS;
+  const journal  = process.env.TOPG_TEST_JOURNAL;
+  const wrapper  = process.env.TOPG_TEST_COMMAND;
+  // Mirror install.sh exactly: SL_AFTER snapshot DOES NOT include
+  // refreshInterval (line 405 capture-then-ensure-refresh-interval
+  // ordering at install time). On-disk statusLine retains it.
+  const slAfter = { type: "command", command: wrapper, _topgauge_managed: true };
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.7",
+    entries: [
+      { id: "settings.json:statusLine", ts: "2026-07-16",
+        action: "create", before: null, after: slAfter, applied: false },
+      { id: "settings.json:statusLine.refreshInterval", ts: "2026-07-16",
+        action: "create", before: null, after: 10, applied: false }
+    ]
+  };
+  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+'
+OUT=$(run_uninstall "$ROOT" 2>&1)
+HAS_SL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write("statusLine" in d ? "yes" : "no");
+')
+assert_eq "[install-shape-replay] statusLine removed entirely (no residue)" "no" "$HAS_SL"
+assert_match_str "[install-shape-replay] post-apply sweep printed cleaned:" \
+  "cleaned: empty-block-deleted" "$OUT"
+SL_VAL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write(d.statusLine === undefined ? "undefined" : JSON.stringify(d.statusLine));
+')
+assert_eq "[install-shape-replay] on-disk statusLine is undefined (not {})" "undefined" "$SL_VAL"
+rm -rf "$ROOT"
+
+echo "-- post-apply sweep catches user-empty: user hand-emptied statusLine post-install --"
+# Edge case: user hand-edits settings.json to `statusLine: {}` after
+# install. applyJournalEntry's block-level branch is one in
+# preserved:all-fields-user-touched (anyReverted=false because current
+# already empty), so the block itself is untouched. The post-apply
+# sweep then catches the empty block via installOwnedBlock (action=create,
+# before=null) and removes it.
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+write_managed_settings "$SETTINGS" absent "$WRAPPER_CMD"
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+TOPG_TEST_COMMAND="$WRAPPER_CMD" \
+node -e '
+  const fs = require("fs");
+  const settings = process.env.TOPG_TEST_SETTINGS;
+  const journal  = process.env.TOPG_TEST_JOURNAL;
+  const wrapper  = process.env.TOPG_TEST_COMMAND;
+  // Force on-disk statusLine to {} (post-install hand-edit).
+  fs.writeFileSync(settings, JSON.stringify({ statusLine: {} }, null, 2) + "\n");
+  const slAfter = { type: "command", command: wrapper, _topgauge_managed: true, refreshInterval: 10 };
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.7",
+    entries: [
+      { id: "settings.json:statusLine", ts: "2026-07-16",
+        action: "create", before: null, after: slAfter, applied: false }
+    ]
+  };
+  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+'
+OUT=$(run_uninstall "$ROOT" 2>&1)
+HAS_SL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write("statusLine" in d ? "yes" : "no");
+')
+assert_eq "[user-empty] statusLine removed by post-apply sweep" "no" "$HAS_SL"
+assert_match_str "[user-empty] post-apply sweep cleaned:" \
+  "cleaned: empty-block-deleted" "$OUT"
+rm -rf "$ROOT"
+
+echo "-- mutate + pre-install empty: applyJournalEntry's mutate fast-path deletes the block (no Pass 2 needed) --"
+# When pre-install `statusLine` was `{}` (user's empty config) and
+# install overwrote it with a wrapper, uninstall should restore the
+# pre-install empty state. applyJournalEntry's mutate-fast-path
+# (edit-settings.mjs ~310-318) handles this: `restored = { ...
+# beforeObj } = {}` → `Object.keys(restored).length === 0` → deletes
+# the leaf. We verify this still works after adding the Pass 2
+# sweep — the sweep must not interfere with the existing delete.
+ROOT=$(build_journal_fixture)
+SETTINGS="${ROOT}/settings.json"
+JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+# Pre-install: statusLine is `{}`. Post-install: still `{}`
+# (settings.json was never modified by install in this synthetic
+# fixture, but the journal reflects the install-time transition).
+TOPG_TEST_SETTINGS="$SETTINGS" \
+TOPG_TEST_JOURNAL="$JOURNAL" \
+TOPG_TEST_COMMAND="$WRAPPER_CMD" \
+node -e '
+  const fs = require("fs");
+  const settings = process.env.TOPG_TEST_SETTINGS;
+  const journal  = process.env.TOPG_TEST_JOURNAL;
+  const wrapper  = process.env.TOPG_TEST_COMMAND;
+  fs.writeFileSync(settings, JSON.stringify({ statusLine: {} }, null, 2) + "\n");
+  const after = { type: "command", command: wrapper, _topgauge_managed: true, refreshInterval: 10 };
+  const j = {
+    version: 1, scope: "user", pluginVersion: "0.9.7",
+    entries: [
+      { id: "settings.json:statusLine", ts: "2026-07-16",
+        action: "mutate", before: {}, after, applied: false }
+    ]
+  };
+  fs.writeFileSync(journal, JSON.stringify(j, null, 2) + "\n");
+'
+run_uninstall "$ROOT" >/dev/null 2>&1
+HAS_BLOCK=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
+  process.stdout.write("statusLine" in d ? "yes" : "no");
+')
+assert_eq "[mutate-empty-fast-path] statusLine block fully removed (matches pre-install null state)" "no" "$HAS_BLOCK"
+rm -rf "$ROOT"
+
 echo "-- per-field revert: statusLine create entry -> user only touched refreshInterval --"
 # Settings: managed + refreshInterval=20 (user bumped from our default 10).
 # Journal: a create entry for statusLine (the snapshot AT install time,
