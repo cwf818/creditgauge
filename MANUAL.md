@@ -440,8 +440,8 @@ Three semantic variants per metric: **per-turn** (stdin-only, zero IO), **acc** 
 
 | Module | Inline args (per-turn) | Inline args (acc) | Inline args (sum) |
 | ------ | ---------------------- | ----------------- | ----------------- |
-| `m_tokenIn` / `m_accTokenIn` / `m_sumTokenIn` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
-| `m_tokenOut` / `m_accTokenOut` / `m_sumTokenOut` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align` |
+| `m_tokenIn` / `m_accTokenIn` / `m_sumTokenIn` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
+| `m_tokenOut` / `m_accTokenOut` / `m_sumTokenOut` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
 | `m_tokenCachedIn` / `m_accTokenCachedIn` / `m_sumTokenCachedIn` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
 | `m_tokenInTotal` / `m_accTokenTotalIn` / `m_sumTokenTotalIn` | `color`, `nulldrop` | `color`, `nulldrop`, `scope` | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
 | `m_tokenTotalOut` | `color`, `nulldrop` | — | — |
@@ -709,7 +709,7 @@ Three-layer in-memory accumulator (session / project / model). Each tick's `curr
 
 Cross-project JSONL scan. Inline args `model` (default `active`), `window` (default `all`), `align` (default `false`), `term` (opt-in, see below). With `align=true` and a `<interval.windowId>` declared in the active provider's plugin output, the scan runs plan-anchored against that interval's `resetStartAt`.
 
-`|term|<key>` is a shorthand for `|window|<intervals[term].windowId>|align:true` plus the `|model|` filter — it looks up `ctx.intervals[term]` and runs the plan-aligned scan from that interval's `startAt`. Requires `|model| != "all"` (a per-term scan without a model filter is ambiguous; the user should write the explicit `|window|...|align|true` form for `|model|all` scans). Stamps `StatAggregate.alignedUsedPercent` on the cache entry, which `m_sumEstQuota` reads to compute the periodic quota estimate without an explicit `|align|true`. Failure modes (interval missing / no usable `startAt`+`endAt`) silently fall through to the existing `|window|`/`|align|`/`dhms` path.
+`|term|<key>` is a shorthand for `|window|<intervals[term].windowId>|align:true` plus the `|model|` filter — it looks up `ctx.intervals[term]` and runs the plan-aligned scan from that interval's `startAt`. Requires `|model| != "all"` (a per-term scan without a model filter is ambiguous; the user should write the explicit `|window|...|align|true` form for `|model|all` scans). Stamps `StatAggregate.alignedUsedPercent` on the cache entry, which `m_sumEstQuota` reads to compute the periodic quota estimate without an explicit `|align|true`. Failure modes (interval missing / no usable `startAt`+`endAt`) silently fall through to the existing `|window|`/`|align|`/`dhms` path. v0.9.8 — the cache key for a term-resolved scan uses `intervals[term].windowId` (not the term key literal), so a `|term:short|model:active` and a `|window:5h|align:true|model:active` share the same `stat:<model>:5h:true` entry. When `intervals[term].windowId` is empty/missing, the key falls back to the term key literal.
 
 ### `m_tokenCost` / `m_accTokenCost` / `m_sumTokenCost`
 

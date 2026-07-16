@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.9.8
+
+### Fix
+
+- **`m_sum*|term:` on-disk cache key resolves to `intervals[term].windowId`.**
+  Previously the term short-circuit in `parseWindowScope` (src/render.ts:3567) wrote the literal term key (e.g. `"short"`) as `windowKey`, so an equivalent `|window:5h|align:true|model:active` and `|term:short|model:active` minted two separate cache rows (`stat:MiniMax-M3:5h:true` vs `stat:MiniMax-M3:short:true`). One statistical intent now maps to one cache entry. `windowKey` resolves to `iv.windowId || termRaw` — when a provider declares `monthly.windowId = "30d"` and `long.windowId = "30d"`, both terms collapse onto `stat:<model>:30d:true`. Falls back to the term key literal when `windowId` is empty/missing.
+
+### Add
+
+- **`term` added to `m_template` passthrough whitelist.** An outer `m_template|<key>|term:short` now cascades to every inner `m_sum*` instead of failing loud (`badarg` → warn + drop). Inner module's own `params.term` still wins per the standard precedence rule (outer = fallback).
+
+### Tests
+
+- `src/render-tokens.test.ts` — fixture key updates at 7448, 7492 (`stat:MiniMax-M3:short:true` → `stat:MiniMax-M3:5h:true`).
+- 4 new tests: positive (term + explicit window collide on one cache row), fallback (empty `windowId` → term key literal), collision (two terms with the same `windowId` share one entry), precedence (term + simultaneous `|window:<dhms>` → term wins).
+
+### Docs
+
+- `MANUAL.md:443-444` — add `term` to the missing `m_tokenIn` / `m_tokenOut` rows in the m_sum* arg column.
+- `MANUAL.md:712` — append a sentence describing the windowId-keyed cache behavior and the empty-windowId fallback.
+
 ## v0.9.7
 
 ### Add

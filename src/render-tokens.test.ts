@@ -4788,11 +4788,16 @@ describe("renderTemplate — v0.8.0+ m_acc* modules (three-scope accumulators)",
 // 8 new modules: 5 sums (in / out / cached / total / apiMs) + 3
 // ratios (tokenHitRate / tokenInSpeed / tokenOutSpeed). All read
 // the per-tick jsonl stream (cross-project via readAllSamples) and
-// filter by `:model:`, `:window:`, `:align:`. Results are cached in
-// state/cache.json under the "stat:<model>:<window>:<align>" key
-// (window ∈ {"5h","7d","all"}) with TTL=300s. sinceMs is derived
-// from window + ctx.nowMs + optional resetStartAt but is NOT part
-// of the key, capping the cache at 12 entries.
+// filter by `:model:`, `:window:`, `:align:`, `:term:`. Results
+// are cached in state/cache.json under the
+// "stat:<model>:<windowKey>:<align>" key
+// (windowKey ∈ {"5h","7d","all"} ∪ {intervals[*].windowId} ∪
+// {term keys used as fallback when windowId is empty}) with
+// TTL=300s. sinceMs is derived from window + ctx.nowMs + optional
+// resetStartAt but is NOT part of the key. v0.9.8 — |term:short|
+// folds into windowKey="5h" when intervals.short.windowId="5h",
+// so one statistical intent maps to one cache row regardless of
+// how the user spelled it.
 //
 // Tests below use a tmpDir as the state root (via setStateRoot)
 // so the user's real on-disk samples are untouched. Each test
@@ -7441,11 +7446,15 @@ describe("renderTemplate — m_tokenCost family (v0.9.x per-model prices)", () =
   // ------------------------------------------------------------------
   it("m_sumTokenIn|term|short|model|active → aligned scan on intervals.short", () => {
     // The aggregate cache key for an aligned scan with active
-    // model filter is "stat:<modelId>:short:true" (windowKey="short",
-    // alignActive=true). Seed at that key with rows>0.
+    // model filter is "stat:<modelId>:5h:true" (windowKey resolves
+    // to intervals.short.windowId="5h", alignActive=true). Seed at
+    // that key with rows>0. v0.9.8 — the term KEY ("short") is
+    // resolved to intervals[term].windowId ("5h") before being
+    // written into the cache key, so a |term:short| and the
+    // equivalent |window:5h|align:true| collapse onto one entry.
     __resetStatCacheForTest();
     setStatCacheForTest(
-      "stat:MiniMax-M3:short:true",
+      "stat:MiniMax-M3:5h:true",
       {
         sumIn: 1000,
         sumOut: 500,
@@ -7489,7 +7498,7 @@ describe("renderTemplate — m_tokenCost family (v0.9.x per-model prices)", () =
     // |window:5h|align:true|model:all| case.
     __resetStatCacheForTest();
     setStatCacheForTest(
-      "stat:MiniMax-M3:short:true",
+      "stat:MiniMax-M3:5h:true",
       {
         sumIn: 300,
         sumOut: 150,
@@ -7609,6 +7618,201 @@ describe("renderTemplate — m_tokenCost family (v0.9.x per-model prices)", () =
     ).join("\n");
     // dhms 5h scan → 100 → "100"
     assert.equal(strip(out), "in:100");
+  });
+
+  // ----------------------------------------------------------------
+  // v0.9.8 — term-resolved cache key (windowKey =
+  // intervals[term].windowId || termRaw). 4 new cases:
+  // (a) positive: term + explicit window share one cache row;
+  // (b) fallback: windowId "" → key uses term key literal;
+  // (c) collision: two terms with same windowId share one row;
+  // (d) precedence: term + simultaneous |window|<dhms> → term wins.
+  // ----------------------------------------------------------------
+  it("(a) m_sumTokenIn|term|short and |window:5h|align:true| share one cache entry", () => {
+    // v0.9.8 — seed at stat:MiniMax-M3:5h:true; render via the
+    // explicit-window form; expect a hit (same key, no extra scan).
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:5h:true",
+      {
+        sumIn: 1000,
+        sumOut: 500,
+        sumCached: 100,
+        sumTotalIn: 1100,
+        sumApiMs: 60_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+      },
+      300_000,
+    );
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        short: {
+          windowId: "5h",
+          label: "5h",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 5 * 3600 * 1000,
+          intervalMs: 5 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const out = renderTemplate(
+      ["m_sumTokenIn|window:5h|align:true|model:active"],
+      ctx,
+    ).join("\n");
+    assert.equal(strip(out), "in:1.0k");
+  });
+
+  it("(b) m_sumTokenIn|term|short when intervals.short.windowId === '' falls back to term key", () => {
+    // v0.9.8 — windowKey = iv.windowId || termRaw. When windowId
+    // is empty string, the term key literal wins so the entry is
+    // still addressable.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:short:true",
+      {
+        sumIn: 1000,
+        sumOut: 500,
+        sumCached: 100,
+        sumTotalIn: 1100,
+        sumApiMs: 60_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+      },
+      300_000,
+    );
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        short: {
+          windowId: "",
+          label: "5h",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 5 * 3600 * 1000,
+          intervalMs: 5 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const out = renderTemplate(["m_sumTokenIn|term:short|model:active"], ctx).join("\n");
+    assert.equal(strip(out), "in:1.0k");
+  });
+
+  it("(c) two terms with the same windowId share one stat cache entry (key collapse)", () => {
+    // v0.9.8 — provider declares monthly.windowId=long.windowId="30d";
+    // |term:monthly|model:active and |term:long|model:active must
+    // land on the same key. Seed once, render twice, both hit.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:30d:true",
+      {
+        sumIn: 1000,
+        sumOut: 500,
+        sumCached: 100,
+        sumTotalIn: 1100,
+        sumApiMs: 60_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+      },
+      300_000,
+    );
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        monthly: {
+          windowId: "30d",
+          label: "30d",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 30 * 24 * 3600 * 1000,
+          intervalMs: 30 * 24 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+        long: {
+          windowId: "30d",
+          label: "30d",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 30 * 24 * 3600 * 1000,
+          intervalMs: 30 * 24 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const a = renderTemplate(["m_sumTokenIn|term:monthly|model:active"], ctx).join("\n");
+    const b = renderTemplate(["m_sumTokenIn|term:long|model:active"], ctx).join("\n");
+    assert.equal(strip(a), "in:1.0k");
+    assert.equal(strip(b), "in:1.0k");
+  });
+
+  it("(d) m_sumTokenIn|term:short|window:7d|model:active → term wins, key uses 5h (not 7d)", () => {
+    // v0.9.8 — term short-circuit returns early at L3565, so a
+    // simultaneously-declared |window:<dhms>| is ignored. Document
+    // the precedence: term > window| for the m_sum* family.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:5h:true",
+      {
+        sumIn: 1000,
+        sumOut: 500,
+        sumCached: 100,
+        sumTotalIn: 1100,
+        sumApiMs: 60_000,
+        rows: 1,
+        calls: 1,
+        lastAt: Date.now(),
+        firstAt: Date.now() - 1000,
+        generatedAt: Date.now(),
+      },
+      300_000,
+    );
+    const ctx = {
+      ...ctxFor(fakeSnapshot()),
+      intervals: {
+        short: {
+          windowId: "5h",
+          label: "5h",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 5 * 3600 * 1000,
+          intervalMs: 5 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const out = renderTemplate(
+      ["m_sumTokenIn|term:short|window:7d|model:active"],
+      ctx,
+    ).join("\n");
+    assert.equal(strip(out), "in:1.0k");
   });
 });
 

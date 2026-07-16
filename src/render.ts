@@ -3564,7 +3564,11 @@ function parseWindowScope(
         const anchorMs = Date.parse(w.resetStartAt);
         if (Number.isFinite(anchorMs)) {
           return {
-            windowKey: termRaw,
+            // v0.9.8 — windowKey resolves to intervals[term].windowId
+            // (fallback to the term key literal). So a |term:short|model:active
+            // and the equivalent |window:5h|align:true|model:active share
+            // one stat:<model>:5h:true cache entry.
+            windowKey: iv.windowId || termRaw,
             sinceMs: anchorMs,
             interval: iv,
             alignActive: true,
@@ -4326,6 +4330,12 @@ const ALIGN_PARAM = {
 // so a user typo (`m_windowQuota|term|all`) fails loud at the
 // inline-args resolver rather than silently no-op'ing. Empty
 // strings and whitespace-only values are likewise dropped.
+// v0.9.8 — for the m_sum* family, `term` ALSO resolves to
+// intervals[term].windowId before being written into the cache
+// key (see parseWindowScope ~L3567), so a |term:short| and the
+// equivalent explicit |window:5h|align:true| share one cache
+// entry. Falls back to the term key literal when windowId is
+// empty.
 const TERM_PARAM = {
   named: {
     term: (raw: string): ResolvedValue | null => {
@@ -5495,6 +5505,13 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
       ...MODEL_PARAM.named,
       ...WINDOW_PARAM.named,
       ...ALIGN_PARAM.named,
+      // v0.9.8 — |term|<key> forwarded so an outer
+      // m_template|<key>|term:short cascades to every inner
+      // m_sum* in the fragment. Resolver accepts any non-empty
+      // non-"all" string (mirrors TERM_PARAM at L4333). The
+      // inner module's own params.term, when present, still
+      // wins per the standard precedence rule (outer = fallback).
+      ...TERM_PARAM.named,
       // vX.X.X+ — |valueOnly|<true|false> forwarded so an outer
       // m_template|<key>|valueOnly:true cascades to every
       // label-using inner module (per-turn / m_acc* / m_sum* /
