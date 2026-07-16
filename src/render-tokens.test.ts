@@ -6407,6 +6407,178 @@ describe("render — m_statTtlStatus (v0.9.x +fixed-second suffix)", () => {
   });
 });
 
+// ----- v0.9.8+ m_sumTtlStatus ----------------------------------------
+//
+// Sibling of m_statTtlStatus (which shows the freshest of ALL
+// stat-cache keys); m_sumTtlStatus shows the TTL of the EXACT key
+// resolved by parseWindowScope (model + window + align + term).
+// Lets the user inspect freshness for a SPECIFIC m_sum* filter
+// rather than the newest write to the cache.
+//
+// Test pattern: build a ctx with intervals.short.windowId="5h";
+// seed the corresponding stat:<model>:5h:<align> key; render the
+// module. Default ctx uses modelId="MiniMax-M3" (fakeSnapshot L89)
+// and windowKey resolves to "5h" (term short-circuit) so the
+// key is "stat:MiniMax-M3:5h:true".
+describe("render — m_sumTtlStatus (v0.9.8+ per-filter TTL gauge)", () => {
+  // Reusable ctx: same shape as the m_sumEstQuota tests.
+  const sumCtx = () => ({
+    ...ctxFor(fakeSnapshot()),
+    intervals: {
+      short: {
+        windowId: "5h",
+        label: "5h",
+        startAt: 1_000_000,
+        endAt: 1_000_000 + 5 * 3600 * 1000,
+        intervalMs: 5 * 3600 * 1000,
+        remainingPercent: 75,
+        usedPercent: 25,
+        remainingQuota: null,
+        usedQuota: null,
+        limitQuota: null,
+      },
+    },
+  });
+
+  it("no entry → STALE_COLOR-wrapped '▆' placeholder", () => {
+    __resetStatCacheForTest();
+    const out = renderTemplate(
+      ["m_sumTtlStatus|term:short|model:active"],
+      sumCtx(),
+    ).join("");
+    assert.equal(strip(out), "▆");
+    assert.ok(out.includes(STALE), `expected STALE SGR, got: ${JSON.stringify(out)}`);
+  });
+
+  it("fresh entry (age≈0 of 300s ttl) → '█ <≈300>s' in brightGreen", () => {
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:5h:true",
+      { sumIn: 1, sumOut: 0, sumCached: 0, sumTotalIn: 1, sumApiMs: 0, rows: 1, calls: 1, lastAt: Date.now(), firstAt: Date.now(), generatedAt: Date.now() },
+      300_000,
+    );
+    const out = renderTemplate(
+      ["m_sumTtlStatus|term:short|model:active"],
+      sumCtx(),
+    ).join("");
+    assert.match(strip(out), /^█ (299|300)s$/);
+    assert.ok(out.includes(GREEN), `expected brightGreen SGR, got: ${JSON.stringify(out)}`);
+  });
+
+  it("half-aged entry (age=150s of 300s) → '▄ 150s' in yellow", () => {
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:5h:true",
+      { sumIn: 1, sumOut: 0, sumCached: 0, sumTotalIn: 1, sumApiMs: 0, rows: 1, calls: 1, lastAt: Date.now(), firstAt: Date.now(), generatedAt: Date.now() },
+      300_000,
+    );
+    setStatCacheAtForTest("stat:MiniMax-M3:5h:true", Date.now() - 150_000);
+    const out = renderTemplate(
+      ["m_sumTtlStatus|term:short|model:active"],
+      sumCtx(),
+    ).join("");
+    assert.equal(strip(out), "▄ 150s");
+    assert.ok(out.includes(YELLOW), `expected yellow SGR, got: ${JSON.stringify(out)}`);
+  });
+
+  it("expired entry (age=400s of 300s) → '▁ 0s' in red", () => {
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:5h:true",
+      { sumIn: 1, sumOut: 0, sumCached: 0, sumTotalIn: 1, sumApiMs: 0, rows: 1, calls: 1, lastAt: Date.now(), firstAt: Date.now(), generatedAt: Date.now() },
+      300_000,
+    );
+    setStatCacheAtForTest("stat:MiniMax-M3:5h:true", Date.now() - 400_000);
+    const out = renderTemplate(
+      ["m_sumTtlStatus|term:short|model:active"],
+      sumCtx(),
+    ).join("");
+    assert.equal(strip(out), "▁ 0s");
+    assert.ok(out.includes(RED), `expected red SGR, got: ${JSON.stringify(out)}`);
+  });
+
+  it("different filters target different keys — |term|long| peeks a different row", () => {
+    // v0.9.8 — m_sumTtlStatus targets the per-filter key, not the
+    // freshest. So two distinct filters against the same cache
+    // produce two distinct reads. Seed both, render both, both hit.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:5h:true",
+      { sumIn: 1, sumOut: 0, sumCached: 0, sumTotalIn: 1, sumApiMs: 0, rows: 1, calls: 1, lastAt: Date.now(), firstAt: Date.now(), generatedAt: Date.now() },
+      300_000,
+    );
+    setStatCacheForTest(
+      "stat:MiniMax-M3:7d:true",
+      { sumIn: 1, sumOut: 0, sumCached: 0, sumTotalIn: 1, sumApiMs: 0, rows: 1, calls: 1, lastAt: Date.now(), firstAt: Date.now(), generatedAt: Date.now() },
+      300_000,
+    );
+    const ctxWithBoth = {
+      ...sumCtx(),
+      intervals: {
+        ...sumCtx().intervals,
+        mid: {
+          windowId: "7d",
+          label: "7d",
+          startAt: 1_000_000,
+          endAt: 1_000_000 + 7 * 24 * 3600 * 1000,
+          intervalMs: 7 * 24 * 3600 * 1000,
+          remainingPercent: 75,
+          usedPercent: 25,
+          remainingQuota: null,
+          usedQuota: null,
+          limitQuota: null,
+        },
+      },
+    };
+    const short = renderTemplate(["m_sumTtlStatus|term:short|model:active"], ctxWithBoth).join("");
+    const mid = renderTemplate(["m_sumTtlStatus|term:mid|model:active"], ctxWithBoth).join("");
+    assert.match(strip(short), /^█ (299|300)s$/, `short: ${JSON.stringify(short)}`);
+    assert.match(strip(mid), /^█ (299|300)s$/, `mid: ${JSON.stringify(mid)}`);
+  });
+
+  it("inline m_sumTtlStatus|color|orange overrides scale", () => {
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:5h:true",
+      { sumIn: 1, sumOut: 0, sumCached: 0, sumTotalIn: 1, sumApiMs: 0, rows: 1, calls: 1, lastAt: Date.now(), firstAt: Date.now(), generatedAt: Date.now() },
+      300_000,
+    );
+    const out = renderTemplate(
+      ["m_sumTtlStatus|term:short|model:active|color:orange"],
+      sumCtx(),
+    ).join("");
+    assert.match(strip(out), /^█ (299|300)s$/);
+    assert.ok(out.includes(ORANGE), `expected orange SGR, got: ${JSON.stringify(out)}`);
+  });
+
+  it("inline m_sumTtlStatus|nulldrop|true → drops when no entry", () => {
+    __resetStatCacheForTest();
+    const out = renderTemplate(["m_sumTtlStatus|nulldrop:true"], sumCtx());
+    // nulldrop:true + null data → renderer returns null → the
+    // separator-adjacent-skip logic drops the chunk entirely.
+    assert.equal(out.length, 0);
+  });
+
+  it("inline m_sumTtlStatus|window|5h|align|true picks the same key as the bare form", () => {
+    // v0.9.8 — explicit window+align should resolve to the same
+    // stat:<model>:5h:true key as the bare form (which uses
+    // intervals.short.windowId). Seed once, render via both
+    // spellings, both hit.
+    __resetStatCacheForTest();
+    setStatCacheForTest(
+      "stat:MiniMax-M3:5h:true",
+      { sumIn: 1, sumOut: 0, sumCached: 0, sumTotalIn: 1, sumApiMs: 0, rows: 1, calls: 1, lastAt: Date.now(), firstAt: Date.now(), generatedAt: Date.now() },
+      300_000,
+    );
+    const out = renderTemplate(
+      ["m_sumTtlStatus|window:5h|align:true|model:active"],
+      sumCtx(),
+    ).join("");
+    assert.match(strip(out), /^█ (299|300)s$/);
+    assert.ok(out.includes(GREEN), `expected brightGreen SGR, got: ${JSON.stringify(out)}`);
+  });
+});
+
 // ----- v0.8.24+ startAt / lastAt time anchors -------------------------------
 //
 // 3 new modules (m_accStartTime / m_sumStartTime / m_sumEndTime)

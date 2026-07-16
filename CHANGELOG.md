@@ -6,20 +6,24 @@
 
 - **`m_sum*|term:` on-disk cache key resolves to `intervals[term].windowId`.**
   Previously the term short-circuit in `parseWindowScope` (src/render.ts:3567) wrote the literal term key (e.g. `"short"`) as `windowKey`, so an equivalent `|window:5h|align:true|model:active` and `|term:short|model:active` minted two separate cache rows (`stat:MiniMax-M3:5h:true` vs `stat:MiniMax-M3:short:true`). One statistical intent now maps to one cache entry. `windowKey` resolves to `iv.windowId || termRaw` — when a provider declares `monthly.windowId = "30d"` and `long.windowId = "30d"`, both terms collapse onto `stat:<model>:30d:true`. Falls back to the term key literal when `windowId` is empty/missing.
+- **`m_sumTtlStatus` inline dispatcher `skipLen` off-by-one.** The new module's `m_sumTtlStatus` is 14 chars (not 15 like `m_statTtlStatus`), so the dispatcher's `expandInlineToken(tok, "m_sumTtlStatus", 16, ctx)` sliced one byte too far and the `term:short|model:active` body came out as `"erm:short|model:active"`. After re-counting: `m_sumTtlStatus` is 14, +"|" = 15. Inline path now resolves correctly; bare form already worked.
 
 ### Add
 
 - **`term` added to `m_template` passthrough whitelist.** An outer `m_template|<key>|term:short` now cascades to every inner `m_sum*` instead of failing loud (`badarg` → warn + drop). Inner module's own `params.term` still wins per the standard precedence rule (outer = fallback).
+- **`m_sumTtlStatus` — per-filter TTL gauge, sibling of `m_statTtlStatus`.** `m_statTtlStatus` showed the freshest of ALL stat-cache keys; `m_sumTtlStatus` shows the TTL of the EXACT `stat:<model>:<windowKey>:<align>` row that `parseWindowScope` resolves for the active filter (model + window + align + term). Lets the user inspect freshness for a SPECIFIC `m_sum*` aggregate, not just the newest write to the cache. Inherits the `m_sum*` filter surface (`color` / `nulldrop` / `model` / `window` / `align` / `term`). Cache miss → `▆` placeholder in STALE_COLOR. `peekStatAgeMs` is TTL-IGNORING (mirrors `peekFreshestStatAgeMs`), so a row past its 300s TTL still renders — the user sees "0s" in red, knowing the aggregate is gone.
 
 ### Tests
 
 - `src/render-tokens.test.ts` — fixture key updates at 7448, 7492 (`stat:MiniMax-M3:short:true` → `stat:MiniMax-M3:5h:true`).
 - 4 new tests: positive (term + explicit window collide on one cache row), fallback (empty `windowId` → term key literal), collision (two terms with the same `windowId` share one entry), precedence (term + simultaneous `|window:<dhms>` → term wins).
+- 8 new tests in `m_sumTtlStatus` describe block (6410-6580): placeholder on miss, fresh / half-aged / expired entries (3 tiers of 5-band color), per-filter key isolation (|term:short| vs |term:mid| peek distinct rows), |color|orange| override, |nulldrop|true| drop, explicit `|window:5h|align:true|` path (mirrors `|term:short|` to the same key).
 
 ### Docs
 
 - `MANUAL.md:443-444` — add `term` to the missing `m_tokenIn` / `m_tokenOut` rows in the m_sum* arg column.
 - `MANUAL.md:712` — append a sentence describing the windowId-keyed cache behavior and the empty-windowId fallback.
+- `MANUAL.md:433-434` — new `m_sumTtlStatus` row in the m_* module table, alongside its `m_statTtlStatus`/`m_cacheTtlStatus` siblings.
 
 ## v0.9.7
 

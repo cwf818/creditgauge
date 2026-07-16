@@ -3145,6 +3145,25 @@ m_quota: Object.assign(
     const suffix = formatTtlSeconds(entry.ttlMs - entry.ageMs);
     return `${ttlStatusColor(remaining)}${ttlStatusChar(remaining)}${RESET} ${suffix}`;
   },
+  // v0.9.8+ — m_sumTtlStatus: per-filter TTL gauge. Sibling of
+  // m_statTtlStatus (which shows the freshest across all keys);
+  // m_sumTtlStatus shows the TTL of the EXACT stat-cache row
+  // that parseWindowScope resolves for the active m_sum* filter
+  // (model + window + align + term). Lets the user see how fresh
+  // the specific aggregate they care about is, not just the
+  // newest write to the cache. Same TTL_BAR_CHARS glyph +
+  // 5-band color + fixed-second suffix as m_statTtlStatus.
+  // Miss / ttlMs<=0 → placeholder (single ▆ in STALE_COLOR).
+  m_sumTtlStatus: (c) => {
+    const filter = parseWindowScope(c, c.passThrough ?? {});
+    if (!filter) return placeholderBare("m_sumTtlStatus", c);
+    const key = statusStore.statKeyForFilter(filter);
+    const entry = statusStore.peekStatAgeMs(key);
+    if (!entry || entry.ttlMs <= 0) return placeholderBare("m_sumTtlStatus", c);
+    const remaining = (entry.ttlMs - entry.ageMs) / entry.ttlMs;
+    const suffix = formatTtlSeconds(entry.ttlMs - entry.ageMs);
+    return `${ttlStatusColor(remaining)}${ttlStatusChar(remaining)}${RESET} ${suffix}`;
+  },
   // v0.8.17+ — system RAM usage. Darwin reads vm_stat; other
   // platforms fall back to os.totalmem() - os.freemem(). Format
   // matches ccstatusline's "Mem:15.9G/63.7G" shape. query failure
@@ -4723,6 +4742,10 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   // choice.
   m_cacheTtlStatus: () => "▆",
   m_statTtlStatus: () => "▆",
+  // v0.9.8+ — m_sumTtlStatus placeholder. Same single ▆ glyph as
+  // m_statTtlStatus / m_cacheTtlStatus; no label prefix to recover
+  // (the body is just a glyph + suffix, no value).
+  m_sumTtlStatus: () => "▆",
   // bare-string (no prefix to recover from; just "n/a")
   m_session: placeholderNA(""),
   m_model: placeholderNA(""),
@@ -5450,6 +5473,12 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // vX.X.X+ — m_sumEstQuota reuses the m_sum* param surface
   // (color / nulldrop / model / window / align / term / valueOnly).
   m_sumEstQuota: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
+  // v0.9.8+ — m_sumTtlStatus inherits the m_sum* filter surface
+  // (color / nulldrop / model / window / align / term) so an
+  // outer |model|/|window|/...| from m_template or the inline
+  // token can target the exact stat-cache key to peek. No
+  // valueOnly — the body is a glyph + second suffix, not a value.
+  m_sumTtlStatus: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named } },
   // v0.4.0+ — sub-template reference. First argument is the key
   // into cfg().lineTemplates (the user's reusable-fragment
   // registry). Optional `:type|<plan|balance>` filter (default
@@ -6809,6 +6838,26 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const suffix = formatTtlSeconds(entry.ttlMs - entry.ageMs);
     return `${color}${ttlStatusChar(remaining)}${RESET} ${suffix}`;
   },
+  // v0.9.8+ — inline form of m_sumTtlStatus. Mirrors the bare
+  // MODULES entry but with the user's |color|<c> override
+  // applied before the default 5-band scale (override always
+  // wins; matches the m_statTtlStatus / m_cacheTtlStatus inline
+  // contract). parseWindowScope reads from `merged` so an outer
+  // m_template passthrough on model/window/align/term flows in
+  // (whitelist extends TERM_PARAM since v0.9.8).
+  m_sumTtlStatus: (params, ctx) => {
+    const merged = mergePassThrough(params, ctx);
+    const filter = parseWindowScope(ctx, merged);
+    if (!filter) return placeholderWithColor("m_sumTtlStatus", params, ctx);
+    const key = statusStore.statKeyForFilter(filter);
+    const entry = statusStore.peekStatAgeMs(key);
+    if (!entry || entry.ttlMs <= 0) return placeholderWithColor("m_sumTtlStatus", params, ctx);
+    const remaining = (entry.ttlMs - entry.ageMs) / entry.ttlMs;
+    const userColor = params.color as string | undefined;
+    const color = userColor ?? ttlStatusColor(remaining);
+    const suffix = formatTtlSeconds(entry.ttlMs - entry.ageMs);
+    return `${color}${ttlStatusChar(remaining)}${RESET} ${suffix}`;
+  },
   // v0.8.17+ — system RAM usage inline form. Mirror of the bare
   // MODULES entry but with the user's |color|<c> override applied
   // before the default tint (override always wins; matches the
@@ -7407,6 +7456,14 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       } else if (tok.startsWith("m_statTtlStatus|")) {
         // m_statTtlStatus → 15 chars + "|" = 16 skipLen.
         inline = expandInlineToken(tok, "m_statTtlStatus", 16, ctx);
+      } else if (tok.startsWith("m_sumTtlStatus|")) {
+        // m_sumTtlStatus → 14 chars + "|" = 15 skipLen. Co-located
+        // with m_statTtlStatus because both render a TTL gauge
+        // glyph + fixed-second suffix; differs only in key source
+        // (per-filter vs freshest). No collision with the other
+        // m_sum* prefixes (the 5th char after "m_sum" is "T" here
+        // vs "E"/"T"/"A"/"C"/"H"/"I"/"O" for the rest).
+        inline = expandInlineToken(tok, "m_sumTtlStatus", 15, ctx);
       } else if (tok.startsWith("m_memUsage|")) {
         // m_memUsage → 10 chars + "|" = 11 skipLen.
         inline = expandInlineToken(tok, "m_memUsage", 11, ctx);

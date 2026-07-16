@@ -1208,6 +1208,16 @@ function aggregateSamples(samples: TokenSample[]): StatAggregate {
   };
 }
 
+// vX.X.X+ — Single source of truth for the on-disk stat-cache
+// key string given a filter. Mirrors the template literal inside
+// getStatAggregate (~L1227) so the renderer (m_sumTtlStatus) can
+// peek the same row without recomputing the full aggregate. The
+// key shape MUST stay in sync with getStatAggregate's composer —
+// if that template changes, update this helper too.
+export function statKeyForFilter(filter: SumFilter): string {
+  return `stat:${filter.modelFilter ?? "all"}:${filter.windowKey}:${(filter as { alignActive?: boolean }).alignActive ?? false}`;
+}
+
 export function getStatAggregate(filter: SumFilter): StatAggregate {
   // vX.X.X — `:alignActive` segment RESTORED. The renderer-side
   // parseWindowScope buckets along `alignActive` because the
@@ -1224,7 +1234,7 @@ export function getStatAggregate(filter: SumFilter): StatAggregate {
   // cache slots so they don't poison each other. Free-form dhms
   // values (always alignActive=false) still mint their own entries
   // via the literal `windowKey` (`stat:...:2h30m:false`).
-  const key = `stat:${filter.modelFilter ?? "all"}:${filter.windowKey}:${(filter as { alignActive?: boolean }).alignActive ?? false}`;
+  const key = statKeyForFilter(filter);
   const cached = getStatCache<StatAggregate>(key, STAT_CACHE_TTL_MS);
   if (cached) return cached;
   const samples = readAllSamples(filter.sinceMs);
