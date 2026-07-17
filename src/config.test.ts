@@ -97,13 +97,19 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
   });
 
   it('"abundant" resolves to the abundant preset body', async () => {
+    // v0.9.8+: dropped the 2h-latest stat line and per-window
+    // `m_statTtlStatus` (freshest-of-all) — replaced with per-filter
+    // `m_sumTtlStatus` so the TTL gauge sits next to each window's
+    // stat line it actually belongs to.
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "abundant" }));
     const cfg = await loadConfig();
     assert.ok(cfg.statuslineTemplate[0].startsWith("m_template|information"));
-    assert.ok(cfg.statuslineTemplate.includes("m_template|tokens_stat|window:2h"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|tokens_stat|window:5h|align:true"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|tokens_stat|window:7d|align:true"));
-    assert.ok(cfg.statuslineTemplate.includes("m_statTtlStatus"));
+    assert.ok(cfg.statuslineTemplate.includes("m_sumTtlStatus|window:5h|align:true"));
+    assert.ok(cfg.statuslineTemplate.includes("m_sumTtlStatus|window:7d|align:true"));
+    assert.ok(!cfg.statuslineTemplate.includes("m_template|tokens_stat|window:2h"));
+    assert.ok(!cfg.statuslineTemplate.includes("m_statTtlStatus"));
     assert.ok(cfg.statuslineTemplate.includes("m_quota|term:long|display:remaining|nulldrop:true"));
   });
 
