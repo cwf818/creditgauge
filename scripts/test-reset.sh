@@ -29,6 +29,12 @@ if [ ! -f "$RESET_SH" ]; then
   exit 1
 fi
 
+# Source the bash-side projectHash implementation — single source of
+# truth shared with scripts/reset.sh. If the algorithm drifts, both
+# sides stay in sync (or both break the same way).
+# shellcheck source=./lib/project-hash.sh
+. "${SCRIPT_DIR}/lib/project-hash.sh"
+
 # Use a fixture root under the current working directory (not /tmp) so
 # that the script sees the SAME absolute path the test runner does.
 # Git Bash on Windows rewrites /tmp/... to a different AppData path
@@ -85,7 +91,7 @@ build_fixture() {
   local root="$1"
   local proj_path="$2"
   local hash
-  hash="$(compute_hash "$proj_path")"
+  hash="$(project_hash "$proj_path")"
   local base="${root}/plugins/creditgauge/state"
   mkdir -p "${base}/${hash}"
   # v1.0.1+: cache.json is the top-level `state/cache.json` (shared
@@ -110,16 +116,8 @@ build_fixture() {
 }
 
 # Mirror src/status-store.ts:projectHash() — must stay in sync.
-compute_hash() {
-  printf '%s' "$1" \
-    | tr '\\' '-' 2>/dev/null \
-    | tr '/' '-' 2>/dev/null \
-    | tr ':' '-' 2>/dev/null \
-    | tr '[:space:]	' '-' 2>/dev/null \
-    | tr '[:cntrl:]' '-' 2>/dev/null \
-    | tr 'A-Z' 'a-z' 2>/dev/null \
-    | cut -c1-80
-}
+# (Implementation now lives in scripts/lib/project-hash.sh, sourced
+# above. Do not reintroduce an inline copy.)
 
 # Run reset.sh against the fixture. $1 = extra args ("" or "--dry-run").
 # Captures stdout+stderr; echo's it for the caller.
@@ -149,7 +147,7 @@ mkdir -p "$PROJ"
 # matches what `cd $PROJ && bash reset.sh` will compute.
 build_fixture "$FIXTURE" "$PROJ"
 # Sanity: compute_hash(absolute-path-to-proj) is reproducible.
-assert_eq "compute_hash matches fixture hash" "$FIXTURE_HASH" "$(compute_hash "$PROJ")"
+assert_eq "project_hash matches fixture hash" "$FIXTURE_HASH" "$(project_hash "$PROJ")"
 
 # Dry-run.
 out=$(run_reset "--dry-run")
@@ -313,15 +311,80 @@ echo "-- hash algorithm mirrors src/status-store.ts:projectHash --"
 # Direct comparison between the bash hash function and what TypeScript
 # would produce. These mirror the unit assertions in
 # src/token-store.test.ts:projectHash so a future refactor that
-# changes the algorithm trips both the JS and bash tests.
-assert_eq "D:\\WorkSpace\\topgauge → d--workspace-topgauge" \
-  "$(compute_hash 'D:\WorkSpace\topgauge')" "d--workspace-topgauge"
-assert_eq "/home/user/proj → -home-user-proj" \
-  "$(compute_hash '/home/user/proj')" "-home-user-proj"
+# changes the algorithm trips both the JS and bash tests. Post-v1.0.0
+# the repo root is `CreditGauge`, not `topgauge`, so the canonical
+# Windows-form fixture now hashes to `d--workspace-creditgauge`.
+
+# Canonical TS-side input form.
+assert_eq "D:\\WorkSpace\\CreditGauge → d--workspace-creditgauge (TS input form)" \
+  "$(project_hash 'D:\WorkSpace\CreditGauge')" "d--workspace-creditgauge"
+
+# Bug regression: Git Bash sees this as $PWD but TS sees the form above.
+# Both MUST hash to the same string after normalization.
+if command -v cygpath >/dev/null 2>&1; then
+  assert_eq "/d/WorkSpace/CreditGauge → d--workspace-creditgauge (Git Bash form, normalized via cygpath -w)" \
+    "$(project_hash '/d/WorkSpace/CreditGauge')" "d--workspace-creditgauge"
+  assert_eq "D:/WorkSpace/CreditGauge → d--workspace-creditgauge (mixed separators)" \
+    "$(project_hash 'D:/WorkSpace/CreditGauge')" "d--workspace-creditgauge"
+fi
+
+# WSL equivalent of the same bug (only runs on WSL where wslpath exists).
+if command -v wslpath >/dev/null 2>&1; then
+  assert_eq "/mnt/d/WorkSpace/CreditGauge → d--workspace-creditgauge (WSL form, normalized via wslpath -w)" \
+    "$(project_hash '/mnt/d/WorkSpace/CreditGauge')" "d--workspace-creditgauge"
+fi
+
+# Linux / macOS paths: only meaningful to assert when no path-
+# translation tool is available. On Git Bash, `cygpath -w "/home/..."`
+# converts the path to "$MSYS_ROOT/home/..." (e.g. `C:\Program Files\Git\home\user\proj`)
+# rather than passing through, which is Git Bash's documented behavior
+# for non-mount absolute paths. So these assertions gate on the
+# absence of cygpath/wslpath to run only on platforms where the
+# pass-through branch actually executes.
+if ! command -v cygpath >/dev/null 2>&1 && ! command -v wslpath >/dev/null 2>&1; then
+  assert_eq "/home/user/proj → -home-user-proj (no normalization)" \
+    "$(project_hash '/home/user/proj')" "-home-user-proj"
+  assert_eq "/Users/chen/proj → -users-chen-proj (macOS, no normalization)" \
+    "$(project_hash '/Users/chen/proj')" "-users-chen-proj"
+fi
+
+# Whitespace inside path is also a separator (mirrors src/token-store.test.ts
+# separators case + the programFiles case below). Pre-normalized
+# (Windows-form input) so it works regardless of platform.
 assert_eq "C:\\Program Files\\app → c--program-files-app" \
-  "$(compute_hash 'C:\Program Files\app')" "c--program-files-app"
+  "$(project_hash 'C:\Program Files\app')" "c--program-files-app"
+
+# Bare name, no separators.
 assert_eq "bare 'proj' → proj (no separators)" \
-  "$(compute_hash 'proj')" "proj"
+  "$(project_hash 'proj')" "proj"
+
+# Lowercasing.
+assert_eq "Foo/Bar → foo-bar (lowercased)" \
+  "$(project_hash 'Foo/Bar')" "foo-bar"
+
+# Control-char stripping (mirrors src/token-store.test.ts:29-44).
+# Construct the string via printf to keep \t / \n / \r as raw bytes
+# (rather than via $'\t' which some shells post-process).
+# Pipe through a printf-based shell function that mimics project_hash's
+# normalization contract on this exact input.
+cr_input="$(printf 'D:\rbar')"
+nl_input="$(printf 'D:\nfoo')"
+tab_input="$(printf 'D:\test')"
+assert_eq "D:<TAB>est → d--est (TAB stripped)" \
+  "$(project_hash "$tab_input")" "d--est"
+assert_eq "D:<NL>foo → d--foo (NL stripped)" \
+  "$(project_hash "$nl_input")" "d--foo"
+assert_eq "D:<CR>bar → d--bar (CR stripped)" \
+  "$(project_hash "$cr_input")" "d--bar"
+
+# 80-char cap (mirrors src/token-store.test.ts:24-27).
+# Use a single-quoted 120-char string so the input is unambiguous;
+# project_hash output ends with a trailing newline from the tr/cut
+# pipeline, so strip it before measuring.
+long="$(printf 'a%.0s' $(seq 1 120))"
+assert_eq "120-char input length sanity" "${#long}" "120"
+assert_eq "120-char input → 80-char hash" \
+  "$(project_hash "$long" | tr -d '\n' | wc -c | tr -d ' ')" "80"
 
 # --- Summary -----------------------------------------------------------------
 echo ""

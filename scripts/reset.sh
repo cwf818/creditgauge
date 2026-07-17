@@ -89,33 +89,15 @@ done
 CLAUDE_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 STATE_DIR="${CLAUDE_ROOT}/plugins/creditgauge/state"
 
-# Mirror src/status-store.ts:projectHash(). Cross-platform: works
-# for Windows-style paths (C:\Users\foo) AND POSIX paths (/home/foo)
-# and any separator/whitespace mix. Each char class replaces to a
-# single '-'. We deliberately do NOT collapse adjacent runs —
-# TypeScript's regex `/[\\/:]/g` substitutes one '-' per matched
-# char, so `D:\WorkSpace\foo` → `d--workspace-foo` (two dashes,
-# one for `\` one for `:`).
-#
-# Bash quoting: inside single quotes, `'\\'` is a 2-char string `\\`.
-# tr treats `\\` as an escape for one literal backslash (POSIX). So
-# `'\\'` matches the one backslash in D:\W... and replaces it with
-# the one literal `-` (no class-wide expansion).
-#
-# tr emits "unescaped backslash at end of string is not portable"
-# on set2's trailing char (it can't tell whether the final `-` was
-# meant to be `\\`). Suppress via `2>/dev/null` — the conversion is
-# correct, only the warning is noisy.
-PROJECT_HASH="$(
-  printf '%s' "$PWD" \
-    | tr '\\' '-' 2>/dev/null \
-    | tr '/' '-' 2>/dev/null \
-    | tr ':' '-' 2>/dev/null \
-    | tr '[:space:]	' '-' 2>/dev/null \
-    | tr '[:cntrl:]' '-' 2>/dev/null \
-    | tr 'A-Z' 'a-z' 2>/dev/null \
-    | cut -c1-80
-)"
+# Hash algorithm lives in scripts/lib/project-hash.sh (single source
+# of truth on the bash side, mirrors src/status-store.ts:projectHash()).
+# The helper normalizes the input via cygpath -w / wslpath -w when
+# running under a POSIX-on-Windows translation layer (Git Bash, WSL),
+# so this script sees the same hash the TS runtime would for the same
+# actual project.
+# shellcheck source=./lib/project-hash.sh
+. "$(dirname "$0")/lib/project-hash.sh"
+PROJECT_HASH="$(project_hash "$PWD")"
 
 # Defensive: if the tr/lower pipeline collapsed everything to dashes
 # (e.g. an empty $PWD), refuse rather than wipe state/<dashes...>/.
@@ -152,8 +134,16 @@ if [ "${#REMOVE_LIST[@]}" = 0 ]; then
 fi
 
 echo "reset.sh: plan (projectHash=${PROJECT_HASH})"
-for f in "${REMOVE_LIST[@]}"; do
-  echo "  rm $f"
+# Always print one line per target (existing → rm, missing → skip),
+# so the user can tell which files would be touched and which are
+# already absent (a missing state.json on first run, or post-reset,
+# shouldn't read as "the script forgot that file").
+for f in "$CACHE_JSON" "$STATE_JSON" "$STAT_JSON"; do
+  if [ -e "$f" ]; then
+    echo "  rm $f"
+  else
+    echo "  skip $f (not present)"
+  fi
 done
 
 if [ "$DRY_RUN" = 1 ]; then

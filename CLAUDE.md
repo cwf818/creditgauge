@@ -161,7 +161,7 @@ The runtime state directory is partitioned by project so multiple Claude Code se
     <sessionId>.jsonl          # token samples (was state/token-samples/<hash>/<sid>.jsonl)
 ```
 
-- All per-tick IO paths derive their location from `projectHash(cwd)` (lowercased, `\/: ` → `-`, control chars stripped, capped at 80 chars; exported from `src/token-store.ts`).
+- All per-tick IO paths derive their location from `projectHash(cwd)` (lowercased, `\/: ` → `-`, control chars stripped, capped at 80 chars; exported from `src/status-store.ts`).
 - `src/render.ts` prefixes every cache key with `<projectHash>:` so `cache.json` files never share keys across projects. The cache module API (`get`/`set`/etc.) is unchanged — the prefix is a render-side concern only.
 - `src/diagnostics.ts` gained an optional `cwd` parameter on `append` / `readLatest` / `diagnosticsPath`. When omitted or null (e.g. plugin-level config-parse warnings), writes fall back to the legacy top-level `state/diagnostics.jsonl`.
 - Legacy migration for users upgrading from v0.4.0–v0.4.<n-1>: legacy top-level `cache.json` / `diagnostics.jsonl` are NOT auto-migrated (no project info recoverable). Legacy `state/token-samples/<projectHash>/<sessionId>.jsonl` files can be preserved with `bash scripts/migrate-state.sh` (or `--dry-run` to preview). Idempotent — `mv -n` is a no-op when the destination already exists.
