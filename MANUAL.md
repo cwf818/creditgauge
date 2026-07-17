@@ -874,3 +874,29 @@ whitespace stripped). Unknown subkeys are silently dropped.
 Log file: `state/<projectHash>/diagnostics.jsonl` (or
 `state/diagnostics.jsonl` for plugin-level rows with no project
 affiliation). 1000-line cap.
+
+### npx creditgauge TUI
+
+The npm-published package ships a TUI (`npx creditgauge`) for
+interactive install/uninstall/clean/diagnostics.
+
+```
+npx creditgauge                  → interactive menu
+npx creditgauge install          → non-interactive (passes --project etc.)
+npx creditgauge uninstall        → non-interactive
+npx creditgauge clean            → non-interactive
+npx creditgauge clean-cache      → non-interactive
+npx creditgauge reset            → non-interactive
+npx creditgauge diagnostics      → print last 20 diagnostics rows
+npx creditgauge --version        → print version
+npx creditgauge --help           → print usage
+```
+
+The TUI shells out to the same `scripts/*.sh` that the slash commands
+use. Before running `install`, it checks whether the plugin is in
+Claude Code's marketplace cache; if absent, it prints a hint
+pointing at the marketplace flow.
+
+The subcommand form exits with `0` on success, `1` on script failure,
+`2` on unknown command or missing bash. This makes it suitable for
+scripting / CI workflows.

@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.1.0 (2026-07-18)
+
+### Add
+
+- **`npx creditgauge` TUI** (`bin/cli.js`) — interactive menu for
+  install/uninstall/clean/diagnostics, powered by @clack/prompts.
+  Also accepts positional subcommands for non-interactive/CI use:
+  `npx creditgauge install`, `npx creditgauge uninstall`, etc.
+  Detects the "plugin not yet in cache" case up front with a
+  friendly hint. The TUI shells out to the same `scripts/*.sh` used
+  by the slash commands. Published to npmjs as `creditgauge`.
+  - `package.json`: removed `"private": true`, added `bin`,
+    `files`, `dependencies` (`@clack/prompts^1.7.0`), `engines`,
+    `prepublishOnly`.
+  - `README.md`, `MANUAL.md`, `快速上手指南.md`, `CHANGELOG.md`:
+    updated.
+
 ## Unreleased
 
 ### Add

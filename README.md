@@ -67,6 +67,35 @@ Then wire it into `settings.json`:
 
 This patches the active `settings.json` (user-level by default; pass `--project` for project-level):
 
+### Install via npx (no marketplace required)
+
+```
+npx creditgauge
+```
+
+Launches a TUI (powered by @clack/prompts) with five options: Install,
+Uninstall, Clean, View diagnostics, Exit. The TUI shells out to the same
+`scripts/*.sh` that the slash commands use, so behavior is identical.
+
+Non-interactive form (script-friendly):
+
+```
+npx creditgauge install          # user-level
+npx creditgauge install --project   # project-level
+npx creditgauge uninstall
+npx creditgauge clean --dry-run
+npx creditgauge reset
+npx creditgauge diagnostics      # last 20 plugin warning/error entries
+npx creditgauge --version
+npx creditgauge --help
+```
+
+> The plugin must be in Claude Code's cache first
+> (`~/.claude/plugins/cache/creditgauge/creditgauge/<version>/`).
+> If it isn't, `npx creditgauge install` prints a hint pointing at the
+> marketplace flow. Once installed once via marketplace, all subsequent
+> `npx creditgauge install` calls work.
+
 1. If `statusLine` is already managed by us (`_creditgauge_managed: true`), the command is a no-op.
 2. Otherwise, the current `settings.json` is backed up to `settings.json.bak.<ISO-timestamp>`.
 3. The original `statusLine.command` is preserved at `<claude-root>/plugins/creditgauge/state/upstream-cmd.sh` and `<claude-root>/plugins/creditgauge/state/upstream-cmd.txt` — sibling of `config.json`, **stable** across `/plugin install` rolls and cache wipes.
