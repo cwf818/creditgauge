@@ -166,6 +166,9 @@ export function parseTokenSnapshot(raw: string): TokenSnapshot | null {
       undefined,
       "parse",
     );
+    // On violation, derive tokenIn from the known totals and cache_read
+    // rather than propagating the bogus stdin value (often 0).
+    snap.current.tokenIn = Math.max(0, snap.totals.tokenTotalIn - snap.current.tokenCachedIn);
   }
 
   return snap;

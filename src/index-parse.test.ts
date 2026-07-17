@@ -262,7 +262,7 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
     assert.equal(line, null, "no diagnostics line should be written");
   });
 
-  it("violation: totals=200, in=100, cacheRead=50 → warn (200 != 100+50)", () => {
+  it("violation: totals=200, in=100, cacheRead=50 → warn (200 != 100+50) + fallback", () => {
     setDebugFlags({ parse: true });
     const cwd = "D:\\invariant-test";
     const raw = JSON.stringify({
@@ -276,7 +276,8 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
         },
       },
     });
-    parseTokenSnapshot(raw);
+    const snap = parseTokenSnapshot(raw);
+    // Warning is emitted
     const line = lastLine(cwd);
     assert.ok(line, "expected a warning line to be written");
     const e = JSON.parse(line!) as { level: string; source: string; msg: string };
@@ -285,9 +286,11 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
     assert.match(e.msg, /total_input_tokens=200/);
     assert.match(e.msg, /input_tokens\(100\)/);
     assert.match(e.msg, /cache_read_input_tokens\(50\)/);
+    // Fallback: tokenIn is derived from totals - cacheRead
+    assert.equal(snap!.current.tokenIn, 150, "tokenIn should be derived as max(0, 200-50) = 150");
   });
 
-  it("violation still renders the full snapshot (no throw)", () => {
+  it("violation fallback: totals=999, in=1( bogus), cacheRead=1 → tokenIn=998", () => {
     const raw = JSON.stringify({
       session_id: "sess-2",
       cwd: "D:\\invariant-test-2",
@@ -298,10 +301,9 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
     });
     const snap = parseTokenSnapshot(raw);
     assert.ok(snap);
-    // Returns the parsed values verbatim — invariant violation is
-    // a signal, not a hard error.
+    // Invariant violation triggers fallback: tokenIn = max(0, total - cacheRead)
     assert.equal(snap!.totals.tokenTotalIn, 999);
-    assert.equal(snap!.current.tokenIn, 1);
+    assert.equal(snap!.current.tokenIn, 998, "bogus stdin value 1 should be replaced by 999-1");
     assert.equal(snap!.current.tokenCachedIn, 1);
   });
 
