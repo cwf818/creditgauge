@@ -23,45 +23,13 @@ ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / ora
 
 ## What's new
 
-**v1.0.0** — Renamed from `topgauge` to `creditgauge`. Package id, marketplace id, plugin name, env-var namespace (`TOPGAUGE_*` → `CREDITGAUGE_*`), slash-command prefix (`/topgauge:` → `/creditgauge:`), repo URL (`cwf818/topgauge` → `cwf818/creditgauge`), and `settings.json` marker (`_topgauge_managed` → `_creditgauge_managed`) are all renamed. **Hard cut** — there is NO compat shim and NO state-dir migration. Provider strings are NOT renamed. See [Upgrading from v0.9.x](#upgrading-from-v09x) below.
+**v1.0.0** — Renamed from `topgauge` to `creditgauge` (hard cut, no compat shim). See CHANGELOG for the rename history (`tokenplan-usage-hud` → `topgauge` v0.7.0 → `creditgauge` v1.0.0).
 
 **v0.9.7** — Install-journal: `install.sh` records every per-field change to `settings.json.statusLine` to a write-ahead log; `uninstall.sh` reverts field-by-field, preserving any field the user touched after install.
 
 **v0.9.6** — `m_sumEstQuota|term:short` projects the spent cost up to a full-period spend using the aligned plan window's `used%`. Renders `est:$30.20` (fixed 2dp, per-model currency). Prefix is configurable via `labels.labelEstQuota` (default `"est:"`).
 
 > Requires `tokenPrices.<modelId>` to be configured for the target model (see MANUAL §m_tokenCost). Without it, the module renders `est:n/a`.
-
-## Upgrading from v0.9.x
-
-v1.0.0 is a **hard cut** from `topgauge` to `creditgauge`. There is **no** automatic migration — `uninstall.sh` of the new version does NOT recognize `_topgauge_managed`, and the loader will not auto-strip the old plugin id from `installed_plugins.json` / `known_marketplaces.json`. You must uninstall the old plugin first, then install the new one from scratch.
-
-```bash
-# 1. Uninstall the OLD plugin (topgauge). This removes the
-#    _topgauge_managed statusLine block, the topgauge row from
-#    enabledPlugins / extraKnownMarketplaces, and wipes
-#    cache/topgauge/, marketplaces/topgauge/, and
-#    plugins/topgauge/state/ (including install-journal.json).
-#
-#    If you have a v0.9.x install: `/topgauge:uninstall`
-#    If the v0.9.x cache is gone but the loader still has a row:
-#    `bash scripts/uninstall.sh` (run from the cloned v1.0.0 source).
-
-# 2. Add the NEW marketplace and install the NEW plugin.
-#    This is a fresh install — `cache/creditgauge/` and
-#    `plugins/creditgauge/state/` start empty.
-/plugin marketplace add cwf818/creditgauge
-/plugin install creditgauge@creditgauge
-
-# 3. Wire it into settings.json (creates _creditgauge_managed marker).
-/creditgauge:install
-```
-
-Things to know:
-
-- **State dir is fresh.** `state/<projectHash>/<sessionId>.jsonl` (token samples) does NOT carry forward — the old dir at `~/.claude/plugins/topgauge/state/<projectHash>/` is wiped by step 1, and the new dir at `~/.claude/plugins/creditgauge/state/<projectHash>/` starts empty. If you've been relying on `m_sumToken*` / `m_sumTtlStatus` / `m_accStartTime` etc. to render historical aggregates, those will be blank until new ticks accumulate.
-- **No legacy dual-strip.** Unlike v0.7.0 (which kept `tokenplan-usage-hud` recognition for one release), v1.0.0 does NOT keep `_topgauge_managed` recognition. Re-running the new `:install` against a v0.9.x state will report "not installed" and leave the old statusLine alone — you must `:uninstall` first.
-- **`config.json` is preserved across `:uninstall`** by default (the `~/.claude/plugins/topgauge/config.json` file is not in the wipe list). User plugins under `~/.claude/plugins/topgauge/query_plugins/` are also preserved. If you want them carried forward, manually `mv ~/.claude/plugins/topgauge/config.json ~/.claude/plugins/creditgauge/config.json` (and the same for `query_plugins/`) **after** `:uninstall` and **before** the new `/plugin install creditgauge@creditgauge`. The new installer does not auto-discover the old dir.
-- **Provider strings are unchanged.** `minimax`, `MiniMax-M3`, `DeepSeek`, etc. are still the matching substrings; the `providers` block in your carried-forward `config.json` keeps working as-is.
 
 ## Snapshots
 
