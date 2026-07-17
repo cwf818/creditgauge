@@ -246,7 +246,7 @@ function renderDataLine(
 // "Usage: not available!" branch is preserved verbatim for v0.2.20
 // byte-for-byte compatibility.
 //
-// Display mode lives in configStore — the old TOPGAUGE_DISPLAY env
+// Display mode lives in configStore — the old CREDITGAUGE_DISPLAY env
 // var is gone (see README "Configuration"). For fresh ticks the
 // m_age suffix is suppressed; for stale ticks the renderer appends
 // the broken-chain "X ago" annotation (the m_age module OR the

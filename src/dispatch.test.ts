@@ -292,7 +292,7 @@ describe("buildProviderLine — null provider (no ANTHROPIC_BASE_URL match)", ()
     modelDisplayName: "MiniMax-M3",
     modelId: "MiniMax-M3",
     effort: "high",
-    repo: { host: "github.com", owner: "cwf818", name: "topgauge" },
+    repo: { host: "github.com", owner: "cwf818", name: "creditgauge" },
     ccversion: "2.1.191",
     contextWindow: { contextWindowSize: 200000, contextUsedPercent: 63, contextRemainingPercent: 37 },
   };

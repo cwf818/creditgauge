@@ -142,7 +142,7 @@ if [ "$PURGE_RUNTIME" = 1 ]; then
   if [ "$PROJECT_LEVEL" = 1 ]; then
     echo "clean.sh: --purge-runtime ignored under --project (state is user-level)" >&2
   else
-    STATE_DIR="${PLUGINS_DIR}/topgauge/state"
+    STATE_DIR="${PLUGINS_DIR}/creditgauge/state"
 
     # Per-project layout: walk every <projectHash>/ subdir of state/ and
     # remove cache.json, diagnostics.jsonl, and any <sessionId>.jsonl

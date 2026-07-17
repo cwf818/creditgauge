@@ -27,6 +27,8 @@ describe("parseTokenSnapshot — happy path", () => {
     assert.ok(snap);
     // Existing fields (unchanged from v0.4.0 dev work)
     assert.equal(snap!.sessionId, "b2bee628-bc4f-4c79-a198-cb39b098b547");
+    // cwd matches the captured fixture (D:\WorkSpace\topgauge — real
+    // session payload from this machine, preserved as historical data).
     assert.equal(snap!.cwd, "D:\\WorkSpace\\topgauge");
     assert.equal(snap!.totals.tokenTotalIn, 126860);
     assert.equal(snap!.totals.tokenTotalOut, 265);
@@ -39,6 +41,7 @@ describe("parseTokenSnapshot — happy path", () => {
     assert.equal(snap!.sessionName, "strip-diagnostics-display");
     assert.equal(snap!.modelDisplayName, "MiniMax-M3");
     assert.equal(snap!.effort, "high");
+    // repo.name matches the captured fixture (topgauge — pre-rename repo name).
     assert.deepEqual(snap!.repo, {
       host: "github.com",
       owner: "cwf818",
@@ -215,7 +218,7 @@ describe("parseTokenSnapshot — null cases", () => {
 //   total_input_tokens == current.input + current.cacheRead
 // When violated, parseTokenSnapshot appends a `warning` to the
 // per-project diagnostics log. The warning is gated by
-// `TOPGAUGE_DIAGNOSTICS_ENABLE=1`. Tests below exercise both
+// `CREDITGAUGE_DIAGNOSTICS_ENABLE=1`. Tests below exercise both
 // the satisfied-invariant and violated-invariant paths against a
 // sandboxed CLAUDE_CONFIG_DIR so the user's real diagnostics log
 // is never touched.
@@ -225,19 +228,19 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
   let prevGate: string | undefined;
 
   beforeEach(() => {
-    sandbox = mkdtempSync(join(tmpdir(), "topgauge-invariant-"));
+    sandbox = mkdtempSync(join(tmpdir(), "creditgauge-invariant-"));
     prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
-    prevGate = process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
+    prevGate = process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
     process.env.CLAUDE_CONFIG_DIR = sandbox;
-    process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = "1";
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
     __resetDedupeForTest();
   });
 
   afterEach(() => {
     if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
-    if (prevGate === undefined) delete process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
-    else process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = prevGate;
+    if (prevGate === undefined) delete process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
+    else process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = prevGate;
     rmSync(sandbox, { recursive: true, force: true });
   });
 
@@ -311,7 +314,7 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
   });
 
   it("no warn when gate is OFF (opt-in diagnostics)", () => {
-    delete process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
+    delete process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
     const cwd = "D:\\invariant-test-4";
     const raw = JSON.stringify({
       session_id: "sess-4",

@@ -2,7 +2,7 @@
 //
 // Every provider is an in-process ESM plugin. Built-in plugins are emitted
 // under dist/plugins/<id>/index.js; user plugins live under the stable
-// ~/.claude/plugins/topgauge/query_plugins/<id>/ directory.
+// ~/.claude/plugins/creditgauge/query_plugins/<id>/ directory.
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -43,7 +43,7 @@ const BUILTIN_PLUGIN_IDS = new Set(["minimax", "deepseek"]);
 const PROVIDER_ID_RE = /^[A-Za-z0-9_-]+$/;
 
 export function queryPluginsDir(): string {
-  return join(homedir(), ".claude", "plugins", "topgauge", "query_plugins");
+  return join(homedir(), ".claude", "plugins", "creditgauge", "query_plugins");
 }
 
 function assertSafeProviderId(providerId: string): void {
@@ -90,7 +90,7 @@ export function resolveBuiltInPluginOnDisk(providerId: string): string {
 }
 
 // v0.9.0+ — full override-aware resolution. User plugins take
-// precedence: `~/.claude/plugins/topgauge/query_plugins/<id>/index.js`
+// precedence: `~/.claude/plugins/creditgauge/query_plugins/<id>/index.js`
 // (or `.mjs`) always wins over the bundled built-in of the same id.
 // Built-in remains the fallback when no user file exists. Built-in
 // IDs are no longer a closed set — anyone can ship a `minimax` /

@@ -1037,7 +1037,7 @@ export function formatStaleSuffix(
   return `${color}${emoji} ${label}${RESET}`;
 }
 
-// Read the configured display mode. The earlier TOPGAUGE_DISPLAY env
+// Read the configured display mode. The earlier CREDITGAUGE_DISPLAY env
 // var is gone (per the v0.2.0 config-file migration); anyone using it
 // must move to config.json's `display` field.
 export function resolveDisplayMode(): DisplayMode {
@@ -1311,7 +1311,7 @@ type RenderContext = {
 // because their `type` value doesn't match. Reserved for future
 // modules that want to render only in the unregistered case
 // (e.g. an m_setupHint module that nudges the user toward running
-// `/topgauge:install`).
+// `/creditgauge:install`).
 type Module = ((ctx: RenderContext) => string | null) & {
   type?: "quota" | "balance" | "unknown";
 };
@@ -3720,7 +3720,7 @@ function fetchSumAggregate(filter: SumFilter): StatAggregate {
 function warnUnknownModuleOnce(name: string): void {
   if (_unknownModuleWarned) return;
   _unknownModuleWarned = true;
-  process.stderr.write(`topgauge: unknown lineTemplate module '${name}'; ignoring\n`);
+  process.stderr.write(`creditgauge: unknown lineTemplate module '${name}'; ignoring\n`);
 }
 
 // Reset the once-per-process warn flag. Exported so tests can clear
@@ -5104,7 +5104,7 @@ export function getFieldByPath(value: unknown, path: string): string | null {
 // yielded "" (the renderer treats an empty field as "miss").
 //
 // v0.8.20+ — every failure path appends a structured warning to
-// `diagnostics.jsonl` (gated on TOPGAUGE_DIAGNOSTICS_ENABLE)
+// `diagnostics.jsonl` (gated on CREDITGAUGE_DIAGNOSTICS_ENABLE)
 // so a postmortem can grep why the local QUOTES fallback fired.
 // The log row includes the address (truncated to keep the JSONL
 // row ~250B) and the reason token; the `source` field is
@@ -6384,7 +6384,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_sumTokenInSpeed: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
     const filter = parseWindowScope(ctx, merged);
-    if (process.env.TOPGAUGE_DEBUG_SUMSPEED) {
+    if (process.env.CREDITGAUGE_DEBUG_SUMSPEED) {
       // eslint-disable-next-line no-console
       console.error("[diag-renderer] m_sumTokenInSpeed params=", JSON.stringify(params), "filter=", filter);
     }

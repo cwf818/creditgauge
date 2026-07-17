@@ -3,8 +3,8 @@
 # branch in scripts/install.sh.
 #
 # The branch under test:
-#   - When statusLine._topgauge_managed === true and the STABLE state
-#     dir (${CLAUDE_ROOT}/plugins/topgauge/state/) is missing the
+#   - When statusLine._creditgauge_managed === true and the STABLE state
+#     dir (${CLAUDE_ROOT}/plugins/creditgauge/state/) is missing the
 #     upstream-cmd.txt, install.sh walks PLUGIN_BASE, finds the
 #     SECOND-newest version dir (the one immediately before PLUGIN_DIR
 #     in version order), and copies its state/ files (upstream-cmd.sh
@@ -87,14 +87,14 @@ assert_match_str() {
 
 # Build a fresh fixture:
 #   $ROOT/                          (synthetic CLAUDE_ROOT)
-#     settings.json                 (with _topgauge_managed: true)
-#     plugins/cache/topgauge/
-#       topgauge/
+#     settings.json                 (with _creditgauge_managed: true)
+#     plugins/cache/creditgauge/
+#       creditgauge/
 #         0.2.7/state/upstream-cmd.{sh,txt}    (previous version, LEGACY location)
 #         0.2.8/scripts/wrapper.sh             (current version)
 #         0.2.8/dist/index.js                  (so dist-missing build is skipped)
 #         0.2.8/scripts/install.sh + lib/      (the script under test)
-#     plugins/topgauge/state/                  (STABLE state dir, may be empty/pre-populated)
+#     plugins/creditgauge/state/                  (STABLE state dir, may be empty/pre-populated)
 #
 #   $STATUSLINE_CMD    statusLine.command value (with cache path baked in)
 #   $PREV_STATE_DIR    previous version's legacy state dir
@@ -106,13 +106,13 @@ build_fixture() {
   local with_stable_state="$2" # "yes" or "no" — populate stable state/
 
   local root
-  root="$(mktemp -d -t topgauge-install-test-XXXXXX)"
-  local base="${root}/plugins/cache/topgauge/topgauge"
+  root="$(mktemp -d -t creditgauge-install-test-XXXXXX)"
+  local base="${root}/plugins/cache/creditgauge/creditgauge"
   local curr="${base}/0.2.8"
   local prev="${base}/0.2.7"
   mkdir -p "${curr}/scripts/lib" "${curr}/dist/plugins/minimax" "${curr}/dist/plugins/deepseek" "${prev}/state" \
            "${root}/plugins/cache" \
-           "${root}/plugins/topgauge"
+           "${root}/plugins/creditgauge"
 
   # Previous version: state/ with the upstream-cmd that a v0.2.18 foreign
   # install would have written. Both sh and txt are present (the install.sh
@@ -142,21 +142,21 @@ EOF
   # case). When with_stable_state=yes, write a DIFFERENT upstream-cmd so
   # we can assert install.sh did not clobber it.
   if [ "$with_stable_state" = "yes" ]; then
-    mkdir -p "${root}/plugins/topgauge/state"
-    cat > "${root}/plugins/topgauge/state/upstream-cmd.txt" <<'EOF'
+    mkdir -p "${root}/plugins/creditgauge/state"
+    cat > "${root}/plugins/creditgauge/state/upstream-cmd.txt" <<'EOF'
 echo "stable state — do not clobber"
 EOF
-    cat > "${root}/plugins/topgauge/state/upstream-cmd.sh" <<'EOF'
+    cat > "${root}/plugins/creditgauge/state/upstream-cmd.sh" <<'EOF'
 #!/usr/bin/env bash
 echo "stable state — do not clobber"
 EOF
-    chmod +x "${root}/plugins/topgauge/state/upstream-cmd.sh"
+    chmod +x "${root}/plugins/creditgauge/state/upstream-cmd.sh"
   fi
 
-  # settings.json with _topgauge_managed: true (so install.sh hits the
+  # settings.json with _creditgauge_managed: true (so install.sh hits the
   # no-op branch under test). The statusLine.command is hand-crafted to
   # pass edit-settings.mjs's isOurWrapperCommand fingerprint:
-  #   - path contains plugins[/\]cache[/\]topgauge[/\]topgauge[/\]
+  #   - path contains plugins[/\]cache[/\]creditgauge[/\]creditgauge[/\]
   #   - ends with `wrapper.sh"'` (single-quote after closing double-quote)
   # The minimal shape that satisfies both: a `bash -c '…exec bash "<path>/scripts/wrapper.sh"'`
   # whose <path> contains the cache marker. We use the real install path.
@@ -165,7 +165,7 @@ EOF
   "statusLine": {
     "type": "command",
     "command": "bash -c 'plugin_dir=${curr}; exec bash \"\${plugin_dir}scripts/wrapper.sh\"'",
-    "_topgauge_managed": true
+    "_creditgauge_managed": true
   }
 }
 EOF
@@ -173,7 +173,7 @@ EOF
   FIXTURE_ROOT="$root"
   CURR_PLUGIN_DIR="$curr"
   PREV_STATE_DIR="${prev}/state"
-  STABLE_STATE_DIR="${root}/plugins/topgauge/state"
+  STABLE_STATE_DIR="${root}/plugins/creditgauge/state"
   CURR_VERSION="0.2.8"
   # CLAUDE_CONFIG_DIR is the parent of `plugins/`, not `plugins/` itself.
   CLAUDE_CONFIG_DIR_VAL="$root"
@@ -231,10 +231,10 @@ fi
 rm -rf "$FIXTURE_ROOT"
 
 echo "-- no previous version (only one cache dir): no-op without copying --"
-root="$(mktemp -d -t topgauge-install-test-XXXXXX)"
-base="${root}/plugins/cache/topgauge/topgauge"
+root="$(mktemp -d -t creditgauge-install-test-XXXXXX)"
+base="${root}/plugins/cache/creditgauge/creditgauge"
 curr="${base}/0.2.8"
-mkdir -p "${curr}/scripts/lib" "${curr}/dist/plugins/minimax" "${curr}/dist/plugins/deepseek" "${root}/plugins/topgauge"
+mkdir -p "${curr}/scripts/lib" "${curr}/dist/plugins/minimax" "${curr}/dist/plugins/deepseek" "${root}/plugins/creditgauge"
 ln -s "${SCRIPT_DIR}/wrapper.sh" "${curr}/scripts/wrapper.sh"
 ln -s "${SCRIPT_DIR}/install.sh" "${curr}/scripts/install.sh"
 ln -s "${SCRIPT_DIR}/lib/edit-settings.mjs" "${curr}/scripts/lib/edit-settings.mjs"
@@ -242,11 +242,11 @@ printf '# stub\n' > "${curr}/dist/index.js"
 printf '# stub\n' > "${curr}/dist/plugins/minimax/index.js"
 printf '# stub\n' > "${curr}/dist/plugins/deepseek/index.js"
 cat > "${root}/settings.json" <<EOF
-{ "statusLine": { "type": "command", "command": "bash -c 'plugin_dir=${curr}; exec bash \"\${plugin_dir}scripts/wrapper.sh\"'", "_topgauge_managed": true } }
+{ "statusLine": { "type": "command", "command": "bash -c 'plugin_dir=${curr}; exec bash \"\${plugin_dir}scripts/wrapper.sh\"'", "_creditgauge_managed": true } }
 EOF
 out=$(HOME="$root" CLAUDE_CONFIG_DIR="$root" bash "$INSTALL_SH" 2>&1) || true
 assert_file_missing "stable upstream-cmd.txt was NOT created from nowhere" \
-  "${root}/plugins/topgauge/state/upstream-cmd.txt"
+  "${root}/plugins/creditgauge/state/upstream-cmd.txt"
 if echo "$out" | grep -qF "migrated legacy state/"; then
   echo "  FAIL should not have printed migration log (no previous version)"
   FAIL=$((FAIL + 1))
@@ -274,8 +274,8 @@ echo "== install.sh: install-journal + refreshInterval =="
 build_journal_fixture() {
   local with_status_line="$1"  # "yes" / "no" / "with-refresh"
   local root
-  root="$(mktemp -d -t topgauge-journal-test-XXXXXX)"
-  local base="${root}/plugins/cache/topgauge/topgauge/0.9.6"
+  root="$(mktemp -d -t creditgauge-journal-test-XXXXXX)"
+  local base="${root}/plugins/cache/creditgauge/creditgauge/0.9.6"
   mkdir -p "${base}/scripts/lib" "${base}/dist/plugins/minimax" "${base}/dist/plugins/deepseek"
   ln -sf "${SCRIPT_DIR}/wrapper.sh" "${base}/scripts/wrapper.sh"
   ln -sf "${SCRIPT_DIR}/install.sh" "${base}/scripts/install.sh"
@@ -313,7 +313,7 @@ echo "-- fresh install: journal records statusLine create, refreshInterval creat
 build_journal_fixture no
 out=$(HOME="$FIXTURE_ROOT" CLAUDE_CONFIG_DIR="$FIXTURE_ROOT" \
       bash "$CACHE_BASE/scripts/install.sh" 2>&1) || true
-JOURNAL="$FIXTURE_ROOT/plugins/topgauge/state/install-journal.json"
+JOURNAL="$FIXTURE_ROOT/plugins/creditgauge/state/install-journal.json"
 assert_file_exists "[journal] created on fresh install" "$JOURNAL"
 assert_eq "[journal] contains exactly 2 entries (create statusLine, create refreshInterval)" \
   "2" \
@@ -345,7 +345,7 @@ node -e '
 ' "$FIXTURE_ROOT/settings.json"
 out=$(HOME="$FIXTURE_ROOT" CLAUDE_CONFIG_DIR="$FIXTURE_ROOT" \
       bash "$CACHE_BASE/scripts/install.sh" 2>&1) || true
-JOURNAL="$FIXTURE_ROOT/plugins/topgauge/state/install-journal.json"
+JOURNAL="$FIXTURE_ROOT/plugins/creditgauge/state/install-journal.json"
 assert_file_exists "[journal] created on replace" "$JOURNAL"
 assert_eq "[journal] refreshInterval entry action = clamp-down" \
   "clamp-down" \
@@ -367,7 +367,7 @@ node -e '
 ' "$FIXTURE_ROOT/settings.json"
 out=$(HOME="$FIXTURE_ROOT" CLAUDE_CONFIG_DIR="$FIXTURE_ROOT" \
       bash "$CACHE_BASE/scripts/install.sh" 2>&1) || true
-JOURNAL="$FIXTURE_ROOT/plugins/topgauge/state/install-journal.json"
+JOURNAL="$FIXTURE_ROOT/plugins/creditgauge/state/install-journal.json"
 assert_file_exists "[journal] created on replace (no-op refreshInterval)" "$JOURNAL"
 COUNT=$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(j.entries.length)' "$JOURNAL")
 assert_eq "[journal] only 1 entry (statusLine mutate, refreshInterval skipped)" "1" "$COUNT"
@@ -378,13 +378,13 @@ echo "-- fresh install with pre-existing sibling: per-key diff excludes sibling 
 # v0.10+ install-journal writes a per-key diff for enabledPlugins so
 # pre-existing sibling keys (e.g. claude-hud@claude-hud) are preserved on
 # uninstall. The diff is computed by projecting the live settings.json
-# down to the keys topgauge owns (topgauge@topgauge in EP, topgauge in
+# down to the keys creditgauge owns (creditgauge@creditgauge in EP, creditgauge in
 # EKM) — every other key is the user's and never enters the journal.
 # Simulate the Claude-Code loader's behaviour: settings.json has both
-# the sibling AND the topgauge@topgauge key (loader added it before
+# the sibling AND the creditgauge@creditgauge key (loader added it before
 # install.sh ran). After install, journal EP entry should be:
 #   before: {} (install didn't remove any pre-existing key)
-#   after:  { "topgauge@topgauge": true } (install created exactly one key)
+#   after:  { "creditgauge@creditgauge": true } (install created exactly one key)
 # The sibling claude-hud@claude-hud must NOT appear in either map.
 build_journal_fixture no
 node -e '
@@ -392,18 +392,18 @@ node -e '
   const d = {
     enabledPlugins: {
       "claude-hud@claude-hud": true,
-      "topgauge@topgauge": true
+      "creditgauge@creditgauge": true
     },
     extraKnownMarketplaces: {
       "claude-hud": { source: { source: "github", repo: "jarrodwatts/claude-hud" } },
-      "topgauge":  { source: { source: "github", repo: "cwf818/topgauge" } }
+      "creditgauge":  { source: { source: "github", repo: "cwf818/creditgauge" } }
     }
   };
   fs.writeFileSync(process.argv[1], JSON.stringify(d, null, 2) + "\n");
 ' "${FIXTURE_ROOT}/settings.json"
 out=$(HOME="$FIXTURE_ROOT" CLAUDE_CONFIG_DIR="$FIXTURE_ROOT" \
       bash "$CACHE_BASE/scripts/install.sh" 2>&1) || true
-JOURNAL="$FIXTURE_ROOT/plugins/topgauge/state/install-journal.json"
+JOURNAL="$FIXTURE_ROOT/plugins/creditgauge/state/install-journal.json"
 assert_file_exists "[journal-ep-diff] journal created" "$JOURNAL"
 # Locate the EP entry.
 EP_BEFORE=$(node -e '
@@ -417,8 +417,8 @@ EP_AFTER=$(node -e '
   const e = j.entries.find(x => x.id === "settings.json:enabledPlugins");
   process.stdout.write(JSON.stringify(e ? e.after : null));
 ' "$JOURNAL")
-assert_eq "[journal-ep-diff] EP after only has topgauge@topgauge (sibling absent from after)" \
-  '{"topgauge@topgauge":true}' "$EP_AFTER"
+assert_eq "[journal-ep-diff] EP after only has creditgauge@creditgauge (sibling absent from after)" \
+  '{"creditgauge@creditgauge":true}' "$EP_AFTER"
 # Same shape for EKM.
 EKM_BEFORE=$(node -e '
   const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
@@ -431,13 +431,13 @@ EKM_AFTER=$(node -e '
   const e = j.entries.find(x => x.id === "settings.json:extraKnownMarketplaces");
   process.stdout.write(JSON.stringify(e ? e.after : null));
 ' "$JOURNAL")
-assert_eq "[journal-ekm-diff] EKM after only has topgauge (claude-hud absent from after)" \
-  '{"topgauge":{"source":{"source":"github","repo":"cwf818/topgauge"}}}' "$EKM_AFTER"
+assert_eq "[journal-ekm-diff] EKM after only has creditgauge (claude-hud absent from after)" \
+  '{"creditgauge":{"source":{"source":"github","repo":"cwf818/creditgauge"}}}' "$EKM_AFTER"
 rm -rf "$FIXTURE_ROOT"
 
 echo "-- fresh install with no loader keys: both EP and EKM entries skipped --"
 # Loader didn't populate either dict (degenerate: only happens if
-# /plugin install ran but somehow topgauge wasn't added — e.g. a
+# /plugin install ran but somehow creditgauge wasn't added — e.g. a
 # half-completed install). After = {} → entry skipped entirely.
 build_journal_fixture no
 node -e '
@@ -446,20 +446,20 @@ node -e '
 ' "${FIXTURE_ROOT}/settings.json"
 out=$(HOME="$FIXTURE_ROOT" CLAUDE_CONFIG_DIR="$FIXTURE_ROOT" \
       bash "$CACHE_BASE/scripts/install.sh" 2>&1) || true
-JOURNAL="$FIXTURE_ROOT/plugins/topgauge/state/install-journal.json"
+JOURNAL="$FIXTURE_ROOT/plugins/creditgauge/state/install-journal.json"
 assert_file_exists "[journal-no-loader] journal created" "$JOURNAL"
 HAS_EP=$(node -e '
   const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
   const e = j.entries.find(x => x.id === "settings.json:enabledPlugins");
   process.stdout.write(e ? "yes" : "no");
 ' "$JOURNAL")
-assert_eq "[journal-no-loader] EP entry skipped (loader didn't add topgauge@topgauge)" "no" "$HAS_EP"
+assert_eq "[journal-no-loader] EP entry skipped (loader didn't add creditgauge@creditgauge)" "no" "$HAS_EP"
 HAS_EKM=$(node -e '
   const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
   const e = j.entries.find(x => x.id === "settings.json:extraKnownMarketplaces");
   process.stdout.write(e ? "yes" : "no");
 ' "$JOURNAL")
-assert_eq "[journal-no-loader] EKM entry skipped (loader didn't add topgauge)" "no" "$HAS_EKM"
+assert_eq "[journal-no-loader] EKM entry skipped (loader didn't add creditgauge)" "no" "$HAS_EKM"
 rm -rf "$FIXTURE_ROOT"
 
 # --- Summary -----------------------------------------------------------------

@@ -5,9 +5,9 @@
 //     (src/providers.ts): only when pointing at a configured provider
 //     does it fetch and render a line. Otherwise the line is hidden and
 //     upstream output passes through.
-//   - Composes with upstream claude-hud output (passed via TOPGAUGE_UPSTREAM
+//   - Composes with upstream claude-hud output (passed via CREDITGAUGE_UPSTREAM
 //     by the bash wrapper in scripts/wrapper.sh).
-//   - Loads ~/.claude/plugins/topgauge/config.json once at
+//   - Loads ~/.claude/plugins/creditgauge/config.json once at
 //     startup; every tunable (cache TTL, fetch timeout, colors, display
 //     mode, …) reads from there via the configStore singleton.
 //
@@ -47,7 +47,7 @@ import { fileURLToPath } from "node:url";
 
 // Read the upstream statusline output once at startup so the main flow and the
 // crash handler can't drift apart on env-var reads.
-const UPSTREAM = process.env.TOPGAUGE_UPSTREAM;
+const UPSTREAM = process.env.CREDITGAUGE_UPSTREAM;
 
 async function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -243,7 +243,7 @@ async function main(): Promise<void> {
   // regardless of whether any module ends up producing output.
   statusStore.processAndSaveTick(tokens?.cwd ?? null, tokens);
   // Record the raw stdin frame for postmortem. Gated by the same
-  // TOPGAUGE_DIAGNOSTICS_ENABLE switch as the rest of diagnostics.jsonl
+  // CREDITGAUGE_DIAGNOSTICS_ENABLE switch as the rest of diagnostics.jsonl
   // (no-op when off). Source "stdin" so it doesn't collide with the
   // existing "config" warning source. Always append — even when empty —
   // so a postmortem reader can distinguish "plugin never reached this
@@ -329,7 +329,7 @@ async function main(): Promise<void> {
 // Handle unexpected throws by emitting upstream output (so claude-hud is
 // never blanked by our crash). Token is never logged.
 process.on("uncaughtException", (err) => {
-  process.stderr.write(`topgauge: ${(err as Error).message}\n`);
+  process.stderr.write(`creditgauge: ${(err as Error).message}\n`);
   process.stdout.write(UPSTREAM ?? "");
   process.exit(0);
 });

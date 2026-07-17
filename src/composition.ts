@@ -1,5 +1,5 @@
 // Compose our token-plan line with an arbitrary upstream statusline output.
-// Upstream is passed by the bash wrapper via the TOPGAUGE_UPSTREAM env var.
+// Upstream is passed by the bash wrapper via the CREDITGAUGE_UPSTREAM env var.
 //
 // Rules:
 //   - Preserve interior newlines in upstream (multi-line statuslines are valid).

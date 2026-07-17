@@ -13,7 +13,7 @@ import {
 let dir: string;
 beforeEach(() => {
   __resetForTest();
-  dir = mkdtempSync(join(tmpdir(), "topgauge-config-"));
+  dir = mkdtempSync(join(tmpdir(), "creditgauge-config-"));
   __testing.setPathResolver(() => join(dir, "config.json"));
 });
 afterEach(() => {

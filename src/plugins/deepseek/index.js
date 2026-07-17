@@ -1,5 +1,5 @@
 // DeepSeek built-in plugin. Plain ESM JS — same shape as a
-// user-written plugin at ~/.claude/plugins/topgauge/query_plugins/<id>/.
+// user-written plugin at ~/.claude/plugins/creditgauge/query_plugins/<id>/.
 //
 // ABI: default export is { fetchAccountCredit(authenticationKey, ctx) },
 // where `ctx` exposes { signal }. The returned object is a

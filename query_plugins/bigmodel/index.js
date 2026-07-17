@@ -1,6 +1,6 @@
-// BigModel (智谱) user plugin for topgauge. Plain ESM JS — same shape
+// BigModel (智谱) user plugin for creditgauge. Plain ESM JS — same shape
 // as the built-in minimax / deepseek plugins and the user-side kimi
-// plugin under ~/.claude/plugins/topgauge/query_plugins/<id>/.
+// plugin under ~/.claude/plugins/creditgauge/query_plugins/<id>/.
 //
 // ABI: default export is { fetchAccountCredit(authenticationKey, ctx) },
 // where `ctx` exposes { signal }. The returned object is a
@@ -36,7 +36,7 @@
 //
 // bigmodel is not bundled as a built-in (lives alongside kimi /
 // copilot-api). To wire it up, add an entry to the providers block
-// in ~/.claude/plugins/topgauge/config.json:
+// in ~/.claude/plugins/creditgauge/config.json:
 //
 //   "providers": {
 //     "bigmodel": {
@@ -51,7 +51,7 @@
 //   ANTHROPIC_BASE_URL=https://bigmodel.cn/api/anthropic
 //   ANTHROPIC_AUTH_TOKEN=<your bigmodel apiKey>
 //
-// and the plugin at ~/.claude/plugins/topgauge/query_plugins/bigmodel/
+// and the plugin at ~/.claude/plugins/creditgauge/query_plugins/bigmodel/
 // index.js (this file) will be picked up — the loader resolves
 // query_plugins/<id>/index.js BEFORE the bundled built-in tree, so
 // pluginSource renders as 🎨 (labelPluginUserDefined). To swap in a

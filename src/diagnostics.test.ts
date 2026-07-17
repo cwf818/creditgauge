@@ -21,28 +21,28 @@ describe("diagnostics — isEnabled", () => {
   });
 
   it("returns false when env var is empty string", () => {
-    assert.equal(isEnabledWith({ TOPGAUGE_DIAGNOSTICS_ENABLE: "" }), false);
+    assert.equal(isEnabledWith({ CREDITGAUGE_DIAGNOSTICS_ENABLE: "" }), false);
   });
 
   it("accepts '1' (truthy)", () => {
-    assert.equal(isEnabledWith({ TOPGAUGE_DIAGNOSTICS_ENABLE: "1" }), true);
+    assert.equal(isEnabledWith({ CREDITGAUGE_DIAGNOSTICS_ENABLE: "1" }), true);
   });
 
   it("accepts 'true' (truthy, mixed case)", () => {
-    assert.equal(isEnabledWith({ TOPGAUGE_DIAGNOSTICS_ENABLE: "TRUE" }), true);
-    assert.equal(isEnabledWith({ TOPGAUGE_DIAGNOSTICS_ENABLE: "True" }), true);
+    assert.equal(isEnabledWith({ CREDITGAUGE_DIAGNOSTICS_ENABLE: "TRUE" }), true);
+    assert.equal(isEnabledWith({ CREDITGAUGE_DIAGNOSTICS_ENABLE: "True" }), true);
   });
 
   it("accepts 'yes' (truthy, with surrounding whitespace)", () => {
-    assert.equal(isEnabledWith({ TOPGAUGE_DIAGNOSTICS_ENABLE: " yes " }), true);
+    assert.equal(isEnabledWith({ CREDITGAUGE_DIAGNOSTICS_ENABLE: " yes " }), true);
   });
 
   it("rejects other values (0, no, false, arbitrary)", () => {
-    assert.equal(isEnabledWith({ TOPGAUGE_DIAGNOSTICS_ENABLE: "0" }), false);
-    assert.equal(isEnabledWith({ TOPGAUGE_DIAGNOSTICS_ENABLE: "no" }), false);
-    assert.equal(isEnabledWith({ TOPGAUGE_DIAGNOSTICS_ENABLE: "false" }), false);
-    assert.equal(isEnabledWith({ TOPGAUGE_DIAGNOSTICS_ENABLE: "off" }), false);
-    assert.equal(isEnabledWith({ TOPGAUGE_DIAGNOSTICS_ENABLE: "enabled" }), false);
+    assert.equal(isEnabledWith({ CREDITGAUGE_DIAGNOSTICS_ENABLE: "0" }), false);
+    assert.equal(isEnabledWith({ CREDITGAUGE_DIAGNOSTICS_ENABLE: "no" }), false);
+    assert.equal(isEnabledWith({ CREDITGAUGE_DIAGNOSTICS_ENABLE: "false" }), false);
+    assert.equal(isEnabledWith({ CREDITGAUGE_DIAGNOSTICS_ENABLE: "off" }), false);
+    assert.equal(isEnabledWith({ CREDITGAUGE_DIAGNOSTICS_ENABLE: "enabled" }), false);
   });
 });
 
@@ -51,7 +51,7 @@ describe("diagnostics — append + readLatest", () => {
   let prevConfigDir: string | undefined;
 
   beforeEach(() => {
-    sandbox = mkdtempSync(join(tmpdir(), "topgauge-diag-"));
+    sandbox = mkdtempSync(join(tmpdir(), "creditgauge-diag-"));
     prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = sandbox;
   });
@@ -63,11 +63,11 @@ describe("diagnostics — append + readLatest", () => {
   });
 
   function enable() {
-    process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = "1";
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
   }
 
   function disable() {
-    delete process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
+    delete process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
   }
 
   it("does NOT write to disk when gate is off (default)", () => {
@@ -244,7 +244,7 @@ describe("diagnostics — file-IO audit helpers (v0.8.x+)", () => {
   // logFs* wrappers that record each fs call to the diagnostics
   // JSONL under sources 'fs:read' / 'fs:write' / 'fs:list' /
   // 'fs:stat' / 'fs:mkdir'. The audit rides the same gate
-  // (TOPGAUGE_DIAGNOSTICS_ENABLE) and 60s dedupe as fetch
+  // (CREDITGAUGE_DIAGNOSTICS_ENABLE) and 60s dedupe as fetch
   // warnings — distinct enough row that a postmortem can
   // `level=info & source=fs:*` filter for it.
   let sandbox: string;
@@ -252,28 +252,28 @@ describe("diagnostics — file-IO audit helpers (v0.8.x+)", () => {
   let prevEnable: string | undefined;
 
   beforeEach(() => {
-    sandbox = mkdtempSync(join(tmpdir(), "topgauge-diag-fs-"));
+    sandbox = mkdtempSync(join(tmpdir(), "creditgauge-diag-fs-"));
     prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = sandbox;
     diag.__resetDedupeForTest();
-    prevEnable = process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
+    prevEnable = process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
   });
 
   afterEach(() => {
     diag.__resetDedupeForTest();
     if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
-    if (prevEnable === undefined) delete process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
-    else process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = prevEnable;
+    if (prevEnable === undefined) delete process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
+    else process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = prevEnable;
     rmSync(sandbox, { recursive: true, force: true });
   });
 
   function enable() {
-    process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = "1";
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
   }
 
   function disable() {
-    delete process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
+    delete process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
   }
 
   function readFsRows(): { level: string; source: string; msg: string }[] {
@@ -381,24 +381,24 @@ describe("diagnostics — Entry schema (v0.8.x+: iso + fn)", () => {
   let prevEnable: string | undefined;
 
   beforeEach(() => {
-    sandbox = mkdtempSync(join(tmpdir(), "topgauge-diag-iso-"));
+    sandbox = mkdtempSync(join(tmpdir(), "creditgauge-diag-iso-"));
     prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = sandbox;
     diag.__resetDedupeForTest();
-    prevEnable = process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
+    prevEnable = process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
   });
 
   afterEach(() => {
     diag.__resetDedupeForTest();
     if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
-    if (prevEnable === undefined) delete process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
-    else process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = prevEnable;
+    if (prevEnable === undefined) delete process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
+    else process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = prevEnable;
     rmSync(sandbox, { recursive: true, force: true });
   });
 
   function enable() {
-    process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = "1";
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
   }
 
   function readRows(): Array<Record<string, unknown>> {
@@ -613,8 +613,8 @@ describe("diagnostics — fetch error dedupe (v0.6.x+)", () => {
     sandbox = mkdtempSync(join(tmpdir(), "tokenplan-diag-dedupe-"));
     prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = sandbox;
-    prevEnable = process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
-    process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = "1";
+    prevEnable = process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
     diag.__resetDedupeForTest();
   });
 
@@ -622,8 +622,8 @@ describe("diagnostics — fetch error dedupe (v0.6.x+)", () => {
     diag.__resetDedupeForTest();
     if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
-    if (prevEnable === undefined) delete process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
-    else process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = prevEnable;
+    if (prevEnable === undefined) delete process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
+    else process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = prevEnable;
     rmSync(sandbox, { recursive: true, force: true });
   });
 

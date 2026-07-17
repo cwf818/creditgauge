@@ -58,10 +58,10 @@ let _prevConfigDir: string | undefined;
 let _prevDiagEnv: string | undefined;
 
 beforeEach(() => {
-  _tmpDir = mkdtempSync(join(tmpdir(), "topgauge-replay-status-"));
-  _stateRootDir = mkdtempSync(join(tmpdir(), "topgauge-replay-state-"));
+  _tmpDir = mkdtempSync(join(tmpdir(), "creditgauge-replay-status-"));
+  _stateRootDir = mkdtempSync(join(tmpdir(), "creditgauge-replay-state-"));
   _prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
-  _prevDiagEnv = process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
+  _prevDiagEnv = process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
   process.env.CLAUDE_CONFIG_DIR = _tmpDir;
   // Route JSONL sample IO to the test root; per-project subdirs
   // get auto-created via mkdirSync in appendSample.
@@ -76,8 +76,8 @@ beforeEach(() => {
 afterEach(() => {
   if (_prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
   else process.env.CLAUDE_CONFIG_DIR = _prevConfigDir;
-  if (_prevDiagEnv === undefined) delete process.env.TOPGAUGE_DIAGNOSTICS_ENABLE;
-  else process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = _prevDiagEnv;
+  if (_prevDiagEnv === undefined) delete process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
+  else process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = _prevDiagEnv;
   statusStore.resetStateRoot();
   statusStore.resetStatusPathResolver();
   statusStore.resetStatCachePathResolver();
@@ -314,21 +314,21 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
   });
 
   // ----- 10. Diagnostics env-gate: replay writes row when enabled, silent when disabled -----
-  it("diagnostics: TOPGAUGE_DIAGNOSTICS_ENABLE=1 writes replay-acc-init row; default off writes nothing", () => {
+  it("diagnostics: CREDITGAUGE_DIAGNOSTICS_ENABLE=1 writes replay-acc-init row; default off writes nothing", () => {
     // Note: src/diagnostics.ts:53 has its OWN stateRoot() that reads
     // process.env.CLAUDE_CONFIG_DIR directly and appends a hardcoded
-    // "plugins/topgauge/state/" segment. The setStateRoot hook in
+    // "plugins/creditgauge/state/" segment. The setStateRoot hook in
     // status-store does NOT route diagnostics writes. So the
     // diagnostics file lives at:
-    //   ${CLAUDE_CONFIG_DIR}/plugins/topgauge/state/<projectHash>/diagnostics.jsonl
+    //   ${CLAUDE_CONFIG_DIR}/plugins/creditgauge/state/<projectHash>/diagnostics.jsonl
     // not at the JSONL stateRoot we configured for status-store.
     // The projectHash is the same either way (computed by the
     // exported projectHash() function), so we read from the right
     // path by computing it the same way.
 
     // Sub-test A: env=0 (default) — no row.
-    const tmpA = mkdtempSync(join(tmpdir(), "topgauge-diag-A-"));
-    const stateA = mkdtempSync(join(tmpdir(), "topgauge-diag-A-state-"));
+    const tmpA = mkdtempSync(join(tmpdir(), "creditgauge-diag-A-"));
+    const stateA = mkdtempSync(join(tmpdir(), "creditgauge-diag-A-state-"));
     process.env.CLAUDE_CONFIG_DIR = tmpA;
     statusStore.setStateRoot(() => stateA);
     statusStore.setStatusPathResolver(() => join(tmpA, "status.json"));
@@ -337,12 +337,12 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     statusStore.resetTickStateForTest();
     statusStore.__resetStatCacheForTest();
 
-    process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = "0";
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "0";
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, startAt: 50_000 }));
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000, startAt: 50_000 }));
     statusStore.processAndSaveTick("D:\\test", validTokens());
 
-    const diagA = join(tmpA, "plugins", "topgauge", "state", statusStore.projectHash("D:\\test"), "diagnostics.jsonl");
+    const diagA = join(tmpA, "plugins", "creditgauge", "state", statusStore.projectHash("D:\\test"), "diagnostics.jsonl");
     if (existsSync(diagA)) {
       const content = readFileSync(diagA, "utf8");
       assert.ok(!content.includes("replay-acc-init"), "no replay-acc-init row when env=0");
@@ -353,8 +353,8 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     // Sub-test B: env=1 — row emitted. Separate tmp dir for the
     // dedupe map (per-process) — a different scope+counts msg gets
     // a different dedupe key, so this naturally writes a fresh row.
-    const tmpB = mkdtempSync(join(tmpdir(), "topgauge-diag-B-"));
-    const stateB = mkdtempSync(join(tmpdir(), "topgauge-diag-B-state-"));
+    const tmpB = mkdtempSync(join(tmpdir(), "creditgauge-diag-B-"));
+    const stateB = mkdtempSync(join(tmpdir(), "creditgauge-diag-B-state-"));
     process.env.CLAUDE_CONFIG_DIR = tmpB;
     statusStore.setStateRoot(() => stateB);
     statusStore.setStatusPathResolver(() => join(tmpB, "status.json"));
@@ -363,12 +363,12 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     statusStore.resetTickStateForTest();
     statusStore.__resetStatCacheForTest();
 
-    process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = "1";
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, startAt: 50_000 }));
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000, startAt: 50_000 }));
     statusStore.processAndSaveTick("D:\\test", validTokens());
 
-    const diagB = join(tmpB, "plugins", "topgauge", "state", statusStore.projectHash("D:\\test"), "diagnostics.jsonl");
+    const diagB = join(tmpB, "plugins", "creditgauge", "state", statusStore.projectHash("D:\\test"), "diagnostics.jsonl");
     assert.ok(existsSync(diagB), `diagnostics.jsonl exists at ${diagB}`);
     const content = readFileSync(diagB, "utf8");
     assert.ok(

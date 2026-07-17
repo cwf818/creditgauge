@@ -18,7 +18,7 @@ const {
 
 // v0.8.21+ — FILE-SCOPE path resolver. Without this, the cache
 // module's `flushToDisk()` writes to the user's live
-// `~/.claude/plugins/topgauge/state/cache.json` — which is
+// `~/.claude/plugins/creditgauge/state/cache.json` — which is
 // shared with the running plugin and your interactive shell
 // sessions. Tests fixture values (k1/k2/d--workspace-X/tickSpeed:…)
 // would clobber real cache rows. We point the resolver at an
@@ -28,7 +28,7 @@ const {
 // afterEach below restores the file-scope default so inner
 // describes don't leak their tmp dir choice to siblings.
 let _ephemeralDir: string;
-_ephemeralDir = mkdtempSync(join(tmpdir(), "topgauge-cache-test-"));
+_ephemeralDir = mkdtempSync(join(tmpdir(), "creditgauge-cache-test-"));
 setCachePathResolver(() => join(_ephemeralDir, "cache.json"));
 
 describe("cache", () => {
@@ -566,7 +566,7 @@ describe("cache — v0.8.x TTL flush + legacy key cleanup", () => {
   }
 
   function setupTmpDir(): void {
-    dir = mkdtempSync(join(tmpdir(), "topgauge-cache-v8-"));
+    dir = mkdtempSync(join(tmpdir(), "creditgauge-cache-v8-"));
     cacheFile = join(dir, "cache.json");
     setCachePathResolver(() => cacheFile);
   }

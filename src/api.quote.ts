@@ -217,7 +217,7 @@ async function fetchOne(
   // Capture stderr to a temp file so curl's exit-status detail
   // (e.g. "curl: (6) Could not resolve host") is preserved for
   // diagnostics instead of swallowed by stdio:[…,"ignore"]. tmp
-  // filename: `<tmpdir>/topgauge-curl-<pid>.log` — unique per
+  // filename: `<tmpdir>/creditgauge-curl-<pid>.log` — unique per
   // process so concurrent ticks (rare but possible) don't clobber
   // each other's stderr. Cleaned in catch / finally.
   //
@@ -228,7 +228,7 @@ async function fetchOne(
   // quotes as a string wrapper (Windows would silently strip
   // them) or MSYS2 path-mangling the URL. argv length is also
   // uncapped by the shell's MAX_ARG_STRS limit on old Windows.
-  const stderrPath = `${tmpdir()}/topgauge-curl-${process.pid}.log`;
+  const stderrPath = `${tmpdir()}/creditgauge-curl-${process.pid}.log`;
   // v0.8.21+ — opt-in TLS skip. Precedence (highest first):
   //   1. inline `|insecureTls|true|false` on the m_quote token
   //      (read by `preFetchQuotes` from the token's inline args)

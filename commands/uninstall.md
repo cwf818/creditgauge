@@ -1,17 +1,17 @@
 ---
-description: Uninstall topgauge (ToPGauge), restore settings.json, and wipe the plugin's cache, marketplace, and loader rows
+description: Uninstall creditgauge (CreditGauge), restore settings.json, and wipe the plugin's cache, marketplace, and loader rows
 argument-hint: "[--project | --dry-run | --completely]"
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/uninstall.sh:*)"]
 ---
 
-# topgauge :uninstall
+# creditgauge :uninstall
 
 Restores the original `statusLine.command` from the stable
-`plugins/topgauge/state/upstream-cmd.txt` (sibling of
+`plugins/creditgauge/state/upstream-cmd.txt` (sibling of
 `config.json`) if available, otherwise falls back to the most recent
-pre-managed `settings.json.bak.<ts>`. Strips `topgauge@topgauge`
+pre-managed `settings.json.bak.<ts>`. Strips `creditgauge@creditgauge`
 from `enabledPlugins` and `extraKnownMarketplaces`, wipes
-`cache/topgauge/`, the marketplace dir, and the plugin's row from
+`cache/creditgauge/`, the marketplace dir, and the plugin's row from
 `installed_plugins.json` and `known_marketplaces.json`. Backs up
 `settings.json` and the two JSON files with `.<name>.bak.<timestamp>`
 before any destructive change. Runs `scripts/clean.sh` as its final step
@@ -45,8 +45,8 @@ command:
 After uninstall, re-install with:
 
 ```
-/plugin marketplace add cwf818/topgauge
-/plugin install topgauge@topgauge
+/plugin marketplace add cwf818/creditgauge
+/plugin install creditgauge@creditgauge
 /reload-plugins
-/topgauge:install
+/creditgauge:install
 ```

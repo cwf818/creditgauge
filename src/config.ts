@@ -1,14 +1,14 @@
-// User-tunable configuration for topgauge (ToPGauge).
+// User-tunable configuration for creditgauge (CreditGauge).
 //
 // Loaded once at startup from
-//   ~/.claude/plugins/topgauge/config.json
-// (Windows: %USERPROFILE%\.claude\plugins\topgauge\config.json).
+//   ~/.claude/plugins/creditgauge/config.json
+// (Windows: %USERPROFILE%\.claude\plugins\creditgauge\config.json).
 //
 // Missing file → DEFAULT_CONFIG silently. Malformed JSON or a single
 // bad field → one stderr line + DEFAULT_CONFIG. Never crashes.
 //
 // Precedence: config.json > hardcoded defaults. The earlier
-// TOPGAUGE_DISPLAY env var is gone — anyone who used it must migrate
+// CREDITGAUGE_DISPLAY env var is gone — anyone who used it must migrate
 // to config.json's `display` field (see README "Configuration").
 
 import { existsSync, readFileSync } from "node:fs";
@@ -322,7 +322,7 @@ const DEFAULT_CONFIG: {
     labelPluginSystem: string;
     // vX.X.X+ — glyph shown by `m_pluginSource` when the active
     // provider's plugin resolved to a user override at
-    // `~/.claude/plugins/topgauge/query_plugins/<id>/`. Default
+    // `~/.claude/plugins/creditgauge/query_plugins/<id>/`. Default
     // "🎨" preserves the v0.9.x ship literal; user-overridable
     // independently of `labelPluginSystem`.
     labelPluginUserDefined: string;
@@ -518,7 +518,7 @@ function defaultConfigPath(): string {
     homedir(),
     ".claude",
     "plugins",
-    "topgauge",
+    "creditgauge",
     "config.json",
   );
 }
@@ -603,7 +603,7 @@ export function applyProviderOverrides(raw: Record<string, unknown>): void {
 // duplicating the stderr + diagnostics JSONL wiring. Config-side
 // callers (this file) keep using the bare name.
 export function warn(msg: string): void {
-  process.stderr.write(`topgauge: config ${msg}\n`);
+  process.stderr.write(`creditgauge: config ${msg}\n`);
   // v0.4.0+ — also append to the diagnostics JSONL log so the
   // m_warning module can surface the latest signal and the user can
   // postmortem the plugin's recent history. Stderr stays the

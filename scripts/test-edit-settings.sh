@@ -36,7 +36,7 @@ winpath() {
 
 PASS=0
 FAIL=0
-TMPDIR="$(mktemp -d -t topgauge-tests-XXXXXX)"
+TMPDIR="$(mktemp -d -t creditgauge-tests-XXXXXX)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 # assert_eq <label> <expected> <actual>
@@ -91,14 +91,14 @@ node "$LIB" "$WIN_SETTINGS" write-managed "$WIN_WRAPPER" "$WIN_UPSTREAM" >/dev/n
 
 CMD="$(jget "$SETTINGS" statusLine.command)"
 assert_match "command starts with bash -c '" "bash -c '" "$CMD"
-assert_match "command references new cache dir glob" "topgauge/topgauge/\*/" "$CMD"
+assert_match "command references new cache dir glob" "creditgauge/creditgauge/\*/" "$CMD"
 assert_match "command uses sort -t. for version sort" "sort -t\\." "$CMD"
 assert_match "command tails -1 + cut -f2-" "tail -1 \\| cut -f2-" "$CMD"
 assert_match "command guards against missing cache" '\[ -d "\$plugin_dir" \]' "$CMD"
-assert_match "command points upstream at new stable state dir" 'TOPGAUGE_UPSTREAM_CMD="\$\{CLAUDE_CONFIG_DIR:-\$HOME/.claude\}/plugins/topgauge/state/upstream-cmd.sh"' "$CMD"
+assert_match "command points upstream at new stable state dir" 'CREDITGAUGE_UPSTREAM_CMD="\$\{CLAUDE_CONFIG_DIR:-\$HOME/.claude\}/plugins/creditgauge/state/upstream-cmd.sh"' "$CMD"
 assert_match "command execs wrapper from \$plugin_dir" 'exec bash "\$\{plugin_dir\}scripts/wrapper.sh"' "$CMD"
 assert_eq "refreshInterval preserved" "90" "$(jget "$SETTINGS" statusLine.refreshInterval)"
-assert_eq "managed marker set" "true" "$(jget "$SETTINGS" statusLine._topgauge_managed)"
+assert_eq "managed marker set" "true" "$(jget "$SETTINGS" statusLine._creditgauge_managed)"
 
 echo ""
 echo "=== status op: fingerprint matches latest-cache command ==="
@@ -107,14 +107,14 @@ assert_eq "status reports managed" "managed" "$STATUS"
 
 echo ""
 echo "=== restore-from-file preserves refreshInterval ==="
-RESTORE_CMD='bash -c '"'"'export TOPGAUGE_UPSTREAM_CMD="/home/test/.claude/upstream.sh"; exec bash "/home/test/.claude/plugins/cache/topgauge/topgauge/0.2.5/scripts/wrapper.sh"'"'"''
-python -c "import json,sys; print(json.dumps({'statusLine':{'type':'command','command':sys.argv[1],'refreshInterval':75,'_topgauge_managed':True}}, indent=2))" "$RESTORE_CMD" > "$SETTINGS"
+RESTORE_CMD='bash -c '"'"'export CREDITGAUGE_UPSTREAM_CMD="/home/test/.claude/upstream.sh"; exec bash "/home/test/.claude/plugins/cache/creditgauge/creditgauge/0.2.5/scripts/wrapper.sh"'"'"''
+python -c "import json,sys; print(json.dumps({'statusLine':{'type':'command','command':sys.argv[1],'refreshInterval':75,'_creditgauge_managed':True}}, indent=2))" "$RESTORE_CMD" > "$SETTINGS"
 echo 'echo restored' > "$TMPDIR/upstream.txt"
 WIN_UPSTREAM_TXT="$(winpath "$TMPDIR/upstream.txt")"
 node "$LIB" "$WIN_SETTINGS" restore-from-file "$WIN_UPSTREAM_TXT" >/dev/null
 assert_eq "refreshInterval survives restore" "75" "$(jget "$SETTINGS" statusLine.refreshInterval)"
 assert_match "command restored to upstream" "echo restored" "$(jget "$SETTINGS" statusLine.command)"
-assert_eq "marker cleared" "" "$(jget "$SETTINGS" statusLine._topgauge_managed)"
+assert_eq "marker cleared" "" "$(jget "$SETTINGS" statusLine._creditgauge_managed)"
 
 echo ""
 echo "=== bash can actually execute the latest-cache command ==="
@@ -144,7 +144,7 @@ WIN_JOURNAL="$(winpath "$JOURNAL")"
 # Start clean: managed statusLine, no refreshInterval.
 python -c '
 import json
-data = {"statusLine": {"type": "command", "command": "bash -c '"'"'P=x; exec bash \"${P}scripts/wrapper.sh\"'"'"'", "_topgauge_managed": True}}
+data = {"statusLine": {"type": "command", "command": "bash -c '"'"'P=x; exec bash \"${P}scripts/wrapper.sh\"'"'"'", "_creditgauge_managed": True}}
 print(json.dumps(data, indent=2))
 ' > "$SETTINGS"
 
@@ -207,7 +207,7 @@ assert_eq "after first apply: statusLine block deleted" "no" "$HAS_SL"
 OUT2="$(node "$LIB" "$WIN_SETTINGS" apply-journal-entry "$WIN_JOURNAL" 2>&1)"
 # `applied:true` entries are filtered out before iteration, so the op
 # is silent on re-run. Verify the journal survived unchanged AND
-# settings.json wasn't touched (no `_topgauge_managed` re-introduced,
+# settings.json wasn't touched (no `_creditgauge_managed` re-introduced,
 # no spurious `statusLine: {}`).
 APPLIED_FINAL=$(TOPG_TEST_PATH="$JOURNAL" node -e "
   const j = JSON.parse(require('fs').readFileSync(process.env.TOPG_TEST_PATH, 'utf8'));
@@ -225,15 +225,15 @@ echo "=== apply-journal-entry: per-key-diff format (block-level) ==="
 # Regression coverage for the silent sibling-drop bug.
 
 # Setup: settings.json with a pre-existing claude-hud sibling + the
-# topgauge@topgauge key install added. Journal entry uses the NEW
-# per-key diff format (before:{}, after:{topgauge@topgauge:true}).
+# creditgauge@creditgauge key install added. Journal entry uses the NEW
+# per-key diff format (before:{}, after:{creditgauge@creditgauge:true}).
 SETTINGS_EP="$TMPDIR/settings-ep.json"
 WIN_SETTINGS_EP="$(winpath "$SETTINGS_EP")"
 cat > "$SETTINGS_EP" <<'JSON'
 {
   "enabledPlugins": {
     "claude-hud@claude-hud": true,
-    "topgauge@topgauge": true
+    "creditgauge@creditgauge": true
   }
 }
 JSON
@@ -248,13 +248,13 @@ cat > "$JOURNAL_EP" <<'JSON'
     "ts": "2026-07-15T07:00:00.000Z",
     "action": "create",
     "before": {},
-    "after": { "topgauge@topgauge": true },
+    "after": { "creditgauge@creditgauge": true },
     "applied": false
   }]
 }
 JSON
 
-# Apply — topgauge@topgauge removed, claude-hud@claude-hud preserved,
+# Apply — creditgauge@creditgauge removed, claude-hud@claude-hud preserved,
 # block survives (it still has the sibling).
 node "$LIB" "$WIN_SETTINGS_EP" apply-journal-entry "$WIN_JOURNAL_EP" >/dev/null 2>&1
 HAS_HUD=$(node -e "
@@ -264,9 +264,9 @@ HAS_HUD=$(node -e "
 assert_eq "ep-sibling-preserved: claude-hud@claude-hud survives" "yes" "$HAS_HUD"
 HAS_TOPGAUGE=$(node -e "
   const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
-  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, 'topgauge@topgauge') ? 'yes' : 'no');
+  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, 'creditgauge@creditgauge') ? 'yes' : 'no');
 " "$SETTINGS_EP")
-assert_eq "ep-sibling-preserved: topgauge@topgauge removed" "no" "$HAS_TOPGAUGE"
+assert_eq "ep-sibling-preserved: creditgauge@creditgauge removed" "no" "$HAS_TOPGAUGE"
 HAS_BLOCK=$(node -e "
   const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
   process.stdout.write('enabledPlugins' in d ? 'yes' : 'no');
@@ -305,14 +305,14 @@ HAS_EP_EMPTY=$(node -e "
 " "$SETTINGS_EMPTY")
 assert_eq "ep-fresh-create-empty: empty diff → block deleted" "no" "$HAS_EP_EMPTY"
 
-# --- ep-user-touched-install-key: user manually disabled topgauge after
+# --- ep-user-touched-install-key: user manually disabled creditgauge after
 # install. Uninstall should NOT re-enable it (user's territory).
 SETTINGS_TOUCHED="$TMPDIR/settings-touched.json"
 WIN_SETTINGS_TOUCHED="$(winpath "$SETTINGS_TOUCHED")"
 cat > "$SETTINGS_TOUCHED" <<'JSON'
 {
   "enabledPlugins": {
-    "topgauge@topgauge": false
+    "creditgauge@creditgauge": false
   }
 }
 JSON
@@ -326,17 +326,17 @@ cat > "$JOURNAL_TOUCHED" <<'JSON'
     "ts": "2026-07-15T07:00:00.000Z",
     "action": "create",
     "before": {},
-    "after": { "topgauge@topgauge": true },
+    "after": { "creditgauge@creditgauge": true },
     "applied": false
   }]
 }
 JSON
 node "$LIB" "$WIN_SETTINGS_TOUCHED" apply-journal-entry "$WIN_JOURNAL_TOUCHED" >/dev/null 2>&1
-TOPGAUGE_VAL=$(node -e "
+CREDITGAUGE_VAL=$(node -e "
   const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
-  process.stdout.write(JSON.stringify(d.enabledPlugins && d.enabledPlugins['topgauge@topgauge']));
+  process.stdout.write(JSON.stringify(d.enabledPlugins && d.enabledPlugins['creditgauge@creditgauge']));
 " "$SETTINGS_TOUCHED")
-assert_eq "ep-user-touched-install-key: topgauge@topgauge stays false" "false" "$TOPGAUGE_VAL"
+assert_eq "ep-user-touched-install-key: creditgauge@creditgauge stays false" "false" "$CREDITGAUGE_VAL"
 
 # --- ep-user-added-sibling: user added a new plugin post-install. Uninstall
 # preserves it (anyUserAdded path).
@@ -345,7 +345,7 @@ WIN_SETTINGS_ADDED="$(winpath "$SETTINGS_ADDED")"
 cat > "$SETTINGS_ADDED" <<'JSON'
 {
   "enabledPlugins": {
-    "topgauge@topgauge": true,
+    "creditgauge@creditgauge": true,
     "user-new-plugin@user-new-plugin": true
   }
 }
@@ -360,7 +360,7 @@ cat > "$JOURNAL_ADDED" <<'JSON'
     "ts": "2026-07-15T07:00:00.000Z",
     "action": "create",
     "before": {},
-    "after": { "topgauge@topgauge": true },
+    "after": { "creditgauge@creditgauge": true },
     "applied": false
   }]
 }
@@ -371,11 +371,11 @@ USER_NEW=$(node -e "
   process.stdout.write(d.enabledPlugins && d.enabledPlugins['user-new-plugin@user-new-plugin'] === true ? 'yes' : 'no');
 " "$SETTINGS_ADDED")
 assert_eq "ep-user-added-sibling: user-added sibling preserved" "yes" "$USER_NEW"
-HAS_TOPGAUGE_ADDED=$(node -e "
+HAS_CREDITGAUGE_ADDED=$(node -e "
   const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
-  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, 'topgauge@topgauge') ? 'yes' : 'no');
+  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, 'creditgauge@creditgauge') ? 'yes' : 'no');
 " "$SETTINGS_ADDED")
-assert_eq "ep-user-added-sibling: topgauge@topgauge removed" "no" "$HAS_TOPGAUGE_ADDED"
+assert_eq "ep-user-added-sibling: creditgauge@creditgauge removed" "no" "$HAS_CREDITGAUGE_ADDED"
 
 # --- ep-mutated-sibling: install flipped a sibling from true → false.
 # Uninstall restores it to true.
@@ -421,7 +421,7 @@ cat > "$SETTINGS_LEGACY" <<'JSON'
 {
   "enabledPlugins": {
     "claude-hud@claude-hud": true,
-    "topgauge@topgauge": true
+    "creditgauge@creditgauge": true
   }
 }
 JSON
@@ -435,7 +435,7 @@ cat > "$JOURNAL_LEGACY" <<'JSON'
     "ts": "2026-07-15T07:00:00.000Z",
     "action": "create",
     "before": null,
-    "after": { "topgauge@topgauge": true },
+    "after": { "creditgauge@creditgauge": true },
     "applied": false
   }]
 }
@@ -449,9 +449,9 @@ LEGACY_HUD=$(node -e "
 assert_eq "legacy-rejection: claude-hud@claude-hud untouched" "yes" "$LEGACY_HUD"
 LEGACY_TOPGAUGE=$(node -e "
   const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
-  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, 'topgauge@topgauge') ? 'yes' : 'no');
+  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, 'creditgauge@creditgauge') ? 'yes' : 'no');
 " "$SETTINGS_LEGACY")
-assert_eq "legacy-rejection: topgauge@topgauge left in place (settings untouched)" "yes" "$LEGACY_TOPGAUGE"
+assert_eq "legacy-rejection: creditgauge@creditgauge left in place (settings untouched)" "yes" "$LEGACY_TOPGAUGE"
 
 echo ""
 echo "=== Summary ==="

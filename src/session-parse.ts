@@ -17,7 +17,7 @@
 // v0.8.0+ — invariant check on the parsed TokenSnapshot:
 //   total_input_tokens == current.input_tokens + current.cache_read_input_tokens
 // When violated, a `warning` is appended to the per-project
-// diagnostics log (gated by TOPGAUGE_DIAGNOSTICS_ENABLE). This
+// diagnostics log (gated by CREDITGAUGE_DIAGNOSTICS_ENABLE). This
 // surfaces schema drift early (e.g. a provider changing the
 // cache_read accounting) without breaking the render path — the
 // renderer still gets a fully populated snapshot. See
@@ -145,7 +145,7 @@ export function parseTokenSnapshot(raw: string): TokenSnapshot | null {
   // schema drift from a provider (cache_read accounting change,
   // a new "cache_creation" channel, etc.) — record it but don't
   // break the render path. The warning is gated by the
-  // diagnostics system (env TOPGAUGE_DIAGNOSTICS_ENABLE=1) and
+  // diagnostics system (env CREDITGAUGE_DIAGNOSTICS_ENABLE=1) and
   // deduped 60s per unique message. See diagnostics.ts.
   //
   // v0.9.x — reads through the module-keyed field names:

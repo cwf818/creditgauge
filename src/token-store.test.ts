@@ -11,8 +11,8 @@ import { projectHash, sampleFilePath, setStateRoot, resetStateRoot, stateRoot } 
 describe("token-store — path helpers", () => {
   it("projectHash: replaces path separators with -", () => {
     assert.equal(
-      projectHash("D:\\WorkSpace\\topgauge-cc"),
-      "d--workspace-topgauge-cc",
+      projectHash("D:\\WorkSpace\\creditgauge-cc"),
+      "d--workspace-creditgauge-cc",
     );
     assert.equal(projectHash("/home/user/proj"), "-home-user-proj");
   });
@@ -67,12 +67,12 @@ describe("token-store — path helpers", () => {
     // ~/.claude/.../state/ is never touched.
     const orig = stateRoot();
     try {
-      setStateRoot(() => "/tmp/topgauge-test");
+      setStateRoot(() => "/tmp/creditgauge-test");
       const p = sampleFilePath("D:\\WorkSpace\\foo", "sess-1");
       // Path separators on Windows use \\, on POSIX /.
       // Check that the injected root appears in the result.
       assert.ok(
-        p.includes("topgauge-test"),
+        p.includes("creditgauge-test"),
         `expected injected root in: ${p}`,
       );
       // The projectHash + sessionId are appended on top of the

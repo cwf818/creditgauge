@@ -3,9 +3,9 @@
 # cache, keeping only the newest one.
 #
 # Background:
-#   When you /plugin install a new version of topgauge,
+#   When you /plugin install a new version of creditgauge,
 #   Claude Code's loader creates a new <version> dir under
-#     ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/topgauge/topgauge/
+#     ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/creditgauge/creditgauge/
 #   but does NOT remove the previous version's dir. Old dirs pile up
 #   over time. Each one is ~40-50MB (full source tree + node_modules).
 #
@@ -15,7 +15,7 @@
 #   older dirs are pure dead weight.
 #
 # Behavior:
-#   - Walks <cache>/topgauge/, finds all <version> dirs.
+#   - Walks <cache>/creditgauge/, finds all <version> dirs.
 #   - Sorts by version numerically (4-component dotted-decimal).
 #   - Keeps the highest. Removes the rest.
 #   - This is destructive: --dry-run is supported for preview.
@@ -69,7 +69,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
 
 CLAUDE_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-CACHE_BASE="${CLAUDE_ROOT}/plugins/cache/topgauge/topgauge"
+CACHE_BASE="${CLAUDE_ROOT}/plugins/cache/creditgauge/creditgauge"
 
 # Version dir name: at least 3 dot-separated components (e.g. 0.2.7),
 # at most 4 (e.g. 0.2.7.1 for prereleases). Anything with fewer than

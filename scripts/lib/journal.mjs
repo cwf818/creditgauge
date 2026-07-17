@@ -10,7 +10,7 @@
 // place. This is the user's stated principle: "记录install时发生的操作，
 // uninstall时进行恢复;只恢复install的时候修改的项目内容。"
 //
-// File location: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/topgauge/state/
+// File location: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/creditgauge/state/
 //                install-journal.json
 // Falls back to lib/edit-settings.mjs's readJson/writeJson semantics for
 // line-ending preservation (CRLF on Windows, LF elsewhere).
@@ -54,7 +54,7 @@
 //   `skipped:legacy-entry` — they would silently drop pre-existing
 //   sibling keys. If a journal on disk is from a pre-fix install, the
 //   legacy entries are marked applied but settings.json is left
-//   untouched; the user manually removes any residual topgauge keys.
+//   untouched; the user manually removes any residual creditgauge keys.
 //
 //   An empty `before` AND empty `after` (install touched nothing of
 //   either category) means install.sh SKIPPED the entry entirely —

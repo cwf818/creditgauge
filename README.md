@@ -4,11 +4,11 @@ Usage: ▓▓▓▓░░░░ 40% (1h27m🕗 5h) · ▓▓░░░░░░ 2
 Balance: ￥110.00 · $3.5                                        # Balance
 </pre>
 
-# ToPGauge
+# CreditGauge
 
-[![License](https://img.shields.io/github/license/cwf818/topgauge)](LICENSE)
-[![Tag](https://img.shields.io/github/tag/cwf818/topgauge)](https://github.com/cwf818/topgauge/tags)
-[![Stars](https://img.shields.io/github/stars/cwf818/topgauge)](https://github.com/cwf818/topgauge/stargazers)
+[![License](https://img.shields.io/github/license/cwf818/creditgauge)](LICENSE)
+[![Tag](https://img.shields.io/github/tag/cwf818/creditgauge)](https://github.com/cwf818/creditgauge/tags)
+[![Stars](https://img.shields.io/github/stars/cwf818/creditgauge)](https://github.com/cwf818/creditgauge/stargazers)
 
 A provider-agnostic Claude Code statusline plugin for **token-plan usage / remaining quota**. It picks what to render from `ANTHROPIC_BASE_URL`, so the same plugin works against any supported provider's plan endpoint — no per-provider re-install. Currently supported:
 
@@ -23,11 +23,45 @@ ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / ora
 
 ## What's new
 
-**v0.9.7** — Install-journal: `install.sh` records every per-field change to `settings.json.statusLine` to a write-ahead log; `uninstall.sh` reverts field-by-field, preserving any field the user touched after install. 
+**v1.0.0** — Renamed from `topgauge` to `creditgauge`. Package id, marketplace id, plugin name, env-var namespace (`TOPGAUGE_*` → `CREDITGAUGE_*`), slash-command prefix (`/topgauge:` → `/creditgauge:`), repo URL (`cwf818/topgauge` → `cwf818/creditgauge`), and `settings.json` marker (`_topgauge_managed` → `_creditgauge_managed`) are all renamed. **Hard cut** — there is NO compat shim and NO state-dir migration. Provider strings are NOT renamed. See [Upgrading from v0.9.x](#upgrading-from-v09x) below.
+
+**v0.9.7** — Install-journal: `install.sh` records every per-field change to `settings.json.statusLine` to a write-ahead log; `uninstall.sh` reverts field-by-field, preserving any field the user touched after install.
 
 **v0.9.6** — `m_sumEstQuota|term:short` projects the spent cost up to a full-period spend using the aligned plan window's `used%`. Renders `est:$30.20` (fixed 2dp, per-model currency). Prefix is configurable via `labels.labelEstQuota` (default `"est:"`).
 
 > Requires `tokenPrices.<modelId>` to be configured for the target model (see MANUAL §m_tokenCost). Without it, the module renders `est:n/a`.
+
+## Upgrading from v0.9.x
+
+v1.0.0 is a **hard cut** from `topgauge` to `creditgauge`. There is **no** automatic migration — `uninstall.sh` of the new version does NOT recognize `_topgauge_managed`, and the loader will not auto-strip the old plugin id from `installed_plugins.json` / `known_marketplaces.json`. You must uninstall the old plugin first, then install the new one from scratch.
+
+```bash
+# 1. Uninstall the OLD plugin (topgauge). This removes the
+#    _topgauge_managed statusLine block, the topgauge row from
+#    enabledPlugins / extraKnownMarketplaces, and wipes
+#    cache/topgauge/, marketplaces/topgauge/, and
+#    plugins/topgauge/state/ (including install-journal.json).
+#
+#    If you have a v0.9.x install: `/topgauge:uninstall`
+#    If the v0.9.x cache is gone but the loader still has a row:
+#    `bash scripts/uninstall.sh` (run from the cloned v1.0.0 source).
+
+# 2. Add the NEW marketplace and install the NEW plugin.
+#    This is a fresh install — `cache/creditgauge/` and
+#    `plugins/creditgauge/state/` start empty.
+/plugin marketplace add cwf818/creditgauge
+/plugin install creditgauge@creditgauge
+
+# 3. Wire it into settings.json (creates _creditgauge_managed marker).
+/creditgauge:install
+```
+
+Things to know:
+
+- **State dir is fresh.** `state/<projectHash>/<sessionId>.jsonl` (token samples) does NOT carry forward — the old dir at `~/.claude/plugins/topgauge/state/<projectHash>/` is wiped by step 1, and the new dir at `~/.claude/plugins/creditgauge/state/<projectHash>/` starts empty. If you've been relying on `m_sumToken*` / `m_sumTtlStatus` / `m_accStartTime` etc. to render historical aggregates, those will be blank until new ticks accumulate.
+- **No legacy dual-strip.** Unlike v0.7.0 (which kept `tokenplan-usage-hud` recognition for one release), v1.0.0 does NOT keep `_topgauge_managed` recognition. Re-running the new `:install` against a v0.9.x state will report "not installed" and leave the old statusLine alone — you must `:uninstall` first.
+- **`config.json` is preserved across `:uninstall`** by default (the `~/.claude/plugins/topgauge/config.json` file is not in the wipe list). User plugins under `~/.claude/plugins/topgauge/query_plugins/` are also preserved. If you want them carried forward, manually `mv ~/.claude/plugins/topgauge/config.json ~/.claude/plugins/creditgauge/config.json` (and the same for `query_plugins/`) **after** `:uninstall` and **before** the new `/plugin install creditgauge@creditgauge`. The new installer does not auto-discover the old dir.
+- **Provider strings are unchanged.** `minimax`, `MiniMax-M3`, `DeepSeek`, etc. are still the matching substrings; the `providers` block in your carried-forward `config.json` keeps working as-is.
 
 ## Snapshots
 
@@ -51,8 +85,8 @@ ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / ora
 The plugin is a single-plugin marketplace. Install it in three steps:
 
 ```
-/plugin marketplace add cwf818/topgauge
-/plugin install topgauge@topgauge
+/plugin marketplace add cwf818/creditgauge
+/plugin install creditgauge@creditgauge
 ```
 
 > After the plugin install, run `/reload-plugins` so the loader picks up the new commands before wiring it into `settings.json`. Forgetting this step is the most common cause of "command not found" right after install.
@@ -60,22 +94,22 @@ The plugin is a single-plugin marketplace. Install it in three steps:
 Then wire it into `settings.json`:
 
 ```
-/topgauge:install
+/creditgauge:install
 ```
 
 This patches the active `settings.json` (user-level by default; pass `--project` for project-level):
 
-1. If `statusLine` is already managed by us (`_topgauge_managed: true`), the command is a no-op.
+1. If `statusLine` is already managed by us (`_creditgauge_managed: true`), the command is a no-op.
 2. Otherwise, the current `settings.json` is backed up to `settings.json.bak.<ISO-timestamp>`.
-3. The original `statusLine.command` is preserved at `<claude-root>/plugins/topgauge/state/upstream-cmd.sh` and `<claude-root>/plugins/topgauge/state/upstream-cmd.txt` — sibling of `config.json`, **stable** across `/plugin install` rolls and cache wipes.
-4. The `statusLine` is rewritten to invoke our wrapper, which sets `TOPGAUGE_UPSTREAM_CMD=<upstream-cmd.sh>` so the original statusline runs above our line.
+3. The original `statusLine.command` is preserved at `<claude-root>/plugins/creditgauge/state/upstream-cmd.sh` and `<claude-root>/plugins/creditgauge/state/upstream-cmd.txt` — sibling of `config.json`, **stable** across `/plugin install` rolls and cache wipes.
+4. The `statusLine` is rewritten to invoke our wrapper, which sets `CREDITGAUGE_UPSTREAM_CMD=<upstream-cmd.sh>` so the original statusline runs above our line.
 5. **`statusLine.refreshInterval` is managed**: if missing, it's created at `10`. If present and `> 10`, it's clamped down to `10` and a notice is printed to stdout (`install.sh: clamped statusLine.refreshInterval from N to 10 — set it back manually if you want to keep N`). Values `≤ 10` are left alone.
 
 `install.sh` auto-builds `dist/index.js` if it's missing (the marketplace install only copies source, not the bundle). Re-running the slash command is always a no-op once installed.
 
 ### Install-journal (write-ahead log)
 
-Every change `install.sh` makes to `settings.json` is recorded as a per-field entry in `<claude-root>/plugins/topgauge/state/install-journal.json`. Three entry kinds:
+Every change `install.sh` makes to `settings.json` is recorded as a per-field entry in `<claude-root>/plugins/creditgauge/state/install-journal.json`. Three entry kinds:
 
 | `action`     | Meaning                                                            |
 | ------------ | ------------------------------------------------------------------ |
@@ -85,14 +119,14 @@ Every change `install.sh` makes to `settings.json` is recorded as a per-field en
 
 Each entry has `{id, ts, action, before, after}`. The journal is the **authoritative record** of what install did — uninstall reads it (see below) to revert only the parts the user hasn't touched since. The journal itself lives in the **preserved** group (sibling of `config.json`), so `:uninstall` keeps it around unless you pass `--completely`. Hand-editing the file is supported; just keep the schema.
 
-If you want to preview what install will do, run `/topgauge:install --dry-run` first.
+If you want to preview what install will do, run `/creditgauge:install --dry-run` first.
 
 If your active `settings.json` doesn't exist at the project level, install creates a minimal one (with `permissions.defaultMode: bypassPermissions`). It does **not** copy from the user-level file.
 
 ### Restore from backup
 
 ```
-/topgauge:install --restore
+/creditgauge:install --restore
 ```
 
 Replaces the active `settings.json` with the most recent `settings.json.bak.<ts>`. Useful if you want to roll back an edit that wasn't made by us.
@@ -103,29 +137,29 @@ Four slash commands ship with the plugin:
 
 | Command                       | What it does                                                              |
 | ----------------------------- | ------------------------------------------------------------------------- |
-| `/topgauge:install`           | Wire the wrapper into `settings.json` (or `--restore`).                  |
-| `/topgauge:uninstall`         | Restore `settings.json`, wipe cache + marketplace + loader rows.         |
-| `/topgauge:clean`             | Trim old `.bak.<ts>` files (keeps the most recent per file).             |
-| `/topgauge:clean-cache`       | Remove stale version dirs from the plugin cache, keeping only the newest. |
+| `/creditgauge:install`           | Wire the wrapper into `settings.json` (or `--restore`).                  |
+| `/creditgauge:uninstall`         | Restore `settings.json`, wipe cache + marketplace + loader rows.         |
+| `/creditgauge:clean`             | Trim old `.bak.<ts>` files (keeps the most recent per file).             |
+| `/creditgauge:clean-cache`       | Remove stale version dirs from the plugin cache, keeping only the newest. |
 
 Each is a Pattern B2 slash command — the body is a `!`-fenced shell block that loads `scripts/<name>.sh` directly via `${CLAUDE_PLUGIN_ROOT}`, with `allowed-tools` scoped to that script. See [Project layout](#project-layout) for the file map.
 
 ## Uninstall
 
 ```
-/topgauge:uninstall
+/creditgauge:uninstall
 ```
 
 This is a self-contained cleanup that works even after the plugin's cache and marketplace have been wiped. It does all of the following:
 
 1. **Restore `statusLine`** — strategy in order:
-   - If `<claude-root>/plugins/topgauge/state/install-journal.json` has unapplied entries, apply them **field-by-field**: each entry's `after` is compared against the *current* `settings.json`; matching fields are reverted (created → removed, mutated → restored to `before`, clamped → restored to `before`), and fields the user changed after install are left alone. This is the journal-driven path — the **default for any install that ran with the journal writer enabled**.
-   - Else (legacy / pre-journal install), fall back to `${CLAUDE_ROOT}/plugins/topgauge/state/upstream-cmd.txt` (byte-for-byte restore of the original command).
-   - Else, fall back to the most recent `settings.json.bak.<ts>` whose `statusLine` does **not** have `_topgauge_managed: true` (the state before the plugin was installed).
+   - If `<claude-root>/plugins/creditgauge/state/install-journal.json` has unapplied entries, apply them **field-by-field**: each entry's `after` is compared against the *current* `settings.json`; matching fields are reverted (created → removed, mutated → restored to `before`, clamped → restored to `before`), and fields the user changed after install are left alone. This is the journal-driven path — the **default for any install that ran with the journal writer enabled**.
+   - Else (legacy / pre-journal install), fall back to `${CLAUDE_ROOT}/plugins/creditgauge/state/upstream-cmd.txt` (byte-for-byte restore of the original command).
+   - Else, fall back to the most recent `settings.json.bak.<ts>` whose `statusLine` does **not** have `_creditgauge_managed: true` (the state before the plugin was installed).
    - Else, strip the marker but leave the wrapper in place and print a warning.
-2. **Remove `topgauge@topgauge` from `settings.json.enabledPlugins`** (other plugins preserved).
-3. **Remove `topgauge` from `settings.json.extraKnownMarketplaces`** (Claude Code records the marketplace source there too — leaving it would re-add the marketplace on next `/plugin marketplace add` with no visible diff).
-4. **Wipe** `cache/topgauge/`, `marketplaces/topgauge/`, and the loader's leftover `marketplaces/cwf818-topgauge/` alias.
+2. **Remove `creditgauge@creditgauge` from `settings.json.enabledPlugins`** (other plugins preserved).
+3. **Remove `creditgauge` from `settings.json.extraKnownMarketplaces`** (Claude Code records the marketplace source there too — leaving it would re-add the marketplace on next `/plugin marketplace add` with no visible diff).
+4. **Wipe** `cache/creditgauge/`, `marketplaces/creditgauge/`, and the loader's leftover `marketplaces/cwf818-creditgauge/` alias.
 5. **Strip the plugin's row** from `installed_plugins.json` and `known_marketplaces.json` (with timestamped `.bak.<TS>` backups).
 6. **Trim old `.bak.<ts>` files** — invokes `scripts/clean.sh` as the final step so uninstall leaves a tidy filesystem (one newest backup per file). User-named backups like `settings.json.bak-pre-v0.1.8` are NOT touched.
 
@@ -136,10 +170,10 @@ The `env` block of `settings.json` (including your `ANTHROPIC_AUTH_TOKEN`) is **
 After uninstall, re-install with the four-step flow:
 
 ```
-/plugin marketplace add cwf818/topgauge
-/plugin install topgauge@topgauge
+/plugin marketplace add cwf818/creditgauge
+/plugin install creditgauge@creditgauge
 /reload-plugins
-/topgauge:install
+/creditgauge:install
 ```
 
 For dev iteration, `npm run dev:uninstall` (or `npm run dev:uninstall:dry`) does the same thing from the command line.
@@ -147,7 +181,7 @@ For dev iteration, `npm run dev:uninstall` (or `npm run dev:uninstall:dry`) does
 ## Clean
 
 ```
-/topgauge:clean
+/creditgauge:clean
 ```
 
 Removes the old `.bak.YYYYMMDDTHHMMSS` backup files our installer leaves behind, keeping only the most recent one per base file:
@@ -165,19 +199,19 @@ For dev iteration, `npm run settings:clean` (or `npm run settings:clean:dry`) do
 ## Clean cache
 
 ```
-/topgauge:clean-cache
+/creditgauge:clean-cache
 ```
 
-Every `/plugin install` rolls the cache forward — Claude Code creates a new `<version>` directory under `<cache>/topgauge/` but does **not** remove the previous one. Old version dirs pile up over time (~40-50 MB each: full source tree + node_modules). The `statusLine.command` written by `:install` is already version-independent — it `ls -d`s every version dir, sorts by version, and `exec`s the highest — so old dirs are pure dead weight.
+Every `/plugin install` rolls the cache forward — Claude Code creates a new `<version>` directory under `<cache>/creditgauge/` but does **not** remove the previous one. Old version dirs pile up over time (~40-50 MB each: full source tree + node_modules). The `statusLine.command` written by `:install` is already version-independent — it `ls -d`s every version dir, sorts by version, and `exec`s the highest — so old dirs are pure dead weight.
 
-`/topgauge:clean-cache` walks the cache, finds all `^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$` version directories, sorts numerically (so `0.2.10` sorts AFTER `0.2.9`, not lexically), keeps the newest, and removes the rest.
+`/creditgauge:clean-cache` walks the cache, finds all `^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$` version directories, sorts numerically (so `0.2.10` sorts AFTER `0.2.9`, not lexically), keeps the newest, and removes the rest.
 
 **Safety:** non-version entries (`.in_use`, `.orphaned_at_*`, hidden dirs, files, anything not matching the version regex) are left untouched. Idempotent: re-running is a no-op once only the newest remains. Add `--dry-run` to preview.
 
 ## How it composes with other statuslines
 
-- The wrapper script is `scripts/wrapper.sh`. If `TOPGAUGE_UPSTREAM_CMD` is set, it runs that path as a bash script (`bash "$TOPGAUGE_UPSTREAM_CMD"`), captures stdout, and exposes it to the plugin entry as the `TOPGAUGE_UPSTREAM` env var. If unset, the wrapper runs the plugin as the sole statusline.
-- `TOPGAUGE_UPSTREAM_CMD` is an **absolute path** to a bash script — `install.sh` writes one at `${CLAUDE_ROOT}/plugins/topgauge/state/upstream-cmd.sh` whose body is `exec bash -c '<original-command>'`. This path is **stable** (sibling of `config.json`, NOT inside the per-version cache dir), so `/plugin install` rolls don't move it.
+- The wrapper script is `scripts/wrapper.sh`. If `CREDITGAUGE_UPSTREAM_CMD` is set, it runs that path as a bash script (`bash "$CREDITGAUGE_UPSTREAM_CMD"`), captures stdout, and exposes it to the plugin entry as the `CREDITGAUGE_UPSTREAM` env var. If unset, the wrapper runs the plugin as the sole statusline.
+- `CREDITGAUGE_UPSTREAM_CMD` is an **absolute path** to a bash script — `install.sh` writes one at `${CLAUDE_ROOT}/plugins/creditgauge/state/upstream-cmd.sh` whose body is `exec bash -c '<original-command>'`. This path is **stable** (sibling of `config.json`, NOT inside the per-version cache dir), so `/plugin install` rolls don't move it.
 - The plugin preserves interior newlines in upstream output and injects `\x1b[0m` before its own line if upstream ends with an unclosed ANSI SGR — so multi-line, ANSI-colored upstream statuslines render correctly.
 
 ## Activation
@@ -264,10 +298,10 @@ The full schema (top-level keys, provider entries, presets, fragments, inline-ar
 
 Path:
 
-- **Unix**: `~/.claude/plugins/topgauge/config.json`
-- **Windows**: `%USERPROFILE%\.claude\plugins\topgauge\config.json`
+- **Unix**: `~/.claude/plugins/creditgauge/config.json`
+- **Windows**: `%USERPROFILE%\.claude\plugins\creditgauge\config.json`
 
-Loaded once at startup. **Missing file** → all defaults. **Malformed JSON** or a **single bad field** → one stderr line (`topgauge: config <reason>; using defaults`) and the default for _that_ field only — the rest of your config is still honored. The plugin never blanks the statusline on bad config.
+Loaded once at startup. **Missing file** → all defaults. **Malformed JSON** or a **single bad field** → one stderr line (`creditgauge: config <reason>; using defaults`) and the default for _that_ field only — the rest of your config is still honored. The plugin never blanks the statusline on bad config.
 
 A reference with every field is at [config.example.json](./config.example.json). Copy it to the path above and edit.
 
@@ -278,7 +312,7 @@ config field, a fetcher that returned an unexpected status code, an
 `m_quote` address fetch failure — it can append a JSONL entry to:
 
 ```
-~/.claude/plugins/topgauge/state/<projectHash>/diagnostics.jsonl
+~/.claude/plugins/creditgauge/state/<projectHash>/diagnostics.jsonl
 ```
 
 Each line is a structured record:
@@ -295,11 +329,11 @@ structured (timestamp + level + source + message).
 
 ### Opt-in gate
 
-The log is **OFF by default** — set `TOPGAUGE_DIAGNOSTICS_ENABLE=1` (or
+The log is **OFF by default** — set `CREDITGAUGE_DIAGNOSTICS_ENABLE=1` (or
 `true` / `yes`, case-insensitive) in your shell to enable file writes:
 
 ```bash
-export TOPGAUGE_DIAGNOSTICS_ENABLE=1
+export CREDITGAUGE_DIAGNOSTICS_ENABLE=1
 ```
 
 The rationale: the file lives in your plugins dir and may contain sensitive
@@ -314,14 +348,14 @@ Capped at the last 1000 entries. Anything older than 1000 events is uninterestin
 
 ### Wiping the log
 
-`/topgauge:clean --purge-runtime` walks every
+`/creditgauge:clean --purge-runtime` walks every
 `state/<projectHash>/` subdir and wipes its `diagnostics.jsonl`,
 `cache.json`, and `<*.jsonl>` token-sample files (per-project layout).
 It also cleans the legacy top-level `state/diagnostics.jsonl`,
 `state/cache.json`, and the legacy `state/token-samples/` tree for users
 upgrading from a pre-per-project-layout install. Top-level
 `upstream-cmd.{sh,txt}` and `config.json` are NEVER purged. Preview first with
-`/topgauge:clean --purge-runtime --dry-run`.
+`/creditgauge:clean --purge-runtime --dry-run`.
 
 ## Auth
 
@@ -425,22 +459,22 @@ Use the bundled dev helper (does **not** touch `settings.json` — your statusLi
 # Preview what will be removed:
 npm run dev:uninstall:dry
 
-# Wipe topgauge state:
+# Wipe creditgauge state:
 npm run dev:uninstall
 ```
 
 It removes:
 
-- the topgauge row from `installed_plugins.json` and `known_marketplaces.json` (with timestamped `.bak.<ts>` backups of both files).
-- `cache/topgauge/`, `marketplaces/topgauge/`, and the loader's leftover `marketplaces/cwf818-topgauge/` directory.
+- the creditgauge row from `installed_plugins.json` and `known_marketplaces.json` (with timestamped `.bak.<ts>` backups of both files).
+- `cache/creditgauge/`, `marketplaces/creditgauge/`, and the loader's leftover `marketplaces/cwf818-creditgauge/` directory.
 
 Then re-install:
 
 ```
-/plugin marketplace add cwf818/topgauge
-/plugin install topgauge@topgauge
+/plugin marketplace add cwf818/creditgauge
+/plugin install creditgauge@creditgauge
 /reload-plugins
-/topgauge:install
+/creditgauge:install
 ```
 
 If the loader still says "EPERM" after `dev:uninstall`, the most common cause is a Claude Code process holding a file lock on the marketplace dir. **Quit all running Claude Code sessions** (not just this one) and re-run `npm run dev:uninstall`.
@@ -461,9 +495,9 @@ src/
   tick-state.ts       # per-tick in-memory Store: beginTick / mark / commit
   status-store.ts     # three-layer acc (session/project/model) + cold-slot JSONL replay + stat cache
   cache.ts            # 60s TTL + stale-on-error; per-project cache.json shadowing
-  composition.ts      # reads TOPGAUGE_UPSTREAM, prepends (preserving ANSI/multi-line) and appends line
-  config.ts           # loads ~/.claude/plugins/topgauge/config.json; module-level singleton store
-  diagnostics.ts      # JSONL append logger (opt-in via TOPGAUGE_DIAGNOSTICS_ENABLE); 1000-line cap
+  composition.ts      # reads CREDITGAUGE_UPSTREAM, prepends (preserving ANSI/multi-line) and appends line
+  config.ts           # loads ~/.claude/plugins/creditgauge/config.json; module-level singleton store
+  diagnostics.ts      # JSONL append logger (opt-in via CREDITGAUGE_DIAGNOSTICS_ENABLE); 1000-line cap
   dispatch.ts         # providerType → module-set dispatch (provider-aware gating)
   git-info.ts         # m_branch / m_gitStatus read-side helpers (cwd-based)
   session-parse.ts    # parseTokenSnapshot — stdin JSON → TokenSnapshot; m_tokenTotalIn invariant check
@@ -474,16 +508,16 @@ src/
   plugin.json         # plugin manifest (declares commands, version, keywords)
   marketplace.json    # single-plugin marketplace wiring
 commands/
-  install.md          # /topgauge:install slash command
-  uninstall.md        # /topgauge:uninstall slash command
-  clean.md            # /topgauge:clean slash command
-  clean-cache.md      # /topgauge:clean-cache slash command
+  install.md          # /creditgauge:install slash command
+  uninstall.md        # /creditgauge:uninstall slash command
+  clean.md            # /creditgauge:clean slash command
+  clean-cache.md      # /creditgauge:clean-cache slash command
 scripts/
-  wrapper.sh          # bash wrapper: TOPGAUGE_UPSTREAM_CMD → TOPGAUGE_UPSTREAM → us
+  wrapper.sh          # bash wrapper: CREDITGAUGE_UPSTREAM_CMD → CREDITGAUGE_UPSTREAM → us
   install.sh          # settings.json patcher (install only)
   uninstall.sh        # self-contained uninstaller (used by :uninstall and dev:uninstall)
   clean.sh            # trim old .bak.<ts> files; --purge-runtime also wipes state/<projectHash>/{cache.json,diagnostics.jsonl,*.jsonl}
-  clean-cache.sh      # prune old version dirs under cache/topgauge/, keep newest
+  clean-cache.sh      # prune old version dirs under cache/creditgauge/, keep newest
   migrate-state.sh    # legacy state/token-samples/<hash>/<sid>.jsonl → state/<hash>/<sid>.jsonl
   dev-uninstall.sh    # DEV-ONLY thin shim → exec uninstall.sh
   lib/edit-settings.mjs  # ESM helper used by install.sh

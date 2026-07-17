@@ -1,8 +1,8 @@
 {
-  "name": "topgauge",
-  "version": "0.9.8",
+  "name": "creditgauge",
+  "version": "1.0.0",
   "private": true,
-  "description": "Claude Code statusline plugin (ToPGauge) that renders MiniMax token-plan usage (5h + weekly) or DeepSeek account balance, picked by ANTHROPIC_BASE_URL. Composes with another statusline via the TOPGAUGE_UPSTREAM_CMD env var.",
+  "description": "Claude Code statusline plugin (CreditGauge) that renders MiniMax token-plan usage (5h + weekly) or DeepSeek account balance, picked by ANTHROPIC_BASE_URL. Composes with another statusline via the CREDITGAUGE_UPSTREAM_CMD env var.",
   "type": "module",
   "license": "MIT",
   "scripts": {
@@ -22,6 +22,7 @@
     "scripts:test": "bash scripts/test-edit-settings.sh",
     "scripts:test:install": "bash scripts/test-install.sh",
     "scripts:test:clean-cache": "bash scripts/test-clean-cache.sh",
+    "scripts:test:rename": "bash scripts/test-rename-consistency.sh",
     "dev:uninstall": "bash scripts/dev-uninstall.sh",
     "dev:uninstall:dry": "bash scripts/dev-uninstall.sh --dry-run"
   },

@@ -4,7 +4,7 @@ argument-hint: "[--project | --dry-run | --purge-runtime]"
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/clean.sh:*)"]
 ---
 
-# topgauge :clean
+# creditgauge :clean
 
 Targets the `.bak.YYYYMMDDTHHMMSS` files our install/uninstall scripts
 leave behind:
@@ -30,7 +30,7 @@ v0.4.x+ Per-Project Layout: every `<projectHash>/` subdirectory under
 
 - `cache.json` — the on-disk fetch cache (60s TTL)
 - `diagnostics.jsonl` — the persistent diagnostics log (only exists
-  when `TOPGAUGE_DIAGNOSTICS_ENABLE=1` has been set)
+  when `CREDITGAUGE_DIAGNOSTICS_ENABLE=1` has been set)
 - `*.jsonl` — the per-session token-sample files backing the
   `m_acc*` / `m_sum*` module family.
 
@@ -47,7 +47,7 @@ These files are user-level only — `--purge-runtime` is ignored
 under `--project` (the state dir has no project-level counterpart).
 Combined usage: `clean.sh --purge-runtime --dry-run` to preview.
 
-The uninstall slash command (`/topgauge:uninstall`) calls
+The uninstall slash command (`/creditgauge:uninstall`) calls
 this script as its final step (without `--purge-runtime`), so explicit
 cleanup of backups is usually unnecessary after a fresh uninstall.
 `--purge-runtime` is opt-in because the runtime state contains your

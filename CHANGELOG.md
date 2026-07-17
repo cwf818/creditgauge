@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.0.0
+
+### Breaking
+
+- **Renamed from `topgauge` to `creditgauge`. Hard cut — no compat shim.**
+  Every user-visible identifier is renamed:
+  - **Plugin / marketplace / repo name**: `topgauge` → `creditgauge` (was `topgauge-cc` in v0.7.0; formal product name `CreditGauge-CC`).
+  - **Slash-command prefix**: `/topgauge:` → `/creditgauge:` (`:install`, `:uninstall`, `:clean`, `:clean-cache`).
+  - **Env-var namespace**: `TOPGAUGE_*` → `CREDITGAUGE_*` (`TOPGAUGE_UPSTREAM` → `CREDITGAUGE_UPSTREAM`, `TOPGAUGE_UPSTREAM_CMD` → `CREDITGAUGE_UPSTREAM_CMD`, `TOPGAUGE_DIAGNOSTICS_ENABLE` → `CREDITGAUGE_DIAGNOSTICS_ENABLE`).
+  - **`settings.json` marker**: `_topgauge_managed` → `_creditgauge_managed`.
+  - **Cache / marketplace / state dir**: `~/.claude/plugins/topgauge/` → `~/.claude/plugins/creditgauge/` (cache `topgauge/`, marketplace `topgauge/`, state `topgauge/state/`).
+  - **Repo URL**: `github.com/cwf818/topgauge` → `github.com/cwf818/creditgauge`. README badges, install/upgrade snippets updated.
+  - **Stderr banner**: `topgauge:` → `creditgauge:`.
+  - **Plugin version**: `0.9.8` → `1.0.0`.
+  - **Provider strings FROZEN** — NOT renamed: `minimax`, `MiniMax`, `MiniMax-M3`, `minimaxi.com`, `Quota`, `BALANCE`, `DeepSeek`, `deepseek`, `/v1/token_plan/remains`, `/user/balance`.
+  - **NO legacy dual-strip.** Unlike v0.7.0 (which kept `tokenplan-usage-hud` recognition for one release), v1.0.0 does NOT recognize `_topgauge_managed`. Re-running the new `:install` against a v0.9.x state reports "not installed" and leaves the old statusLine alone.
+  - **NO state-dir migration.** `~/.claude/plugins/topgauge/state/` is wiped by `:uninstall`; `~/.claude/plugins/creditgauge/state/` starts empty. Token-sample JSONL history, diagnostics logs, and preserved upstream commands do NOT carry forward.
+  - Per `new-feature-convention.md`: 不兼容旧实现;冲突直接覆盖而非 compat shim.
+
+### Upgrade flow
+
+```bash
+# 1. Uninstall the OLD plugin (v0.9.x)
+/topgauge:uninstall
+# (or `bash scripts/uninstall.sh` if the v0.9.x cache is gone)
+
+# 2. Install the NEW plugin
+/plugin marketplace add cwf818/creditgauge
+/plugin install creditgauge@creditgauge
+
+# 3. Wire it into settings.json
+/creditgauge:install
+```
+
+Optional: `~/.claude/plugins/topgauge/config.json` and `~/.claude/plugins/topgauge/query_plugins/` are preserved across `:uninstall` (config is treated as user data, not plugin state). Manually `mv` them into the new `creditgauge/` dir after step 1 if you want user plugins / provider entries to carry forward.
+
 ## v0.9.8
 
 ### Fix

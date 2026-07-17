@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall.sh — full uninstall of topgauge (ToPGauge).
+# uninstall.sh — full uninstall of creditgauge (CreditGauge).
 #
 # Self-contained: works even if the plugin cache has been partially or
 # fully wiped (e.g. after `npm run dev:uninstall`, or any manual
@@ -7,10 +7,10 @@
 # Unix tools. No network access. Never reads ANTHROPIC_AUTH_TOKEN.
 #
 # Behavior:
-#   1. Restores settings.json.statusLine to the user's pre-topgauge
+#   1. Restores settings.json.statusLine to the user's pre-creditgauge
 #      state. Strategy:
-#        a. If statusLine._topgauge_managed === true AND
-#           ${CLAUDE_ROOT}/plugins/topgauge/state/upstream-cmd.txt
+#        a. If statusLine._creditgauge_managed === true AND
+#           ${CLAUDE_ROOT}/plugins/creditgauge/state/upstream-cmd.txt
 #           exists, restore from that file (the original install.sh
 #           --uninstall behavior, byte-for-byte). This is the STABLE
 #           state location (sibling of config.json) as of v0.2.19; it
@@ -22,20 +22,20 @@
 #           NEWEST available legacy state file. This handles users
 #           who installed v0.2.18, never re-ran :install on v0.2.19,
 #           and now want to uninstall.
-#        b. Else if statusLine._topgauge_managed === true, fall back
+#        b. Else if statusLine._creditgauge_managed === true, fall back
 #           to the most recent settings.json.bak.<ts> in the same
-#           dir whose statusLine does NOT have _topgauge_managed
+#           dir whose statusLine does NOT have _creditgauge_managed
 #           (the state before the plugin was installed).
 #        c. Else: statusLine is not ours, leave it alone.
-#   2. Removes "topgauge@topgauge" from
+#   2. Removes "creditgauge@creditgauge" from
 #      settings.json.enabledPlugins (if present), preserving CRLF.
 #   3. Backs up settings.json to settings.json.bak.<TS> before any
 #      destructive change.
 #   4. Wipes (v0.9.x — partial-preserve by default; --completely for full):
 #        ALWAYS:
-#        - cache/topgauge/
-#        - marketplaces/topgauge/
-#        - marketplaces/cwf818-topgauge/   (alias)
+#        - cache/creditgauge/
+#        - marketplaces/creditgauge/
+#        - marketplaces/cwf818-creditgauge/   (alias)
 #        - state/{cache.json, cache.stat.json, upstream-cmd.{sh,txt}}
 #        - state/install-journal.json      (install.sh's private per-field journal;
 #                                           emptied after the apply pass, so it has
@@ -44,18 +44,18 @@
 #        - state/<projectHash>/state.json (per-project tick status)
 #        PRESERVED in DEFAULT (no --completely):
 #        - state/<projectHash>/<sessionId>.jsonl (token samples)
-#        - topgauge/config.json            (user-owned config)
-#        - topgauge/query_plugins/         (user plugin overrides)
+#        - creditgauge/config.json            (user-owned config)
+#        - creditgauge/query_plugins/         (user plugin overrides)
 #        WIPED by --completely (in addition to the always-list above):
 #        - state/<projectHash>/<sessionId>.jsonl
-#        - topgauge/config.json
-#        - topgauge/query_plugins/
+#        - creditgauge/config.json
+#        - creditgauge/query_plugins/
 #        A post-uninstall hint lists any surviving user-owned paths so
 #        the user can decide whether to delete them manually.
 #   5. Strips the plugin row from installed_plugins.json and
 #      known_marketplaces.json (with timestamped .bak.<TS> backups),
 #      preserving CRLF.
-#   6. Strips `extraKnownMarketplaces.topgauge` from
+#   6. Strips `extraKnownMarketplaces.creditgauge` from
 #      settings.json (Claude Code records the marketplace source there
 #      too — leaving it would re-add the marketplace on next
 #      /plugin marketplace add with no visible diff).
@@ -64,9 +64,9 @@
 # a fully clean system prints a "nothing to do" message and exits 0.
 #
 # v0.9.x — partial-preserve semantics (default) + --completely:
-#   - DEFAULT: preserve ~/.claude/plugins/topgauge/{config.json,
+#   - DEFAULT: preserve ~/.claude/plugins/creditgauge/{config.json,
 #     query_plugins/} and the per-project token-sample .jsonl files.
-#     This is what the user gets when they run `/topgauge:uninstall`
+#     This is what the user gets when they run `/creditgauge:uninstall`
 #     with no arguments — the most common case. A post-uninstall hint
 #     lists the surviving paths so the user can decide whether to
 #     delete them manually.
@@ -74,8 +74,8 @@
 #     list, also nuke config.json, query_plugins/, and the .jsonl
 #     history. Use this when the user wants to start from a clean
 #     slate (re-install is then equivalent to a fresh install).
-#   - ALWAYS wipe: cache/topgauge/, marketplaces/topgauge/,
-#     marketplaces/cwf818-topgauge/, state/{cache.json,
+#   - ALWAYS wipe: cache/creditgauge/, marketplaces/creditgauge/,
+#     marketplaces/cwf818-creditgauge/, state/{cache.json,
 #     cache.stat.json, upstream-cmd.{sh,txt}, install-journal.json},
 #     state/<projectHash>/state.json.
 #
@@ -157,7 +157,7 @@ SL_PLAN=""
 # lives at the STABLE location (sibling of config.json) so a
 # future uninstall can find the journal even after the cache has
 # been cleaned.
-STATE_DIR="${PLUGINS_DIR}/topgauge/state"
+STATE_DIR="${PLUGINS_DIR}/creditgauge/state"
 JOURNAL_PATH="${STATE_DIR}/install-journal.json"
 # Read the marker in pure bash via node (mirrors the install.sh
 # edit-settings.mjs status op, but inlined so we don't depend on
@@ -181,13 +181,13 @@ if [ -f "$TARGET" ]; then
     const isOurs = (cmd) => {
       if (typeof cmd !== "string" || cmd.length === 0) return false;
       const normalized = cmd.replaceAll("\\", "/");
-      const hasCachePath = normalized.includes("plugins/cache/topgauge/topgauge/");
+      const hasCachePath = normalized.includes("plugins/cache/creditgauge/creditgauge/");
       return hasCachePath && /wrapper\.sh"'\''\s*$/.test(cmd);
     };
     try {
       const d = JSON.parse(fs.readFileSync(p, "utf8"));
       const sl = d && d.statusLine;
-      const m = sl && sl._topgauge_managed === true && isOurs(sl.command);
+      const m = sl && sl._creditgauge_managed === true && isOurs(sl.command);
       process.stdout.write(m ? "1" : "0");
     } catch (e) { process.stdout.write("0"); }
   ' "$WIN_TARGET" 2>/dev/null || echo "0")
@@ -269,7 +269,7 @@ if [ "$MANAGED" = "1" ]; then
         try {
           const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
           const sl = d && d.statusLine;
-          process.stdout.write(sl && sl._topgauge_managed === true ? "1" : "0");
+          process.stdout.write(sl && sl._creditgauge_managed === true ? "1" : "0");
         } catch (e) { process.stdout.write("0"); }
       ' "$BWIN" 2>/dev/null || echo "0")
       if [ "$M" = "0" ]; then
@@ -330,17 +330,17 @@ fi
 # Action 3: wipe dirs.
 #
 # v0.9.x partial-preserve semantics:
-#   - topgauge/{config.json, query_plugins/}  → ALWAYS preserved
+#   - creditgauge/{config.json, query_plugins/}  → ALWAYS preserved
 #     (user-owned; the script can wipe them only on explicit request,
 #     and even then we prefer to surface them as a hint rather than
 #     silently nuke).
-#   - topgauge/state/  → NEVER rm -rf'd. We DO wipe its CONTENTS
+#   - creditgauge/state/  → NEVER rm -rf'd. We DO wipe its CONTENTS
 #     selectively below (top-level cache noise + per-project state.json;
 #     .jsonl only if --completely is passed).
 WIPE_DIRS=(
-  "${PLUGINS_DIR}/cache/topgauge"
-  "${PLUGINS_DIR}/marketplaces/topgauge"
-  "${PLUGINS_DIR}/marketplaces/cwf818-topgauge"
+  "${PLUGINS_DIR}/cache/creditgauge"
+  "${PLUGINS_DIR}/marketplaces/creditgauge"
+  "${PLUGINS_DIR}/marketplaces/cwf818-creditgauge"
 )
 for d in "${WIPE_DIRS[@]}"; do
   if [ -d "$d" ]; then
@@ -395,23 +395,23 @@ fi
 # query_plugins/). Default branch leaves them on disk; the post-
 # uninstall hint lists their paths so the user can decide.
 if [ "$KEEP_STATE" != 1 ]; then
-  if [ -f "${PLUGINS_DIR}/topgauge/config.json" ]; then
-    ACTIONS+=("rm -f ${PLUGINS_DIR}/topgauge/config.json")
+  if [ -f "${PLUGINS_DIR}/creditgauge/config.json" ]; then
+    ACTIONS+=("rm -f ${PLUGINS_DIR}/creditgauge/config.json")
     DRY_NOTHING=0
   fi
-  if [ -d "${PLUGINS_DIR}/topgauge/query_plugins" ]; then
-    ACTIONS+=("rm -rf ${PLUGINS_DIR}/topgauge/query_plugins")
+  if [ -d "${PLUGINS_DIR}/creditgauge/query_plugins" ]; then
+    ACTIONS+=("rm -rf ${PLUGINS_DIR}/creditgauge/query_plugins")
     DRY_NOTHING=0
   fi
-  # --completely: once every file under topgauge/ is wiped, the
+  # --completely: once every file under creditgauge/ is wiped, the
   # parent dir is empty and can be rmdir'd. List the candidate here
   # so the dry-run output is honest about the cleanup. The actual
   # rmdir is best-effort in the apply phase: if the user (or a
   # migration leftover like __legacy__/) put something untracked
   # in there, rmdir fails with ENOTEMPTY and the dir stays — no
   # data loss.
-  if [ -d "${PLUGINS_DIR}/topgauge" ]; then
-    ACTIONS+=("rmdir ${PLUGINS_DIR}/topgauge (if empty after wipes)")
+  if [ -d "${PLUGINS_DIR}/creditgauge" ]; then
+    ACTIONS+=("rmdir ${PLUGINS_DIR}/creditgauge (if empty after wipes)")
     DRY_NOTHING=0
   fi
 fi
@@ -427,7 +427,7 @@ if [ -f "$INSTALLED_JSON" ]; then
       const k = process.argv[2];
       process.stdout.write(d.plugins && Object.prototype.hasOwnProperty.call(d.plugins, k) ? "1" : "0");
     } catch (e) { process.stdout.write("0"); }
-  ' "$(cygpath -w "$INSTALLED_JSON" 2>/dev/null || echo "$INSTALLED_JSON")" "topgauge@topgauge" 2>/dev/null || echo "0")
+  ' "$(cygpath -w "$INSTALLED_JSON" 2>/dev/null || echo "$INSTALLED_JSON")" "creditgauge@creditgauge" 2>/dev/null || echo "0")
   if [ "$HAS_ROW" = "1" ]; then
     ACTIONS+=("strip row(s) from ${INSTALLED_JSON}")
     DRY_NOTHING=0
@@ -441,7 +441,7 @@ if [ -f "$KNOWN_JSON" ]; then
       const k = process.argv[2];
       process.stdout.write(Object.prototype.hasOwnProperty.call(d, k) ? "1" : "0");
     } catch (e) { process.stdout.write("0"); }
-  ' "$(cygpath -w "$KNOWN_JSON" 2>/dev/null || echo "$KNOWN_JSON")" "topgauge" 2>/dev/null || echo "0")
+  ' "$(cygpath -w "$KNOWN_JSON" 2>/dev/null || echo "$KNOWN_JSON")" "creditgauge" 2>/dev/null || echo "0")
   if [ "$HAS_ROW" = "1" ]; then
     ACTIONS+=("strip row(s) from ${KNOWN_JSON}")
     DRY_NOTHING=0
@@ -450,7 +450,7 @@ fi
 
 # --- Print plan --------------------------------------------------------------
 if [ "$DRY_NOTHING" = 1 ]; then
-  echo "uninstall.sh: nothing to do — topgauge is not installed"
+  echo "uninstall.sh: nothing to do — creditgauge is not installed"
   exit 0
 fi
 
@@ -503,7 +503,7 @@ if [ -n "$SL_PLAN" ]; then
         const isOurs = (cmd) => {
           if (typeof cmd !== "string" || cmd.length === 0) return false;
           const normalized = cmd.replaceAll("\\", "/");
-          const hasCachePath = normalized.includes("plugins/cache/topgauge/topgauge/");
+          const hasCachePath = normalized.includes("plugins/cache/creditgauge/creditgauge/");
           return hasCachePath && /wrapper\.sh"'\''\s*$/.test(cmd);
         };
         const data = JSON.parse(fs.readFileSync(target, "utf8"));
@@ -518,13 +518,13 @@ if [ -n "$SL_PLAN" ]; then
           const next = Object.assign({}, data.statusLine);
           next.type = "command";
           next.command = original;
-          delete next._topgauge_managed;
+          delete next._creditgauge_managed;
           data.statusLine = next;
         } else if (!data.statusLine) {
           data.statusLine = { type: "command", command: original };
         } else {
           process.stderr.write(
-            "uninstall.sh: restore-from-file skipped — current statusLine.command is not the topgauge wrapper\n"
+            "uninstall.sh: restore-from-file skipped — current statusLine.command is not the creditgauge wrapper\n"
           );
         }
         let eol = "\n";
@@ -580,14 +580,14 @@ if [ -n "$SL_PLAN" ]; then
       ;;
     warning:no-restore-source)
       # Last-resort: strip the marker but leave the wrapper as the
-      # command. The user will see topgauge still wired up until they
+      # command. The user will see creditgauge still wired up until they
       # manually fix it. Better than blanking statusLine entirely.
       node -e '
         const fs = require("fs");
         const target = process.argv[1];
         const data = JSON.parse(fs.readFileSync(target, "utf8"));
         if (data.statusLine) {
-          delete data.statusLine._topgauge_managed;
+          delete data.statusLine._creditgauge_managed;
         }
         let eol = "\n";
         const size = fs.statSync(target).size;
@@ -602,7 +602,7 @@ if [ -n "$SL_PLAN" ]; then
         fs.writeFileSync(target, body.replace(/\n/g, eol));
       ' "$WIN_TARGET"
       echo "uninstall.sh: WARNING — no upstream-cmd.txt and no pre-managed .bak found" >&2
-      echo "uninstall.sh: stripped _topgauge_managed marker but left the wrapper as statusLine." >&2
+      echo "uninstall.sh: stripped _creditgauge_managed marker but left the wrapper as statusLine." >&2
       echo "uninstall.sh: manually edit settings.json.statusLine.command to restore your previous statusline." >&2
       ;;
   esac
@@ -669,7 +669,7 @@ done
 
 # --- Apply: state/ selective wipes (v0.9.x partial-preserve) -----------------
 # Mirrors Action 3b above. We never rm -rf state/ wholesale — query_plugins
-# is sibling to state/ under topgauge/, and config.json is also sibling.
+# is sibling to state/ under creditgauge/, and config.json is also sibling.
 # Wholesale rm on state/ could bleed into the wrong directory if the path
 # ever changes; selective per-file rm is safe + idempotent.
 if [ -d "$STATE_DIR" ]; then
@@ -710,16 +710,16 @@ fi
 # query_plugins/). Default branch skips this entirely. The post-
 # uninstall hint (below) lists surviving paths when in default mode.
 if [ "$KEEP_STATE" != 1 ]; then
-  if [ -f "${PLUGINS_DIR}/topgauge/config.json" ]; then
-    if rm -f "${PLUGINS_DIR}/topgauge/config.json"; then
-      echo "uninstall.sh: removed ${PLUGINS_DIR}/topgauge/config.json"
+  if [ -f "${PLUGINS_DIR}/creditgauge/config.json" ]; then
+    if rm -f "${PLUGINS_DIR}/creditgauge/config.json"; then
+      echo "uninstall.sh: removed ${PLUGINS_DIR}/creditgauge/config.json"
     else
       echo "uninstall.sh: WARNING — failed to remove config.json" >&2
     fi
   fi
-  if [ -d "${PLUGINS_DIR}/topgauge/query_plugins" ]; then
-    if rm -rf "${PLUGINS_DIR}/topgauge/query_plugins"; then
-      echo "uninstall.sh: removed ${PLUGINS_DIR}/topgauge/query_plugins"
+  if [ -d "${PLUGINS_DIR}/creditgauge/query_plugins" ]; then
+    if rm -rf "${PLUGINS_DIR}/creditgauge/query_plugins"; then
+      echo "uninstall.sh: removed ${PLUGINS_DIR}/creditgauge/query_plugins"
     else
       echo "uninstall.sh: WARNING — failed to remove query_plugins" >&2
     fi
@@ -727,7 +727,7 @@ if [ "$KEEP_STATE" != 1 ]; then
   # rmdir the now-empty dir tree, depth-first so the parent's
   # emptiness precondition is met when we get to it. Best-effort:
   # `rmdir` fails with ENOTEMPTY if the user (or a __legacy__/
-  # migration leftover) put an untracked file under topgauge/.
+  # migration leftover) put an untracked file under creditgauge/.
   # That's the correct outcome — we don't want to rm -rf a dir
   # we don't fully understand. Suppress stderr because "Directory
   # not empty" is expected, not a warning.
@@ -736,9 +736,9 @@ if [ "$KEEP_STATE" != 1 ]; then
     rmdir "$proj_dir" 2>/dev/null || true
   done
   rmdir "${STATE_DIR}" 2>/dev/null || true
-  rmdir "${PLUGINS_DIR}/topgauge" 2>/dev/null || true
-  if [ ! -d "${PLUGINS_DIR}/topgauge" ]; then
-    echo "uninstall.sh: removed empty ${PLUGINS_DIR}/topgauge/ dir"
+  rmdir "${PLUGINS_DIR}/creditgauge" 2>/dev/null || true
+  if [ ! -d "${PLUGINS_DIR}/creditgauge" ]; then
+    echo "uninstall.sh: removed empty ${PLUGINS_DIR}/creditgauge/ dir"
   fi
 fi
 
@@ -870,27 +870,27 @@ strip_plugin_key_from_json() {
 }
 
 if [ -f "$INSTALLED_JSON" ]; then
-  if grep -q "topgauge@topgauge" "$INSTALLED_JSON" 2>/dev/null; then
+  if grep -q "creditgauge@creditgauge" "$INSTALLED_JSON" 2>/dev/null; then
     cp "$INSTALLED_JSON" "${INSTALLED_JSON}.bak.${TS}"
     echo "uninstall.sh: backup ${INSTALLED_JSON} -> ${INSTALLED_JSON}.bak.${TS}"
-    strip_plugin_row_from_json "$INSTALLED_JSON" "topgauge@topgauge" \
-      && echo "uninstall.sh: stripped topgauge@topgauge from ${INSTALLED_JSON}" \
-      || echo "uninstall.sh: failed to strip topgauge@topgauge from ${INSTALLED_JSON}" >&2
+    strip_plugin_row_from_json "$INSTALLED_JSON" "creditgauge@creditgauge" \
+      && echo "uninstall.sh: stripped creditgauge@creditgauge from ${INSTALLED_JSON}" \
+      || echo "uninstall.sh: failed to strip creditgauge@creditgauge from ${INSTALLED_JSON}" >&2
   fi
 fi
 
 if [ -f "$KNOWN_JSON" ]; then
-  if grep -q '"topgauge"' "$KNOWN_JSON" 2>/dev/null; then
+  if grep -q '"creditgauge"' "$KNOWN_JSON" 2>/dev/null; then
     cp "$KNOWN_JSON" "${KNOWN_JSON}.bak.${TS}"
     echo "uninstall.sh: backup ${KNOWN_JSON} -> ${KNOWN_JSON}.bak.${TS}"
-    strip_plugin_key_from_json "$KNOWN_JSON" "topgauge" \
-      && echo "uninstall.sh: stripped topgauge from ${KNOWN_JSON}" \
-      || echo "uninstall.sh: failed to strip topgauge from ${KNOWN_JSON}" >&2
+    strip_plugin_key_from_json "$KNOWN_JSON" "creditgauge" \
+      && echo "uninstall.sh: stripped creditgauge from ${KNOWN_JSON}" \
+      || echo "uninstall.sh: failed to strip creditgauge from ${KNOWN_JSON}" >&2
   fi
 fi
 
 echo ""
-echo "uninstall.sh: done. topgauge is fully removed."
+echo "uninstall.sh: done. creditgauge is fully removed."
 
 # --- Post-uninstall hint (v0.9.x partial-preserve by default) -----------------
 # v0.9.x: do NOT silently nuke user-owned artifacts in the default
@@ -905,11 +905,11 @@ echo "uninstall.sh: done. topgauge is fully removed."
 # `ls` pass; the marginal value isn't worth the per-file fork.)
 HINT_LINES=()
 if [ "$KEEP_STATE" = 1 ]; then
-  if [ -f "${PLUGINS_DIR}/topgauge/config.json" ]; then
-    HINT_LINES+=("  ${PLUGINS_DIR}/topgauge/config.json")
+  if [ -f "${PLUGINS_DIR}/creditgauge/config.json" ]; then
+    HINT_LINES+=("  ${PLUGINS_DIR}/creditgauge/config.json")
   fi
-  if [ -d "${PLUGINS_DIR}/topgauge/query_plugins" ]; then
-    HINT_LINES+=("  ${PLUGINS_DIR}/topgauge/query_plugins/")
+  if [ -d "${PLUGINS_DIR}/creditgauge/query_plugins" ]; then
+    HINT_LINES+=("  ${PLUGINS_DIR}/creditgauge/query_plugins/")
   fi
   for proj_dir in "${STATE_DIR}"/*/; do
     [ -d "$proj_dir" ] || continue
@@ -929,11 +929,11 @@ if [ "${#HINT_LINES[@]}" -gt 0 ]; then
     echo "$line"
   done
 elif [ "$KEEP_STATE" != 1 ]; then
-  # --completely: every user-owned artifact under topgauge/ is gone.
+  # --completely: every user-owned artifact under creditgauge/ is gone.
   # Note it explicitly so the user doesn't go looking for preserved
   # state that isn't there.
   echo ""
-  echo "uninstall.sh: --completely — every topgauge/ artifact was wiped (full uninstall)."
+  echo "uninstall.sh: --completely — every creditgauge/ artifact was wiped (full uninstall)."
 fi
 
 # --- Final: trim old backup files (keep only the most recent per file) -------
@@ -951,7 +951,7 @@ if [ -n "${SCRIPT_DIR:-}" ] && [ -f "${SCRIPT_DIR}/clean.sh" ]; then
 fi
 
 echo ""
-echo "  Re-install with: /plugin marketplace add cwf818/topgauge"
-echo "                   /plugin install topgauge@topgauge"
+echo "  Re-install with: /plugin marketplace add cwf818/creditgauge"
+echo "                   /plugin install creditgauge@creditgauge"
 echo "                   /reload-plugins"
-echo "                   /topgauge:install"
+echo "                   /creditgauge:install"

@@ -10,7 +10,7 @@
 //       Prints one of: "managed" | "foreign:<command>" | "none"
 //   write-managed <target> <wrapper> <upstream-cmd-file>
 //       Rewrites statusLine to our managed wrapper. If upstream-cmd-file is
-//       empty, leaves TOPGAUGE_UPSTREAM_CMD unset.
+//       empty, leaves CREDITGAUGE_UPSTREAM_CMD unset.
 //   restore-from-file <target> <upstream-cmd-file>
 //       Replaces our managed statusLine with the contents of upstream-cmd-file
 //       (the originally-preserved command).
@@ -82,16 +82,16 @@ function buildLatestCacheCommand(_upstreamCmdFileUnused) {
   //
   // Pattern, broken across lines for readability (NOT what's written):
   //   bash -c '
-  //     plugin_dir=$(ls -d …/topgauge/*/ | awk -F/ '\''{…}'\'' | sort … | tail -1 | cut -f2-)
+  //     plugin_dir=$(ls -d …/creditgauge/*/ | awk -F/ '\''{…}'\'' | sort … | tail -1 | cut -f2-)
   //     [ -d "$plugin_dir" ] || { echo … >&2; exit 1; }
-  //     export TOPGAUGE_UPSTREAM_CMD="<root>/plugins/topgauge/state/upstream-cmd.sh"
+  //     export CREDITGAUGE_UPSTREAM_CMD="<root>/plugins/creditgauge/state/upstream-cmd.sh"
   //     exec bash "${plugin_dir}scripts/wrapper.sh"
   //   '
   //
-  // TOPGAUGE_UPSTREAM_CMD points at a STABLE location
-  // (<root>/plugins/topgauge/state/upstream-cmd.sh) — NOT
+  // CREDITGAUGE_UPSTREAM_CMD points at a STABLE location
+  // (<root>/plugins/creditgauge/state/upstream-cmd.sh) — NOT
   // inside the version-specific cache dir. Two reasons:
-  //   1. config.json lives at <root>/plugins/topgauge/, so
+  //   1. config.json lives at <root>/plugins/creditgauge/, so
   //      the state dir is the obvious sibling and survives cache wipes
   //      (so an uninstall on a future version can still find the
   //      pre-managed command to restore).
@@ -108,9 +108,9 @@ function buildLatestCacheCommand(_upstreamCmdFileUnused) {
   void _upstreamCmdFileUnused;
   return [
     "bash -c '",
-    "plugin_dir=$(ls -d \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"/plugins/cache/topgauge/topgauge/*/ 2>/dev/null | awk -F/ '\"'\"'{ print $(NF-1) \"\\t\" $(0) }'\"'\"' | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1 | cut -f2-); ",
-    "[ -d \"$plugin_dir\" ] || { echo \"topgauge: no installed version found under cache\" >&2; exit 1; }; ",
-    "export TOPGAUGE_UPSTREAM_CMD=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/topgauge/state/upstream-cmd.sh\"; ",
+    "plugin_dir=$(ls -d \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}\"/plugins/cache/creditgauge/creditgauge/*/ 2>/dev/null | awk -F/ '\"'\"'{ print $(NF-1) \"\\t\" $(0) }'\"'\"' | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1 | cut -f2-); ",
+    "[ -d \"$plugin_dir\" ] || { echo \"creditgauge: no installed version found under cache\" >&2; exit 1; }; ",
+    "export CREDITGAUGE_UPSTREAM_CMD=\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/creditgauge/state/upstream-cmd.sh\"; ",
     "exec bash \"${plugin_dir}scripts/wrapper.sh\"",
     "'",
   ].join("");
@@ -375,7 +375,7 @@ function applyJournalEntry(data, entry) {
 //      closing single-quote install.sh emits, preceded by the double-quote
 //      that wraps the wrapper path inside the bash -c arg.
 //
-// Why this matters: _topgauge_managed === true is a marker WE write, but
+// Why this matters: _creditgauge_managed === true is a marker WE write, but
 // a foreign command can be in place when (a) another plugin overwrites
 // statusLine after ours, (b) the user hand-edits settings.json, or
 // (c) Claude Code re-derives statusLine. The marker survives all of
@@ -384,7 +384,7 @@ function applyJournalEntry(data, entry) {
 function isOurWrapperCommand(command) {
   if (typeof command !== "string" || command.length === 0) return false;
   const normalized = command.replaceAll("\\", "/");
-  const hasCachePath = normalized.includes("plugins/cache/topgauge/topgauge/");
+  const hasCachePath = normalized.includes("plugins/cache/creditgauge/creditgauge/");
   // Suffix: install.sh writes `bash -c '...exec bash "<path>"'`, so the
   // last three characters of the command are literally `sh"'`. The
   // trailing `'` distinguishes our wrapper from a different command
@@ -396,7 +396,7 @@ switch (op) {
   case "status": {
     const data = readJson(target);
     const sl = data.statusLine;
-    if (sl && sl._topgauge_managed === true && isOurWrapperCommand(sl.command)) {
+    if (sl && sl._creditgauge_managed === true && isOurWrapperCommand(sl.command)) {
       // Both the marker AND the wrapper command are ours → safe to treat as
       // managed (uninstall can restore from upstream-cmd.txt; re-install is
       // a no-op).
@@ -431,7 +431,7 @@ switch (op) {
     const next = { ...prev };
     next.type = "command";
     next.command = buildLatestCacheCommand(upstreamCmdFile || "");
-    next._topgauge_managed = true;
+    next._creditgauge_managed = true;
     data.statusLine = next;
     writeJson(target, data);
     break;
@@ -455,16 +455,16 @@ switch (op) {
       const next = { ...data.statusLine };
       next.type = "command";
       next.command = original;
-      delete next._topgauge_managed;
+      delete next._creditgauge_managed;
       data.statusLine = next;
     } else if (!data.statusLine) {
       data.statusLine = { type: "command", command: original };
     } else {
-      // Foreign command under a stale _topgauge_managed marker — leave
+      // Foreign command under a stale _creditgauge_managed marker — leave
       // it alone. The marker is no longer meaningful; the user owns the
       // current command.
       process.stderr.write(
-        "edit-settings.mjs: restore-from-file skipped — current statusLine.command is not the topgauge wrapper\n"
+        "edit-settings.mjs: restore-from-file skipped — current statusLine.command is not the creditgauge wrapper\n"
       );
     }
     writeJson(target, data);
@@ -478,7 +478,7 @@ switch (op) {
     //   - ≤ max    → no-op, no journal entry
     //
     // We intentionally don't touch any other field — including
-    // `_topgauge_managed`, which write-managed owns. If statusLine
+    // `_creditgauge_managed`, which write-managed owns. If statusLine
     // doesn't exist, this op errors out (install is calling us before
     // write-managed; ordering matters).
     //
@@ -596,7 +596,7 @@ switch (op) {
     // delete the last remaining key of a block after the block-level
     // entry ran, leaving `{}`. The classic example is
     // settings.json:statusLine (create, before=null, after=
-    // {type, command, _topgauge_managed}) immediately followed by
+    // {type, command, _creditgauge_managed}) immediately followed by
     // settings.json:statusLine.refreshInterval (create, before=null,
     // after=10). Pass 1 misses these because Pass 1's bothEmpty gate
     // requires before/after to be `{}`, but `before=null` for

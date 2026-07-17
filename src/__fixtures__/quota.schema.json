@@ -1,5 +1,5 @@
 {
-  "_about": "topgauge Quota 标准 schema —— 插件(用户脚本)的输出契约。v0.9.5 — 插件直接返回开放 dict `{ short, mid, long, <any> }`,host 通过 ensureQuota() 自动 seed 三个 reserved key(null)并规约每个 Interval。设计原则:1) 字段值必须是已规约的原值(number / string / null),不再二次解析;2) null = 未知 / 不存在,渲染器走 placeholder;3) 任意多个 interval 独立存在,可全 null,但只要任一字段非 null 即视为有数据;4) 时间字段接受 epoch ms number 或 ISO-8601 string(由 ensureInterval 处理),推荐插件直接规约成 number 以减少一次 Date.parse;5) 百分比用 [0,100] 的 number,quota 用 integer 自由单位。",
+  "_about": "creditgauge Quota 标准 schema —— 插件(用户脚本)的输出契约。v0.9.5 — 插件直接返回开放 dict `{ short, mid, long, <any> }`,host 通过 ensureQuota() 自动 seed 三个 reserved key(null)并规约每个 Interval。设计原则:1) 字段值必须是已规约的原值(number / string / null),不再二次解析;2) null = 未知 / 不存在,渲染器走 placeholder;3) 任意多个 interval 独立存在,可全 null,但只要任一字段非 null 即视为有数据;4) 时间字段接受 epoch ms number 或 ISO-8601 string(由 ensureInterval 处理),推荐插件直接规约成 number 以减少一次 Date.parse;5) 百分比用 [0,100] 的 number,quota 用 integer 自由单位。",
   "_rendererNotes": [
     "render.ts:Interval.windowId  决定 m_windowQuota / m_countdown 渲染时绑定的 m_sum* |window|<id> 维度(默认 5h / 7d / 30d)。",
     "render.ts:Interval.label     决定 quota(5h) 这类渲染括号里的人类可读标签。",

@@ -3,8 +3,8 @@
 # semantics in scripts/uninstall.sh.
 #
 # The branches under test:
-#   - DEFAULT (no flags): partial-preserve — topgauge/config.json,
-#     topgauge/query_plugins/, and per-project .jsonl files are
+#   - DEFAULT (no flags): partial-preserve — creditgauge/config.json,
+#     creditgauge/query_plugins/, and per-project .jsonl files are
 #     preserved; a post-uninstall hint lists their paths.
 #   - --completely: full uninstall — also wipes config.json,
 #     query_plugins/, and the .jsonl history. No hint printed.
@@ -22,7 +22,7 @@
 # Tests don't drive the full uninstall (statusLine restore + market-
 # place JSON strip) — they only exercise the partial-preserve wipe
 # paths. The fixture is a minimal settings.json WITHOUT
-# `_topgauge_managed: true`, so the statusLine branch is skipped
+# `_creditgauge_managed: true`, so the statusLine branch is skipped
 # (matches "leave it alone" branch in scripts/uninstall.sh).
 #
 # Portable: Linux, macOS, Git Bash on Windows.
@@ -112,12 +112,12 @@ assert_match_str() {
 
 # Build a fresh fixture mirroring the on-disk layout described in
 # CLAUDE.md. We deliberately do NOT mark settings.json as ours (no
-# _topgauge_managed marker) so uninstall.sh's statusLine-restore
+# _creditgauge_managed marker) so uninstall.sh's statusLine-restore
 # branch is skipped and we exercise ONLY the wipe logic.
 #
 # $ROOT/                                    (synthetic CLAUDE_ROOT)
-#   plugins/cache/topgauge/topgauge/0.9.0/  (cache stub for statusLine probe)
-#   plugins/topgauge/
+#   plugins/cache/creditgauge/creditgauge/0.9.0/  (cache stub for statusLine probe)
+#   plugins/creditgauge/
 #     config.json                            (user-owned; must NOT be wiped)
 #     query_plugins/minimax/index.js         (user override; must NOT be wiped)
 #     state/
@@ -125,7 +125,7 @@ assert_match_str() {
 #       cache.stat.json                      (must be wiped)
 #       upstream-cmd.sh                      (must be wiped)
 #       upstream-cmd.txt                     (must be wiped)
-#       d--workspace-topgauge/
+#       d--workspace-creditgauge/
 #         ca62...jsonl                       (sample; default wipes, --keep-state preserves)
 #         state.json                         (must be wiped)
 #   plugins/installed_plugins.json           (synthetic; uninstall strips the row)
@@ -133,13 +133,13 @@ assert_match_str() {
 #   settings.json                            (no marker; uninstall skips restore)
 build_fixture() {
   local root
-  root="$(mktemp -d -t topgauge-uninstall-test-XXXXXX)"
+  root="$(mktemp -d -t creditgauge-uninstall-test-XXXXXX)"
   local plugins="${root}/plugins"
-  local cache="${plugins}/cache/topgauge/topgauge/0.9.0"
-  local state="${plugins}/topgauge"
+  local cache="${plugins}/cache/creditgauge/creditgauge/0.9.0"
+  local state="${plugins}/creditgauge"
   mkdir -p "${cache}/dist" "${cache}/scripts" \
            "${state}/query_plugins/minimax" \
-           "${state}/state/d--workspace-topgauge"
+           "${state}/state/d--workspace-creditgauge"
 
   # Synthetic plugin source layout — uninstall.sh resolves paths off
   # CLAUDE_ROOT so layout matters, not file contents.
@@ -166,17 +166,17 @@ EOF
 
   # Per-project tickStatus — must be wiped.
   printf '{"prevTick":{}}\n' \
-    > "${state}/state/d--workspace-topgauge/state.json"
+    > "${state}/state/d--workspace-creditgauge/state.json"
 
   # Token-sample history — conditional.
   printf '{"at":1}\n{"at":2}\n' \
-    > "${state}/state/d--workspace-topgauge/ca625a72-test-session.jsonl"
+    > "${state}/state/d--workspace-creditgauge/ca625a72-test-session.jsonl"
 
   # Settings + loader JSONs (synthetic; no marker).
   printf '{}' > "${root}/settings.json"
-  printf '{"plugins":{"topgauge@topgauge":[]}}\n' \
+  printf '{"plugins":{"creditgauge@creditgauge":[]}}\n' \
     > "${plugins}/installed_plugins.json"
-  printf '{"topgauge":{"source":"github"}}\n' \
+  printf '{"creditgauge":{"source":"github"}}\n' \
     > "${plugins}/known_marketplaces.json"
 
   echo "$root"
@@ -208,36 +208,36 @@ ROOT=$(build_fixture)
 OUT=$(run_uninstall "$ROOT" 2>&1)
 
 # config.json + query_plugins/ preserved
-assert_file_exists  "[default] topgauge/config.json preserved" \
-  "${ROOT}/plugins/topgauge/config.json"
-assert_file_exists  "[default] topgauge/query_plugins/minimax/index.js preserved" \
-  "${ROOT}/plugins/topgauge/query_plugins/minimax/index.js"
-assert_dir_exists   "[default] topgauge/query_plugins/ dir preserved" \
-  "${ROOT}/plugins/topgauge/query_plugins"
+assert_file_exists  "[default] creditgauge/config.json preserved" \
+  "${ROOT}/plugins/creditgauge/config.json"
+assert_file_exists  "[default] creditgauge/query_plugins/minimax/index.js preserved" \
+  "${ROOT}/plugins/creditgauge/query_plugins/minimax/index.js"
+assert_dir_exists   "[default] creditgauge/query_plugins/ dir preserved" \
+  "${ROOT}/plugins/creditgauge/query_plugins"
 
 # Always-wiped cache noise gone
 assert_file_missing "[default] state/cache.json wiped" \
-  "${ROOT}/plugins/topgauge/state/cache.json"
+  "${ROOT}/plugins/creditgauge/state/cache.json"
 assert_file_missing "[default] state/cache.stat.json wiped" \
-  "${ROOT}/plugins/topgauge/state/cache.stat.json"
+  "${ROOT}/plugins/creditgauge/state/cache.stat.json"
 assert_file_missing "[default] state/upstream-cmd.sh wiped" \
-  "${ROOT}/plugins/topgauge/state/upstream-cmd.sh"
+  "${ROOT}/plugins/creditgauge/state/upstream-cmd.sh"
 assert_file_missing "[default] state/upstream-cmd.txt wiped" \
-  "${ROOT}/plugins/topgauge/state/upstream-cmd.txt"
+  "${ROOT}/plugins/creditgauge/state/upstream-cmd.txt"
 
 # Always-wiped per-project state.json gone
 assert_file_missing "[default] state/<hash>/state.json wiped" \
-  "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/state.json"
+  "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/state.json"
 
 # Default-preserved .jsonl survives (this is the differentiating
 # branch from v0.9.x pre-rename — the .jsonl is preserved by default,
 # and only --completely wipes it)
 assert_file_exists  "[default] state/<hash>/<sid>.jsonl preserved" \
-  "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/ca625a72-test-session.jsonl"
+  "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/ca625a72-test-session.jsonl"
 
 # Cache dir wiped (matched the always-wipe list)
-assert_file_missing "[default] cache/topgauge/* wiped" \
-  "${ROOT}/plugins/cache/topgauge"
+assert_file_missing "[default] cache/creditgauge/* wiped" \
+  "${ROOT}/plugins/cache/creditgauge"
 
 # Post-uninstall hint lists preserved paths (default mode)
 assert_match_str "[default] hint mentions config.json" \
@@ -258,42 +258,42 @@ ROOT=$(build_fixture)
 OUT=$(run_uninstall "$ROOT" --completely 2>&1)
 
 # config.json + query_plugins/ GONE
-assert_file_missing "[completely] topgauge/config.json wiped" \
-  "${ROOT}/plugins/topgauge/config.json"
-assert_file_missing "[completely] topgauge/query_plugins/ dir wiped" \
-  "${ROOT}/plugins/topgauge/query_plugins"
+assert_file_missing "[completely] creditgauge/config.json wiped" \
+  "${ROOT}/plugins/creditgauge/config.json"
+assert_file_missing "[completely] creditgauge/query_plugins/ dir wiped" \
+  "${ROOT}/plugins/creditgauge/query_plugins"
 
 # .jsonl wiped
 assert_file_missing "[completely] state/<hash>/<sid>.jsonl wiped" \
-  "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/ca625a72-test-session.jsonl"
+  "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/ca625a72-test-session.jsonl"
 
 # Always-wiped still gone
 assert_file_missing "[completely] state/cache.json wiped" \
-  "${ROOT}/plugins/topgauge/state/cache.json"
+  "${ROOT}/plugins/creditgauge/state/cache.json"
 assert_file_missing "[completely] state/<hash>/state.json wiped" \
-  "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/state.json"
+  "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/state.json"
 
 # Post-uninstall message confirms full uninstall
 assert_match_str "[completely] full-uninstall message" \
   "--completely" "$OUT"
 
-# --completely also rmdir's the now-empty topgauge/ parent dir
-assert_dir_missing "[completely] topgauge/ parent dir removed" \
-  "${ROOT}/plugins/topgauge"
+# --completely also rmdir's the now-empty creditgauge/ parent dir
+assert_dir_missing "[completely] creditgauge/ parent dir removed" \
+  "${ROOT}/plugins/creditgauge"
 
 rm -rf "$ROOT"
 
 echo ""
-echo "== v0.9.x --completely + untracked file: topgauge/ stays, exit 0 =="
+echo "== v0.9.x --completely + untracked file: creditgauge/ stays, exit 0 =="
 
 ROOT=$(build_fixture)
 # Plant an untracked file the script doesn't know about (simulates
 # a __legacy__/ migration leftover or a user-saved note). rmdir
 # must fail with ENOTEMPTY — we want the dir to stay, NOT to
 # silently nuke the untracked file.
-mkdir -p "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/__legacy__"
+mkdir -p "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/__legacy__"
 echo "user-saved-stuff" \
-  > "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/__legacy__/readme.txt"
+  > "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/__legacy__/readme.txt"
 
 # Capture exit code via a subshell wrapper around run_uninstall.
 OUT=$( (
@@ -307,16 +307,16 @@ OUT=${OUT%RC=*}
 
 # The untracked file MUST survive (rmdir failure is non-fatal).
 assert_file_exists "[untracked] __legacy__/readme.txt preserved" \
-  "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/__legacy__/readme.txt"
-# The topgauge/ parent dir MUST stay (it's non-empty thanks to
+  "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/__legacy__/readme.txt"
+# The creditgauge/ parent dir MUST stay (it's non-empty thanks to
 # the untracked file).
-assert_dir_exists "[untracked] topgauge/ parent dir stays (rmdir ENOTEMPTY)" \
-  "${ROOT}/plugins/topgauge"
+assert_dir_exists "[untracked] creditgauge/ parent dir stays (rmdir ENOTEMPTY)" \
+  "${ROOT}/plugins/creditgauge"
 # The script MUST still exit 0.
 assert_eq "[untracked] script still exits 0" "0" "$RC"
 # The full-uninstall message MUST still be printed.
 assert_match_str "[untracked] full-uninstall message still printed" \
-  "every topgauge/ artifact was wiped" "$OUT"
+  "every creditgauge/ artifact was wiped" "$OUT"
 
 rm -rf "$ROOT"
 
@@ -329,11 +329,11 @@ OUT=$(run_uninstall "$ROOT" --dry-run 2>&1)
 # Default plan wipes the always-list (cache noise + state.json) but
 # KEEPS .jsonl (so it must NOT appear in the plan).
 assert_match_str "[dry-run] default wipes state.json" \
-  "d--workspace-topgauge/state.json" "$OUT"
+  "d--workspace-creditgauge/state.json" "$OUT"
 assert_match_str "[dry-run] default wipes cache.json" \
-  "topgauge/state/cache.json" "$OUT"
+  "creditgauge/state/cache.json" "$OUT"
 assert_match_str "[dry-run] default wipes upstream-cmd.txt" \
-  "topgauge/state/upstream-cmd.txt" "$OUT"
+  "creditgauge/state/upstream-cmd.txt" "$OUT"
 
 # Inverse assertion: .jsonl wipe must NOT appear in the default plan.
 if echo "$OUT" | grep -qF -- "ca625a72-test-session.jsonl"; then
@@ -344,14 +344,14 @@ else
   PASS=$((PASS + 1))
 fi
 # Same for config.json / query_plugins in the default plan.
-if echo "$OUT" | grep -qF -- "topgauge/config.json"; then
+if echo "$OUT" | grep -qF -- "creditgauge/config.json"; then
   echo "  FAIL [dry-run default] plan contains config.json wipe (should be preserved)"
   FAIL=$((FAIL + 1))
 else
   echo "  ok  [dry-run default] plan omits config.json wipe"
   PASS=$((PASS + 1))
 fi
-if echo "$OUT" | grep -qF -- "topgauge/query_plugins"; then
+if echo "$OUT" | grep -qF -- "creditgauge/query_plugins"; then
   echo "  FAIL [dry-run default] plan contains query_plugins wipe (should be preserved)"
   FAIL=$((FAIL + 1))
 else
@@ -361,22 +361,22 @@ fi
 
 # Verify dry-run did NOT actually delete anything
 assert_file_exists "[dry-run] cache.json still on disk" \
-  "${ROOT}/plugins/topgauge/state/cache.json"
+  "${ROOT}/plugins/creditgauge/state/cache.json"
 assert_file_exists "[dry-run] config.json still on disk" \
-  "${ROOT}/plugins/topgauge/config.json"
+  "${ROOT}/plugins/creditgauge/config.json"
 
 # --completely plan SHOULD include .jsonl + config.json + query_plugins.
 OUT_C=$(run_uninstall "$ROOT" --dry-run --completely 2>&1)
 assert_match_str "[dry-run + --completely] plan wipes .jsonl" \
   "ca625a72-test-session.jsonl" "$OUT_C"
 assert_match_str "[dry-run + --completely] plan wipes config.json" \
-  "topgauge/config.json" "$OUT_C"
+  "creditgauge/config.json" "$OUT_C"
 assert_match_str "[dry-run + --completely] plan wipes query_plugins" \
-  "topgauge/query_plugins" "$OUT_C"
-assert_match_str "[dry-run + --completely] plan rmdirs topgauge/ (if empty)" \
+  "creditgauge/query_plugins" "$OUT_C"
+assert_match_str "[dry-run + --completely] plan rmdirs creditgauge/ (if empty)" \
   "rmdir" "$OUT_C"
 assert_match_str "[dry-run + --completely] plan rmdirs the right path" \
-  "topgauge (if empty after wipes)" "$OUT_C"
+  "creditgauge (if empty after wipes)" "$OUT_C"
 
 # Dry-run + --dry-run message
 assert_match_str "[dry-run] explicit no-change message" \
@@ -423,9 +423,9 @@ assert_match_str "[unknown-flag] usage hint" \
 # Crucially: nothing was wiped, so config.json + .jsonl still exist
 # (the script bailed before the wipe phase).
 assert_file_exists "[unknown-flag] config.json untouched" \
-  "${ROOT}/plugins/topgauge/config.json"
+  "${ROOT}/plugins/creditgauge/config.json"
 assert_file_exists "[unknown-flag] .jsonl untouched" \
-  "${ROOT}/plugins/topgauge/state/d--workspace-topgauge/ca625a72-test-session.jsonl"
+  "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/ca625a72-test-session.jsonl"
 
 rm -rf "$ROOT"
 
@@ -453,7 +453,7 @@ build_journal_fixture() {
   # `/tmp/...` which Node sees as `D:\tmp\...` — wrong path. Use
   # `mktemp -d` (Linux/Git Bash) for uniqueness, then forward through
   # Node to canonicalize.
-  root="$(mktemp -d -t topgauge-ju-XXXXXX)"
+  root="$(mktemp -d -t creditgauge-ju-XXXXXX)"
   # Normalize for Node: strip /tmp -> use os.tmpdir() instead.
   root="$(node -e '
     const os = require("os");
@@ -465,8 +465,8 @@ build_journal_fixture() {
     process.stdout.write(out);
   ' "$root")"
   local plugins="${root}/plugins"
-  local cache="${plugins}/cache/topgauge/topgauge/0.9.6"
-  local state="${plugins}/topgauge"
+  local cache="${plugins}/cache/creditgauge/creditgauge/0.9.6"
+  local state="${plugins}/creditgauge"
   mkdir -p "${cache}/scripts/lib" "${cache}/dist" \
            "${state}/state" "${state}/query_plugins/minimax"
 
@@ -507,18 +507,18 @@ write_managed_settings() {
     const path = process.env["TOPG_TEST_PATH"];
     const refresh = process.env["TOPG_TEST_REFRESH"];
     const command = process.env["TOPG_TEST_COMMAND"];
-    const d = { statusLine: { type: "command", command, _topgauge_managed: true } };
+    const d = { statusLine: { type: "command", command, _creditgauge_managed: true } };
     if (refresh !== "absent") d.statusLine.refreshInterval = parseInt(refresh, 10);
     fs.writeFileSync(path, JSON.stringify(d, null, 2) + "\n");
   '
 }
 
-WRAPPER_CMD='bash -c '"'"'plugin_dir=/home/test/.claude/plugins/cache/topgauge/topgauge/0.9.6; exec bash "${plugin_dir}scripts/wrapper.sh"'"'"''
+WRAPPER_CMD='bash -c '"'"'plugin_dir=/home/test/.claude/plugins/cache/creditgauge/creditgauge/0.9.6; exec bash "${plugin_dir}scripts/wrapper.sh"'"'"''
 
 echo "-- fresh uninstall: journal-driven, statusLine deleted entirely --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 write_managed_settings "$SETTINGS" absent "$WRAPPER_CMD"
 # Install-journal with a single create entry for statusLine.
 TOPG_TEST_SETTINGS="$SETTINGS" \
@@ -572,7 +572,7 @@ echo "-- install-shape replay: statusLine block entry without refreshInterval + 
 # level then deletes refreshInterval; Pass 2 sees {} and removes it.
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 write_managed_settings "$SETTINGS" 10 "$WRAPPER_CMD"
 TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
@@ -585,7 +585,7 @@ node -e '
   // Mirror install.sh exactly: SL_AFTER snapshot DOES NOT include
   // refreshInterval (line 405 capture-then-ensure-refresh-interval
   // ordering at install time). On-disk statusLine retains it.
-  const slAfter = { type: "command", command: wrapper, _topgauge_managed: true };
+  const slAfter = { type: "command", command: wrapper, _creditgauge_managed: true };
   const j = {
     version: 1, scope: "user", pluginVersion: "0.9.7",
     entries: [
@@ -621,7 +621,7 @@ echo "-- post-apply sweep catches user-empty: user hand-emptied statusLine post-
 # before=null) and removes it.
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 write_managed_settings "$SETTINGS" absent "$WRAPPER_CMD"
 TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
@@ -633,7 +633,7 @@ node -e '
   const wrapper  = process.env.TOPG_TEST_COMMAND;
   // Force on-disk statusLine to {} (post-install hand-edit).
   fs.writeFileSync(settings, JSON.stringify({ statusLine: {} }, null, 2) + "\n");
-  const slAfter = { type: "command", command: wrapper, _topgauge_managed: true, refreshInterval: 10 };
+  const slAfter = { type: "command", command: wrapper, _creditgauge_managed: true, refreshInterval: 10 };
   const j = {
     version: 1, scope: "user", pluginVersion: "0.9.7",
     entries: [
@@ -663,7 +663,7 @@ echo "-- mutate + pre-install empty: applyJournalEntry's mutate fast-path delete
 # sweep — the sweep must not interfere with the existing delete.
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 # Pre-install: statusLine is `{}`. Post-install: still `{}`
 # (settings.json was never modified by install in this synthetic
 # fixture, but the journal reflects the install-time transition).
@@ -676,7 +676,7 @@ node -e '
   const journal  = process.env.TOPG_TEST_JOURNAL;
   const wrapper  = process.env.TOPG_TEST_COMMAND;
   fs.writeFileSync(settings, JSON.stringify({ statusLine: {} }, null, 2) + "\n");
-  const after = { type: "command", command: wrapper, _topgauge_managed: true, refreshInterval: 10 };
+  const after = { type: "command", command: wrapper, _creditgauge_managed: true, refreshInterval: 10 };
   const j = {
     version: 1, scope: "user", pluginVersion: "0.9.7",
     entries: [
@@ -705,7 +705,7 @@ echo "-- per-field revert: statusLine create entry -> user only touched refreshI
 # skipped, preserved at 20).
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 write_managed_settings "$SETTINGS" 20 "$WRAPPER_CMD"
 TOPG_TEST_JOURNAL="$JOURNAL" \
 TOPG_TEST_COMMAND="$WRAPPER_CMD" \
@@ -717,7 +717,7 @@ node -e '
   const after = {
     type: "command",
     command: wrapper,
-    _topgauge_managed: true,
+    _creditgauge_managed: true,
     refreshInterval: 10
   };
   const j = {
@@ -750,7 +750,7 @@ rm -rf "$ROOT"
 echo "-- clamp-down revert: user kept 10 -> restored to 30 --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 write_managed_settings "$SETTINGS" 10 "$WRAPPER_CMD"
 TOPG_TEST_JOURNAL="$JOURNAL" \
 TOPG_TEST_COMMAND="$WRAPPER_CMD" \
@@ -761,7 +761,7 @@ node -e '
     entries: [
       { id: "settings.json:statusLine", ts: "2026-07-15T07:00:00Z",
         action: "create", before: null,
-        after: { type: "command", command: process.env["TOPG_TEST_COMMAND"], _topgauge_managed: true },
+        after: { type: "command", command: process.env["TOPG_TEST_COMMAND"], _creditgauge_managed: true },
         applied: false },
       { id: "settings.json:statusLine.refreshInterval", ts: "2026-07-15T07:00:00Z",
         action: "clamp-down", before: 30, after: 10, applied: false }
@@ -780,7 +780,7 @@ rm -rf "$ROOT"
 echo "-- clamp-down revert: user changed to 50 -> preserved --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 write_managed_settings "$SETTINGS" 50 "$WRAPPER_CMD"
 TOPG_TEST_JOURNAL="$JOURNAL" \
 TOPG_TEST_COMMAND="$WRAPPER_CMD" \
@@ -791,7 +791,7 @@ node -e '
     entries: [
       { id: "settings.json:statusLine", ts: "2026-07-15T07:00:00Z",
         action: "create", before: null,
-        after: { type: "command", command: process.env["TOPG_TEST_COMMAND"], _topgauge_managed: true },
+        after: { type: "command", command: process.env["TOPG_TEST_COMMAND"], _creditgauge_managed: true },
         applied: false },
       { id: "settings.json:statusLine.refreshInterval", ts: "2026-07-15T07:00:00Z",
         action: "clamp-down", before: 30, after: 10, applied: false }
@@ -815,10 +815,10 @@ ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
 write_managed_settings "$SETTINGS" absent "$WRAPPER_CMD"
 printf '#!/usr/bin/env bash\necho ccstatusline\n' \
-  > "${ROOT}/plugins/topgauge/state/upstream-cmd.sh"
+  > "${ROOT}/plugins/creditgauge/state/upstream-cmd.sh"
 printf 'echo ccstatusline\n' \
-  > "${ROOT}/plugins/topgauge/state/upstream-cmd.txt"
-chmod +x "${ROOT}/plugins/topgauge/state/upstream-cmd.sh"
+  > "${ROOT}/plugins/creditgauge/state/upstream-cmd.txt"
+chmod +x "${ROOT}/plugins/creditgauge/state/upstream-cmd.sh"
 OUT=$(run_uninstall "$ROOT" 2>&1)
 assert_match_str "[legacy] stdout mentions legacy fallback" \
   "restored statusLine from" "$OUT"
@@ -833,14 +833,14 @@ rm -rf "$ROOT"
 # -- top-level block per-field revert (v0.9.x+) ---------------------------
 # When install records action=mutate for statusLine (replace-mode
 # install: foreign→managed), uninstall must restore the foreign command
-# and remove install-only fields (_topgauge_managed). The previous
+# and remove install-only fields (_creditgauge_managed). The previous
 # implementation left the marker in place and the foreign command
 # untouched when refreshInterval also existed.
 
 echo "-- statusLine mutate: replace mode + user untouched → restore foreign command + drop marker --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 # Settings: managed wrapper + foreign-style marker (simulating the
 # post-install state, where refreshInterval was clamped 30→10).
 write_managed_settings "$SETTINGS" 30 "$WRAPPER_CMD"
@@ -870,9 +870,9 @@ CMD=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
 assert_eq "[mutate-block-restore] command restored to foreign" "echo foreign" "$CMD"
 MARKER=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
-  process.stdout.write(d.statusLine && d.statusLine._topgauge_managed === true ? "yes" : "no");
+  process.stdout.write(d.statusLine && d.statusLine._creditgauge_managed === true ? "yes" : "no");
 ')
-assert_eq "[mutate-block-restore] _topgauge_managed marker removed" "no" "$MARKER"
+assert_eq "[mutate-block-restore] _creditgauge_managed marker removed" "no" "$MARKER"
 RI=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
   process.stdout.write(String(d.statusLine ? d.statusLine.refreshInterval : "missing"));
@@ -883,7 +883,7 @@ rm -rf "$ROOT"
 echo "-- statusLine mutate: replace mode + user changed command → only marker removed --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 # Install snapshot (post-install, pre-user-touch): wrapper command +
 # marker + refreshInterval. User then customises the command. The
 # journal's `after` snapshot reflects the install-time post-install
@@ -908,7 +908,7 @@ node -e '
   const after = {
     type: "command",
     command: process.env.TOPG_TEST_AFTER,
-    _topgauge_managed: true,
+    _creditgauge_managed: true,
     refreshInterval: 10
   };
   const j = {
@@ -928,29 +928,29 @@ CMD=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
 assert_eq "[mutate-partial] user-custom command preserved" "echo mycustom" "$CMD"
 MARKER=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
-  process.stdout.write(d.statusLine && d.statusLine._topgauge_managed === true ? "yes" : "no");
+  process.stdout.write(d.statusLine && d.statusLine._creditgauge_managed === true ? "yes" : "no");
 ')
-assert_eq "[mutate-partial] _topgauge_managed marker removed" "no" "$MARKER"
+assert_eq "[mutate-partial] _creditgauge_managed marker removed" "no" "$MARKER"
 rm -rf "$ROOT"
 
 echo "-- enabledPlugins create (legacy before:null) → SKIPPED, settings untouched --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
-# Pre-uninstall state: enabledPlugins.topgauge@topgauge=true (added by
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
+# Pre-uninstall state: enabledPlugins.creditgauge@creditgauge=true (added by
 # Claude Code's plugin loader during /plugin install). Legacy journal
 # format: action=create, before=null, after=<full post-install dict>.
 # applyJournalEntry now REJECTS legacy entries outright (they would
 # silently drop pre-existing siblings). The entry is marked applied but
 # settings.json is left untouched — the user manually removes any
-# residual topgauge keys.
+# residual creditgauge keys.
 TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
 node -e '
   const fs = require("fs");
   const settings = process.env.TOPG_TEST_SETTINGS;
   const journal = process.env.TOPG_TEST_JOURNAL;
-  const d = { enabledPlugins: { "topgauge@topgauge": true } };
+  const d = { enabledPlugins: { "creditgauge@creditgauge": true } };
   fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
   const j = {
     version: 1, scope: "user", pluginVersion: "0.9.6",
@@ -971,15 +971,15 @@ HAS_EP=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
 assert_eq "[ep-legacy] enabledPlugins block survives (legacy entries don't touch settings)" "yes" "$HAS_EP"
 EP_VAL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
-  process.stdout.write(d.enabledPlugins && d.enabledPlugins["topgauge@topgauge"] === true ? "yes" : "no");
+  process.stdout.write(d.enabledPlugins && d.enabledPlugins["creditgauge@creditgauge"] === true ? "yes" : "no");
 ')
-assert_eq "[ep-legacy] topgauge@topgauge stays untouched" "yes" "$EP_VAL"
+assert_eq "[ep-legacy] creditgauge@creditgauge stays untouched" "yes" "$EP_VAL"
 rm -rf "$ROOT"
 
 echo "-- enabledPlugins create (legacy) with sibling → sibling + key both untouched --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 # Mixed scenario: legacy entry on disk + a sibling in settings.json.
 # Critical regression coverage: under the old code, this would drop
 # the sibling silently. Under the new code, settings.json is untouched.
@@ -989,14 +989,14 @@ node -e '
   const fs = require("fs");
   const d = { enabledPlugins: {
     "claude-hud@claude-hud": true,
-    "topgauge@topgauge": false
+    "creditgauge@creditgauge": false
   } };
   fs.writeFileSync(process.env.TOPG_TEST_SETTINGS, JSON.stringify(d, null, 2) + "\n");
   const j = {
     version: 1, scope: "user", pluginVersion: "0.9.6",
     entries: [{
       id: "settings.json:enabledPlugins", ts: "2026-07-15T07:00:00Z",
-      action: "create", before: null, after: { "topgauge@topgauge": true },
+      action: "create", before: null, after: { "creditgauge@creditgauge": true },
       applied: false
     }]
   };
@@ -1008,18 +1008,18 @@ EP=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   process.stdout.write(JSON.stringify(d.enabledPlugins));
 ')
 assert_eq "[ep-legacy-with-sibling] enabledPlugins fully preserved (no silent drops)" \
-  '{"claude-hud@claude-hud":true,"topgauge@topgauge":false}' "$EP"
+  '{"claude-hud@claude-hud":true,"creditgauge@creditgauge":false}' "$EP"
 rm -rf "$ROOT"
 
 echo "-- extraKnownMarketplaces create (legacy before:null) → SKIPPED, settings untouched --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
 node -e '
   const fs = require("fs");
-  const d = { extraKnownMarketplaces: { "topgauge": { "source": "github", "repo": "cwf818/topgauge" } } };
+  const d = { extraKnownMarketplaces: { "creditgauge": { "source": "github", "repo": "cwf818/creditgauge" } } };
   fs.writeFileSync(process.env.TOPG_TEST_SETTINGS, JSON.stringify(d, null, 2) + "\n");
   const j = {
     version: 1, scope: "user", pluginVersion: "0.9.6",
@@ -1041,10 +1041,10 @@ assert_eq "[ekm-legacy] extraKnownMarketplaces block survives" "yes" "$HAS_EKM"
 LOC=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
   process.stdout.write(
-    d.extraKnownMarketplaces && d.extraKnownMarketplaces.topgauge ? "present" : "missing"
+    d.extraKnownMarketplaces && d.extraKnownMarketplaces.creditgauge ? "present" : "missing"
   );
 ')
-assert_eq "[ekm-legacy] topgauge marketplace stays in place" "present" "$LOC"
+assert_eq "[ekm-legacy] creditgauge marketplace stays in place" "present" "$LOC"
 rm -rf "$ROOT"
 
 # ============================================================================
@@ -1059,30 +1059,30 @@ rm -rf "$ROOT"
 echo "-- per-key-diff: EP sibling preserved on uninstall --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
 node -e '
   const fs = require("fs");
   const settings = process.env.TOPG_TEST_SETTINGS;
   const journal = process.env.TOPG_TEST_JOURNAL;
-  // Live settings: sibling + topgauge@topgauge.
+  // Live settings: sibling + creditgauge@creditgauge.
   const d = {
     enabledPlugins: {
       "claude-hud@claude-hud": true,
-      "topgauge@topgauge": true
+      "creditgauge@creditgauge": true
     }
   };
   fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
   // New-format journal: per-key diff. before:{} (install removed nothing);
-  // after only has the keys topgauge owns.
+  // after only has the keys creditgauge owns.
   const j = {
     version: 1, scope: "user", pluginVersion: "0.10.0",
     entries: [{
       id: "settings.json:enabledPlugins", ts: "2026-07-15T07:00:00Z",
       action: "create",
       before: {},
-      after: { "topgauge@topgauge": true },
+      after: { "creditgauge@creditgauge": true },
       applied: false
     }]
   };
@@ -1096,9 +1096,9 @@ HAS_HUD=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
 assert_eq "[ep-diff-sibling-preserved] claude-hud@claude-hud survives" "yes" "$HAS_HUD"
 HAS_TOPGAUGE=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
-  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, "topgauge@topgauge") ? "yes" : "no");
+  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, "creditgauge@creditgauge") ? "yes" : "no");
 ')
-assert_eq "[ep-diff-sibling-preserved] topgauge@topgauge removed" "no" "$HAS_TOPGAUGE"
+assert_eq "[ep-diff-sibling-preserved] creditgauge@creditgauge removed" "no" "$HAS_TOPGAUGE"
 HAS_BLOCK=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
   process.stdout.write("enabledPlugins" in d ? "yes" : "no");
@@ -1109,7 +1109,7 @@ rm -rf "$ROOT"
 echo "-- per-key-diff: EKM sibling preserved on uninstall --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
 node -e '
@@ -1119,7 +1119,7 @@ node -e '
   const d = {
     extraKnownMarketplaces: {
       "claude-hud": { source: { source: "github", repo: "jarrodwatts/claude-hud" } },
-      "topgauge":  { source: { source: "github", repo: "cwf818/topgauge" } }
+      "creditgauge":  { source: { source: "github", repo: "cwf818/creditgauge" } }
     }
   };
   fs.writeFileSync(settings, JSON.stringify(d, null, 2) + "\n");
@@ -1129,7 +1129,7 @@ node -e '
       id: "settings.json:extraKnownMarketplaces", ts: "2026-07-15T07:00:00Z",
       action: "create",
       before: {},
-      after: { "topgauge": { source: { source: "github", repo: "cwf818/topgauge" } } },
+      after: { "creditgauge": { source: { source: "github", repo: "cwf818/creditgauge" } } },
       applied: false
     }]
   };
@@ -1141,24 +1141,24 @@ HAS_HUD_EKM=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   process.stdout.write(d.extraKnownMarketplaces && d.extraKnownMarketplaces["claude-hud"] ? "yes" : "no");
 ')
 assert_eq "[ekm-diff-sibling-preserved] claude-hud marketplace survives" "yes" "$HAS_HUD_EKM"
-HAS_TOPGAUGE_EKM=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+HAS_CREDITGAUGE_EKM=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
-  process.stdout.write(d.extraKnownMarketplaces && Object.prototype.hasOwnProperty.call(d.extraKnownMarketplaces, "topgauge") ? "yes" : "no");
+  process.stdout.write(d.extraKnownMarketplaces && Object.prototype.hasOwnProperty.call(d.extraKnownMarketplaces, "creditgauge") ? "yes" : "no");
 ')
-assert_eq "[ekm-diff-sibling-preserved] topgauge marketplace removed" "no" "$HAS_TOPGAUGE_EKM"
+assert_eq "[ekm-diff-sibling-preserved] creditgauge marketplace removed" "no" "$HAS_CREDITGAUGE_EKM"
 rm -rf "$ROOT"
 
 echo "-- per-key-diff: user added a sibling plugin post-install → preserved --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
 node -e '
   const fs = require("fs");
   const d = {
     enabledPlugins: {
-      "topgauge@topgauge": true,
+      "creditgauge@creditgauge": true,
       "user-new-plugin@user-new-plugin": true
     }
   };
@@ -1169,7 +1169,7 @@ node -e '
       id: "settings.json:enabledPlugins", ts: "2026-07-15T07:00:00Z",
       action: "create",
       before: {},
-      after: { "topgauge@topgauge": true },
+      after: { "creditgauge@creditgauge": true },
       applied: false
     }]
   };
@@ -1181,23 +1181,23 @@ HAS_USER_NEW=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   process.stdout.write(d.enabledPlugins && d.enabledPlugins["user-new-plugin@user-new-plugin"] === true ? "yes" : "no");
 ')
 assert_eq "[ep-diff-user-added-sibling] user-added sibling preserved" "yes" "$HAS_USER_NEW"
-HAS_TOPGAUGE_ADDED=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+HAS_CREDITGAUGE_ADDED=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
-  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, "topgauge@topgauge") ? "yes" : "no");
+  process.stdout.write(d.enabledPlugins && Object.prototype.hasOwnProperty.call(d.enabledPlugins, "creditgauge@creditgauge") ? "yes" : "no");
 ')
-assert_eq "[ep-diff-user-added-sibling] topgauge@topgauge removed" "no" "$HAS_TOPGAUGE_ADDED"
+assert_eq "[ep-diff-user-added-sibling] creditgauge@creditgauge removed" "no" "$HAS_CREDITGAUGE_ADDED"
 rm -rf "$ROOT"
 
-echo "-- per-key-diff: user disabled topgauge post-install → preserved --"
+echo "-- per-key-diff: user disabled creditgauge post-install → preserved --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 TOPG_TEST_SETTINGS="$SETTINGS" \
 TOPG_TEST_JOURNAL="$JOURNAL" \
 node -e '
   const fs = require("fs");
   fs.writeFileSync(process.env.TOPG_TEST_SETTINGS, JSON.stringify({
-    enabledPlugins: { "topgauge@topgauge": false }
+    enabledPlugins: { "creditgauge@creditgauge": false }
   }, null, 2) + "\n");
   const j = {
     version: 1, scope: "user", pluginVersion: "0.10.0",
@@ -1205,18 +1205,18 @@ node -e '
       id: "settings.json:enabledPlugins", ts: "2026-07-15T07:00:00Z",
       action: "create",
       before: {},
-      after: { "topgauge@topgauge": true },
+      after: { "creditgauge@creditgauge": true },
       applied: false
     }]
   };
   fs.writeFileSync(process.env.TOPG_TEST_JOURNAL, JSON.stringify(j, null, 2) + "\n");
 '
 run_uninstall "$ROOT" >/dev/null 2>&1
-TOPGAUGE_VAL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
+CREDITGAUGE_VAL=$(TOPG_TEST_SETTINGS="$SETTINGS" node -e '
   const d = JSON.parse(require("fs").readFileSync(process.env.TOPG_TEST_SETTINGS, "utf8"));
-  process.stdout.write(JSON.stringify(d.enabledPlugins && d.enabledPlugins["topgauge@topgauge"]));
+  process.stdout.write(JSON.stringify(d.enabledPlugins && d.enabledPlugins["creditgauge@creditgauge"]));
 ')
-assert_eq "[ep-diff-user-touched] topgauge@topgauge stays false" "false" "$TOPGAUGE_VAL"
+assert_eq "[ep-diff-user-touched] creditgauge@creditgauge stays false" "false" "$CREDITGAUGE_VAL"
 rm -rf "$ROOT"
 
 # ============================================================================
@@ -1234,7 +1234,7 @@ rm -rf "$ROOT"
 echo "-- installed_plugins.json with bare backslashes → auto-repair + strip --"
 ROOT=$(build_journal_fixture)
 SETTINGS="${ROOT}/settings.json"
-JOURNAL="${ROOT}/plugins/topgauge/state/install-journal.json"
+JOURNAL="${ROOT}/plugins/creditgauge/state/install-journal.json"
 INSTALLED="${ROOT}/plugins/installed_plugins.json"
 mkdir -p "${ROOT}/plugins"
 # No managed statusLine → uninstall hits the legacy restore-from-bak
@@ -1245,8 +1245,8 @@ cat > "${SETTINGS}" <<EOF
 {
   "statusLine": {
     "type": "command",
-    "command": "echo my-pre-topgauge",
-    "_topgauge_managed": true
+    "command": "echo my-pre-creditgauge",
+    "_creditgauge_managed": true
   }
 }
 EOF
@@ -1268,17 +1268,17 @@ node -e '
   };
   fs.writeFileSync(process.env.TOPG_TEST_JOURNAL, JSON.stringify(j, null, 2) + "\n");
 '
-# Malformed installed_plugins.json — bare backslashes in the topgauge
+# Malformed installed_plugins.json — bare backslashes in the creditgauge
 # row's installPath (the exact shape Claude Code's loader has produced
 # in some upgrade chains).
 cat > "${INSTALLED}" <<EOF
 {
   "version": 2,
   "plugins": {
-    "topgauge@topgauge": [
+    "creditgauge@creditgauge": [
       {
         "scope": "user",
-        "installPath": "C:\Users\test\.claude\plugins\cache\topgauge\topgauge\0.9.7",
+        "installPath": "C:\Users\test\.claude\plugins\cache\creditgauge\creditgauge\0.9.7",
         "version": "0.9.7"
       }
     ]
@@ -1299,9 +1299,9 @@ assert_match_str "[json-repair] stderr notes repair" \
 # After repair + strip: row gone.
 ROW_COUNT=$(node -e '
   const txt = require("fs").readFileSync(process.argv[1], "utf8");
-  process.stdout.write(String((txt.match(/"topgauge@topgauge"/g) || []).length));
+  process.stdout.write(String((txt.match(/"creditgauge@creditgauge"/g) || []).length));
 ' "$INSTALLED")
-assert_eq "[json-repair] topgauge row stripped after auto-repair" "0" "$ROW_COUNT"
+assert_eq "[json-repair] creditgauge row stripped after auto-repair" "0" "$ROW_COUNT"
 # Repaired file is valid JSON.
 PARSE_OK=$(node -e '
   try { JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write("yes"); }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# install.sh — install the topgauge (ToPGauge) wrapper into Claude
+# install.sh — install the creditgauge (CreditGauge) wrapper into Claude
 # Code's settings.json. For uninstalling use the dedicated
-# /topgauge:uninstall slash command (which calls scripts/uninstall.sh
+# /creditgauge:uninstall slash command (which calls scripts/uninstall.sh
 # directly — the source of truth).
 #
 # Usage:
@@ -14,7 +14,7 @@
 #   - Idempotent: re-running on an already-managed statusLine is a no-op.
 #   - If a non-managed statusLine is found, the current settings.json is backed
 #     up to settings.json.bak.<ISO-timestamp>, and the original statusLine
-#     command is preserved in <claude-root>/plugins/topgauge/state/upstream-cmd.sh
+#     command is preserved in <claude-root>/plugins/creditgauge/state/upstream-cmd.sh
 #     (sibling of config.json) so the wrapper can invoke it as the upstream.
 #     This location is STABLE across /plugin install rolls — the per-version
 #     cache dir can come and go, but the state dir is permanent.
@@ -42,10 +42,10 @@ for arg in "$@"; do
     *)
       echo "install.sh: unknown argument: $arg" >&2
       # v0.9.x — `--uninstall` was removed; point at the dedicated
-      # /topgauge:uninstall slash command instead of letting the
+      # /creditgauge:uninstall slash command instead of letting the
       # generic "unknown argument" line cover it.
       if [ "${arg:-}" = "--uninstall" ]; then
-        echo "install.sh: --uninstall was removed in v0.9.x; use the /topgauge:uninstall slash command (or scripts/uninstall.sh directly)." >&2
+        echo "install.sh: --uninstall was removed in v0.9.x; use the /creditgauge:uninstall slash command (or scripts/uninstall.sh directly)." >&2
       fi
       exit 2
       ;;
@@ -72,17 +72,17 @@ if [ ! -f "$HELPER" ]; then
 fi
 
 CLAUDE_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-PLUGIN_BASE="${CLAUDE_ROOT}/plugins/cache/topgauge/topgauge"
+PLUGIN_BASE="${CLAUDE_ROOT}/plugins/cache/creditgauge/creditgauge"
 PLUGIN_DIR=$(ls -d ${PLUGIN_BASE}/*/ 2>/dev/null \
   | awk -F/ '{ print $(NF-1) "\t" $(0) }' \
   | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n \
   | tail -1 | cut -f2-)
 # State lives at a STABLE location — sibling of config.json
-# (~/.claude/plugins/topgauge/state/) — so it survives
+# (~/.claude/plugins/creditgauge/state/) — so it survives
 # /plugin install rolls and cache wipes. v0.2.19 moved it here from
 # the per-version ${PLUGIN_DIR}/state/ so a future uninstall can find
 # the pre-managed command even after the cache has been cleaned.
-STATE_DIR="${CLAUDE_ROOT}/plugins/topgauge/state"
+STATE_DIR="${CLAUDE_ROOT}/plugins/creditgauge/state"
 UPSTREAM_CMD_FILE="${STATE_DIR}/upstream-cmd.sh"
 UPSTREAM_CMD_ONLY="${STATE_DIR}/upstream-cmd.txt"
 # Install-journal: a per-install write-ahead log of every modification
@@ -96,17 +96,17 @@ UPSTREAM_CMD_ONLY="${STATE_DIR}/upstream-cmd.txt"
 JOURNAL_PATH="${STATE_DIR}/install-journal.json"
 REFRESH_INTERVAL_MAX=10  # seconds — see ensure-refresh-interval op
 # v0.9.0+ — bundled query_plugins drop-in dir. Users can drop
-# scripts at ~/.claude/plugins/topgauge/query_plugins/<provider>/
+# scripts at ~/.claude/plugins/creditgauge/query_plugins/<provider>/
 # index.js and wire a custom data source via providers.<provider>.
 # ENDPOINT="" in their config. Created on every (re-)install; users
 # who don't use it leave it empty. Symmetric with config.json
-# (~/.claude/plugins/topgauge/config.json) — sibling of state/.
-QUERY_PLUGINS_DIR="${CLAUDE_ROOT}/plugins/topgauge/query_plugins"
+# (~/.claude/plugins/creditgauge/config.json) — sibling of state/.
+QUERY_PLUGINS_DIR="${CLAUDE_ROOT}/plugins/creditgauge/query_plugins"
 WRAPPER="${PLUGIN_DIR%/}/scripts/wrapper.sh"
 
 if [ -z "$PLUGIN_DIR" ] || [ ! -f "$WRAPPER" ]; then
   echo "install.sh: cannot find plugin cache. Expected ${PLUGIN_BASE}/<version>/scripts/wrapper.sh" >&2
-  echo "install.sh: install via '/plugin install topgauge@topgauge' first." >&2
+  echo "install.sh: install via '/plugin install creditgauge@creditgauge' first." >&2
   exit 1
 fi
 
@@ -156,7 +156,7 @@ fi
 # plugin without re-running install.sh. Skipped on --dry-run so the
 # dry-run log doesn't claim success.
 # (v0.9.x: the --uninstall thin shim that used to live here was
-# removed; uninstall is now handled exclusively by /topgauge:uninstall.)
+# removed; uninstall is now handled exclusively by /creditgauge:uninstall.)
 if [ "$DRY_RUN" != 1 ]; then
   mkdir -p "$QUERY_PLUGINS_DIR"
 fi
@@ -210,13 +210,13 @@ CURRENT=$(node "$HELPER" "$WIN_TARGET" status)
 case "$CURRENT" in
   managed)
     # Carry the upstream-cmd forward into our stable STATE_DIR
-    # (${CLAUDE_ROOT}/plugins/topgauge/state/), in case:
+    # (${CLAUDE_ROOT}/plugins/creditgauge/state/), in case:
     #   - The user just upgraded from v0.2.18 (where state lived at
     #     the per-version cache dir); the OLD location still has the
     #     pre-managed command, and we need to move it to the new home.
     #   - The previous version's cache was wiped but a foreign-install
     #     state survived somewhere (rare).
-    #   - The user manually deleted ${CLAUDE_ROOT}/plugins/topgauge/state/
+    #   - The user manually deleted ${CLAUDE_ROOT}/plugins/creditgauge/state/
     #     after uninstall but the settings.json still points at us.
     #
     # Sources to check, in priority order:
@@ -255,7 +255,7 @@ case "$CURRENT" in
         echo "install.sh: migrated legacy state/ from $(basename "${PREV%/}") to ${STATE_DIR}"
       fi
     fi
-    echo "install.sh: ${TARGET} already managed by topgauge; no-op."
+    echo "install.sh: ${TARGET} already managed by creditgauge; no-op."
     exit 0
     ;;
   none)
@@ -284,16 +284,16 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "  would ensure:  statusLine.refreshInterval = ${REFRESH_INTERVAL_MAX} (create if missing, clamp down if >${REFRESH_INTERVAL_MAX})"
     echo "  would record:  ${JOURNAL_PATH} (per-field action entries: create/mutate/clamp-down)"
     echo "                 + settings.json:enabledPlugins + settings.json:extraKnownMarketplaces"
-    echo "                   (top-level block cleanup; per-key diff — only the keys topgauge owns"
+    echo "                   (top-level block cleanup; per-key diff — only the keys creditgauge owns"
     echo "                    enter the journal; pre-existing siblings are preserved)"
   fi
-  SEED_TARGET="${CLAUDE_ROOT}/plugins/topgauge/config.json"
+  SEED_TARGET="${CLAUDE_ROOT}/plugins/creditgauge/config.json"
   if [ ! -f "$SEED_TARGET" ]; then
     echo "  would seed:    ${SEED_TARGET} (cacheTtlMs=60000, statuslineTemplate=standard, providers={}, labels glyph overrides)"
   else
     echo "  would keep:    ${SEED_TARGET} (already present)"
   fi
-  echo "  new statusLine command will set TOPGAUGE_UPSTREAM_CMD to:"
+  echo "  new statusLine command will set CREDITGAUGE_UPSTREAM_CMD to:"
   if [ "$INSTALL_MODE" = "replace" ]; then
     echo "    ${UPSTREAM_CMD_FILE}"
   else
@@ -309,7 +309,7 @@ if [ "$INSTALL_MODE" = "replace" ]; then
   if [ ! -f "$UPSTREAM_CMD_ONLY" ]; then
     {
       printf '#!/usr/bin/env bash\n'
-      printf '# Original statusLine.command preserved by topgauge install.sh\n'
+      printf '# Original statusLine.command preserved by creditgauge install.sh\n'
       printf '# Restored via: install.sh --uninstall\n'
       printf 'exec %s\n' "$ORIGINAL_CMD"
     } > "$UPSTREAM_CMD_FILE"
@@ -329,8 +329,8 @@ fi
 # diff, but the Claude-Code plugin loader populates those dicts BEFORE
 # install.sh runs, so any .bak we write at this point has the same
 # content as the live file. Instead, the EP/EKM journal entries below
-# compute the diff against the literal set of keys topgauge writes
-# (`topgauge@topgauge` / `topgauge`); every other key in those dicts is
+# compute the diff against the literal set of keys creditgauge writes
+# (`creditgauge@creditgauge` / `creditgauge`); every other key in those dicts is
 # pre-existing user state and never enters the journal. See
 # append_top_level_entry comments for the full classification.
 
@@ -358,7 +358,7 @@ fi
 # token modules. The remaining 14 label axes inherit DEFAULT_CONFIG
 # defaults — callers who add `m_memUsage` / `m_quota` etc. get the
 # canonical `Mem:` / `quota:` prefixes for free.
-SEED_DIR="${CLAUDE_ROOT}/plugins/topgauge"
+SEED_DIR="${CLAUDE_ROOT}/plugins/creditgauge"
 SEED_FILE="${SEED_DIR}/config.json"
 if [ ! -f "$SEED_FILE" ]; then
   mkdir -p "$SEED_DIR"
@@ -413,8 +413,8 @@ SL_AFTER_JSON="$(node -e '
 
 # Snapshot enabledPlugins + extraKnownMarketplaces. Install itself
 # does NOT write these dicts — Claude Code's plugin loader adds the
-# `topgauge@topgauge` and `topgauge` keys during /plugin install —
-# but at the topgauge level we still own their cleanup.
+# `creditgauge@creditgauge` and `creditgauge` keys during /plugin install —
+# but at the creditgauge level we still own their cleanup.
 #
 # We record a PER-KEY DIFF (not the entire post-install dict) so that
 # pre-existing sibling keys like `claude-hud@claude-hud` are NEVER in
@@ -425,16 +425,16 @@ SL_AFTER_JSON="$(node -e '
 # preserves them per the user's principle ("只恢复install的时候修改的
 # 项目内容").
 #
-# Classification source of truth: topgauge installs ONLY these two
-# keys in those two dicts — `topgauge@topgauge` in enabledPlugins and
-# `topgauge` in extraKnownMarketplaces. We read the live file and
+# Classification source of truth: creditgauge installs ONLY these two
+# keys in those two dicts — `creditgauge@creditgauge` in enabledPlugins and
+# `creditgauge` in extraKnownMarketplaces. We read the live file and
 # project out those keys into `after`; `before` is empty (we never
 # remove user state). For uninstall, this partition tells
-# applyJournalEntry "delete topgauge@topgauge if it still exists and
+# applyJournalEntry "delete creditgauge@creditgauge if it still exists and
 # still equals the install snapshot; otherwise preserve user edits".
-snap_topgauge_key() {
+snap_creditgauge_key() {
   local key="$1"
-  local topgauge_key="$2"
+  local creditgauge_key="$2"
   node -e '
     const fs = require("fs");
     const dictKey  = process.argv[1];
@@ -450,10 +450,10 @@ snap_topgauge_key() {
         process.stdout.write("{}");
       }
     } catch (e) { process.stdout.write("{}"); }
-  ' "$key" "$topgauge_key" "$TARGET"
+  ' "$key" "$creditgauge_key" "$TARGET"
 }
-EP_AFTER_JSON="$(snap_topgauge_key enabledPlugins 'topgauge@topgauge')"
-EKM_AFTER_JSON="$(snap_topgauge_key extraKnownMarketplaces topgauge)"
+EP_AFTER_JSON="$(snap_creditgauge_key enabledPlugins 'creditgauge@creditgauge')"
+EKM_AFTER_JSON="$(snap_creditgauge_key extraKnownMarketplaces creditgauge)"
 EP_BEFORE_JSON='{}'
 EKM_BEFORE_JSON='{}'
 

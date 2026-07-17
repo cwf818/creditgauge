@@ -5,10 +5,10 @@
 //
 // Per-Project Layout (v0.4.x+): when a `cwd` is provided to `append` /
 // `readLatest` / `diagnosticsPath`, the log lives at
-// `${CLAUDE_CONFIG_DIR}/plugins/topgauge/state/<projectHash>/diagnostics.jsonl`.
+// `${CLAUDE_CONFIG_DIR}/plugins/creditgauge/state/<projectHash>/diagnostics.jsonl`.
 // When `cwd` is omitted (or null/empty), the log falls back to the
 // legacy top-level
-// `${CLAUDE_CONFIG_DIR}/plugins/topgauge/state/diagnostics.jsonl`.
+// `${CLAUDE_CONFIG_DIR}/plugins/creditgauge/state/diagnostics.jsonl`.
 // The fallback is used for plugin-level errors that have no project
 // affiliation (e.g. config-parse warnings from `src/config.ts`).
 //
@@ -36,7 +36,7 @@
 // cost of double-write logic. Not worth it.
 //
 // Opt-in gate: writing the log file is OFF by default. Set
-// `TOPGAUGE_DIAGNOSTICS_ENABLE=1` (or `true` / `yes`, case-insensitive)
+// `CREDITGAUGE_DIAGNOSTICS_ENABLE=1` (or `true` / `yes`, case-insensitive)
 // to enable. Rationale: the file lives in the user's plugins dir and
 // may contain sensitive fragments (paths, error text from upstream
 // libraries), so we don't write unless the user explicitly asks.
@@ -53,7 +53,7 @@ import { projectHash } from "./status-store.ts";
 function stateRoot(): string {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
   const claudeRoot = process.env.CLAUDE_CONFIG_DIR ?? join(home, ".claude");
-  return join(claudeRoot, "plugins", "topgauge", "state");
+  return join(claudeRoot, "plugins", "creditgauge", "state");
 }
 
 // Resolve the diagnostics.jsonl path for a given project cwd. When
@@ -203,12 +203,12 @@ function localIso(epochMs: number): string {
 
 // ----- Gate -----
 
-// True iff TOPGAUGE_DIAGNOSTICS_ENABLE is set to a truthy value
+// True iff CREDITGAUGE_DIAGNOSTICS_ENABLE is set to a truthy value
 // (1 / true / yes, case-insensitive). Anything else — including the
 // variable being unset — is treated as OFF. The user's log file
 // should not silently fill up; the gate is opt-in.
 export function isEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  const v = env.TOPGAUGE_DIAGNOSTICS_ENABLE;
+  const v = env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
   if (typeof v !== "string") return false;
   const s = v.trim().toLowerCase();
   return s === "1" || s === "true" || s === "yes";
@@ -349,7 +349,7 @@ export function append(
     // fails we just leave the file alone — the next append will retry.
     trimToMax(path, DEFAULT_MAX_ENTRIES);
   } catch {
-    process.stderr.write("topgauge: diagnostics append failed\n");
+    process.stderr.write("creditgauge: diagnostics append failed\n");
   }
 }
 
@@ -358,10 +358,10 @@ export function append(
 // Thin wrappers for the per-tick file IO sites (cache.ts,
 // token-store.ts, status-store.ts, config.ts, index.ts) to record
 // their disk activity to the diagnostics log. Reuses the opt-in
-// gate (TOPGAUGE_DIAGNOSTICS_ENABLE) and the per-project JSONL
+// gate (CREDITGAUGE_DIAGNOSTICS_ENABLE) and the per-project JSONL
 // layout — the IO site's `path` is the same string the caller
 // passed to fs.*, so the per-project scoping falls out naturally:
-//   - IO under `${CLAUDE_CONFIG_DIR}/plugins/topgauge/state/` —
+//   - IO under `${CLAUDE_CONFIG_DIR}/plugins/creditgauge/state/` —
 //     cwd is already encoded in the path components the caller
 //     passed in. We still surface each call's full path so a
 //     postmortem can grep it without parsing the layout.
@@ -403,7 +403,7 @@ const IO_SOURCE = {
 } as const;
 
 // Truncate `path` to a stable per-call message. State paths under
-// `${CLAUDE_CONFIG_DIR}/plugins/topgauge/state/` are project-scoped
+// `${CLAUDE_CONFIG_DIR}/plugins/creditgauge/state/` are project-scoped
 // — when the call site is in token-store.ts/status-store.ts, the
 // `path` it already carries includes the projectHash, so no extra
 // per-project dedupe is needed. We just cap the message length so

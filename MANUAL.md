@@ -1,4 +1,4 @@
-# ToPGauge — Configuration Manual
+# CreditGauge — Configuration Manual
 
 The complete configuration reference. Every top-level field, every provider entry, every preset, every shipped fragment, every inline-arg axis, every module.
 
@@ -31,10 +31,10 @@ User-facing quickstart + ops procedures (install, uninstall, clean, commands, de
 ## 1. Configuration file
 
 Path:
-- **Unix**: `~/.claude/plugins/topgauge/config.json`
-- **Windows**: `%USERPROFILE%\.claude\plugins\topgauge\config.json`
+- **Unix**: `~/.claude/plugins/creditgauge/config.json`
+- **Windows**: `%USERPROFILE%\.claude\plugins\creditgauge\config.json`
 
-Missing file → all defaults (bit-for-byte identical to no config). Malformed JSON or a single bad field → one stderr line (`topgauge: config <reason>; using defaults`) and the default for that field only. The plugin never blanks the statusline on bad config.
+Missing file → all defaults (bit-for-byte identical to no config). Malformed JSON or a single bad field → one stderr line (`creditgauge: config <reason>; using defaults`) and the default for that field only. The plugin never blanks the statusline on bad config.
 
 A reference copy with every field is at [config.example.json](./config.example.json). Copy it to the path above and edit.
 
@@ -338,7 +338,7 @@ export type PluginContext = {
 
 For a provider id `<id>`:
 
-1. `~/.claude/plugins/topgauge/query_plugins/<id>/index.js` (then `.mjs`) — user override (silently wins).
+1. `~/.claude/plugins/creditgauge/query_plugins/<id>/index.js` (then `.mjs`) — user override (silently wins).
 2. `dist|src/plugins/<id>/index.js` — built-in (only for canonical built-in ids `minimax`, `deepseek`).
 3. Otherwise: miss. The host writes `<provider>:pluginSource = "missing"` to the cache row and `m_pluginSource` renders ❗.
 
@@ -479,7 +479,7 @@ Three semantic variants per metric: **per-turn** (stdin-only, zero IO), **acc** 
 | `m_session` | Session name, e.g. `fix-bar-color-regressions`. | `tokens.sessionName` | `color`, `nulldrop` |
 | `m_model` | Display name of active model, e.g. `MiniMax-M3`. | `tokens.modelDisplayName` | `color`, `nulldrop` |
 | `m_effort` | Effort level: `low` / `medium` / `high` / `max`. | `tokens.effort` | `color`, `nulldrop` |
-| `m_repo` | `host/owner/name`, e.g. `github.com/cwf818/topgauge`. | `tokens.workspace.repo` | `color`, `nulldrop` |
+| `m_repo` | `host/owner/name`, e.g. `github.com/cwf818/creditgauge`. | `tokens.workspace.repo` | `color`, `nulldrop` |
 | `m_branch` | Current git branch. | git info from cwd | `color`, `nulldrop` |
 | `m_gitStatus` | Git dirty / clean indicator. | git status | `color`, `nulldrop` |
 | `m_ccVersion` | Claude Code version, e.g. `2.1.191`. | `tokens.ccversion` | `color`, `nulldrop` |
@@ -662,7 +662,7 @@ Visual indicator of which side of the user-vs-builtin fence the active provider'
 | `ctx.pluginSource` value | Glyph (default) | Meaning                                                                                |
 | ------------------------ | --------------- | -------------------------------------------------------------------------------------- |
 | `"builtin"`              | `📌`             | Plugin loaded from the bundled `dist/plugins/<id>/` tree.                              |
-| `"user"`                 | `🎨`             | Plugin loaded from a user override at `~/.claude/plugins/topgauge/query_plugins/<id>/`. |
+| `"user"`                 | `🎨`             | Plugin loaded from a user override at `~/.claude/plugins/creditgauge/query_plugins/<id>/`. |
 | `"missing"`              | `❗`             | `matchProvider` returned an id but neither user nor built-in produced a file.            |
 | `null` / `undefined`     | (drop)          | No provider matched, or no cache row yet.                                              |
 
@@ -678,7 +678,7 @@ A rotating quote, frequency-bucketed (local) or strings from a remote endpoint.
 
 - **Local mode** (no `address`) — pulls from the bundled `quotes.json` (100+ bilingual entries). Bucket rotation by `|freq:<dhms>` (default `h`).
 - **Remote mode** (`|address:<URL>`) — fetches the URL via `curl -sSf --max-time 5` (with `node:http(s)` core fallback when curl isn't on PATH), JSON-parses the body, and walks the dot paths in `|quote:<p>|author:<p>|lang:<p>` against it. The body is rendered as `~<quote>~` (or `~<quote>--<author>~` when `author` is set); pass `|wrap:false` for the bare form. The `|fields:<a,b,c>` form is also accepted — all dot paths are walked and rendered as `field1: field2:` (trailing colon).
-- On any fetch / parse / walk failure (curl exit, non-JSON body, any path miss), the renderer falls back to the local `quotes.json` list **and appends a row to `diagnostics.jsonl`** (gated on `TOPGAUGE_DIAGNOSTICS_ENABLE=1`) with `source = "m_quote"`.
+- On any fetch / parse / walk failure (curl exit, non-JSON body, any path miss), the renderer falls back to the local `quotes.json` list **and appends a row to `diagnostics.jsonl`** (gated on `CREDITGAUGE_DIAGNOSTICS_ENABLE=1`) with `source = "m_quote"`.
 
 ### Inline args
 
@@ -700,7 +700,7 @@ Three-tier semantic split (per-turn / acc / sum) plus the cost three-tuple. Sour
 
 ### Per-turn modules
 
-Read `current_usage.{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens}` and the cumulative `context_window.{total_input_tokens, total_output_tokens}`. Invariant: `total_input_tokens == current.input_tokens + current.cache_read_input_tokens`. Violations write a `warning` row to `diagnostics.jsonl` (gated on `TOPGAUGE_DIAGNOSTICS_ENABLE=1`, 60s dedupe).
+Read `current_usage.{input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens}` and the cumulative `context_window.{total_input_tokens, total_output_tokens}`. Invariant: `total_input_tokens == current.input_tokens + current.cache_read_input_tokens`. Violations write a `warning` row to `diagnostics.jsonl` (gated on `CREDITGAUGE_DIAGNOSTICS_ENABLE=1`, 60s dedupe).
 
 ### Acc modules
 
@@ -748,7 +748,7 @@ Inline args: `color`, `nulldrop`, `model`, `window`, `align`, `term`, `valueOnly
 
 Tokens that produce a `\n` (`s_newline`, or any multi-line body) split the rendered output into "above the break" and "below the break" chunks:
 
-- Everything ABOVE the first newline is **prepended** to the upstream output (whatever `TOPGAUGE_UPSTREAM` contains).
+- Everything ABOVE the first newline is **prepended** to the upstream output (whatever `CREDITGAUGE_UPSTREAM` contains).
 - Everything BELOW is **appended** after the upstream.
 
 This is how a multi-line preset renders: a multi-line plan section + a multi-line balance section, sandwiched around the upstream statusline.

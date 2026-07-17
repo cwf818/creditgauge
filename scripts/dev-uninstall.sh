@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# dev-uninstall.sh — DEV-ONLY: wipe all on-disk state for topgauge
-# (ToPGauge) so /plugin install can re-fetch a clean copy from the
+# dev-uninstall.sh — DEV-ONLY: wipe all on-disk state for creditgauge
+# (CreditGauge) so /plugin install can re-fetch a clean copy from the
 # marketplace.
 #
-# Functionally identical to /topgauge:uninstall (which runs
+# Functionally identical to /creditgauge:uninstall (which runs
 # scripts/uninstall.sh). This script exists so the developer can run the
 # same cleanup from `npm run dev:uninstall` even when the slash command
 # can't be invoked (e.g. plugin not yet loaded, or being iterated on).
@@ -12,11 +12,11 @@
 #   - Restores settings.json.statusLine (from the stable
 #     state/upstream-cmd.txt — sibling of config.json — or the most
 #     recent pre-managed .bak.<ts>).
-#   - Removes `topgauge@topgauge` from
+#   - Removes `creditgauge@creditgauge` from
 #     settings.json.enabledPlugins.
-#   - Wipes cache/topgauge/, the marketplace dir, the
-#     `cwf818-topgauge` alias, AND the stable
-#     plugins/topgauge/state/ dir.
+#   - Wipes cache/creditgauge/, the marketplace dir, the
+#     `cwf818-creditgauge` alias, AND the stable
+#     plugins/creditgauge/state/ dir.
 #   - Strips the plugin's row from installed_plugins.json and
 #     known_marketplaces.json (with timestamped .bak.<TS> backups).
 #   - Backs up settings.json before any destructive change.
@@ -29,10 +29,10 @@
 #   npm run dev:uninstall:dry          # same as scripts/dev-uninstall.sh --dry-run
 #
 # After this script, the user can re-run:
-#   /plugin marketplace add cwf818/topgauge
-#   /plugin install topgauge@topgauge
+#   /plugin marketplace add cwf818/creditgauge
+#   /plugin install creditgauge@creditgauge
 #   /reload-plugins
-#   /topgauge:install
+#   /creditgauge:install
 #
 # Portable: Linux, macOS, Git Bash on Windows.
 

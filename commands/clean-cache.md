@@ -4,13 +4,13 @@ argument-hint: "[--dry-run]"
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/clean-cache.sh:*)"]
 ---
 
-# topgauge :clean-cache
+# creditgauge :clean-cache
 
 Targets the version directories that accumulate under the plugin
 cache after every `/plugin install` roll-forward:
 
 ```
-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/topgauge/topgauge/
+${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/creditgauge/creditgauge/
   0.2.7/        ← old, no longer used
   0.2.7.1/      ← old, no longer used
   0.2.8/        ← currently live
@@ -33,7 +33,7 @@ source tree + node_modules). This command:
   newest remains.
 
 After `:clean-cache` you can run `:install` (or `/plugin install
-topgauge@topgauge`) again to refresh the remaining dir, or
+creditgauge@creditgauge`) again to refresh the remaining dir, or
 just leave it — `install.sh` will detect the carried state from
 the previous version automatically.
 

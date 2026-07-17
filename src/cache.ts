@@ -1,7 +1,7 @@
 // Tiny persistent TTL cache for the statusline.
 //
 // Single-process Map for the hot path; shadowed to disk under
-// ~/.claude/plugins/topgauge/state/cache.json so the
+// ~/.claude/plugins/creditgauge/state/cache.json so the
 // cache survives across per-tick child-process invocations.
 //
 // The plugin runs as a fresh node process on every Claude Code
@@ -82,7 +82,7 @@ function defaultCachePath(): string {
   return join(
     claudeRoot,
     "plugins",
-    "topgauge",
+    "creditgauge",
     "state",
     "cache.json",
   );
@@ -139,7 +139,7 @@ function loadFromDisk(): void {
     // do not crash the statusline. The next set() will overwrite the
     // file with valid JSON.
     process.stderr.write(
-      "topgauge: cache file is malformed; ignoring\n",
+      "creditgauge: cache file is malformed; ignoring\n",
     );
     return;
   }
@@ -175,7 +175,7 @@ function flushToDisk(): void {
     // authoritative for this process. Surface a one-line warning so
     // the user can investigate permissions / disk-full.
     process.stderr.write(
-      "topgauge: cache mkdir failed; in-memory only\n",
+      "creditgauge: cache mkdir failed; in-memory only\n",
     );
     return;
   }
@@ -198,7 +198,7 @@ function flushToDisk(): void {
     writeFileSync(path, payload);
   } catch {
     process.stderr.write(
-      "topgauge: cache write failed; in-memory only\n",
+      "creditgauge: cache write failed; in-memory only\n",
     );
   }
 }

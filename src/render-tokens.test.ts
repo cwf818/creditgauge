@@ -88,7 +88,7 @@ const fakeSnapshot = (overrides: Partial<TokenSnapshot> = {}): TokenSnapshot => 
   // either or both independently).
   modelId: "MiniMax-M3",
   effort: "high",
-  repo: { host: "github.com", owner: "cwf818", name: "topgauge" },
+  repo: { host: "github.com", owner: "cwf818", name: "creditgauge" },
   ccversion: "2.1.191",
   contextWindow: { contextWindowSize: 200000, contextUsedPercent: 63, contextRemainingPercent: 37 },
   ...overrides,
@@ -181,14 +181,14 @@ const ctxWithQuoteBodies = (
 
 // v0.4.0+ — the speed/delta/avg cache helpers (peekPrevTick /
 // setPrevTick / peekAvg / setAvg) write to
-// ~/.claude/plugins/topgauge/state/cache.json. Tests MUST
+// ~/.claude/plugins/creditgauge/state/cache.json. Tests MUST
 // point that path at a tmp file so they don't leak to the user's
 // real cache between runs. Per-test tmp dir + clean teardown keeps
 // each test fully isolated.
 let _tmpDir: string;
 beforeEach(() => {
   __resetForTest();
-  _tmpDir = mkdtempSync(join(tmpdir(), "topgauge-render-tokens-"));
+  _tmpDir = mkdtempSync(join(tmpdir(), "creditgauge-render-tokens-"));
   setCachePathResolver(() => join(_tmpDir, "cache.json"));
   // v0.4.x — per-tick state lives in status.json under the
   // project dir; tests must point that resolver at a tmp file
@@ -660,13 +660,13 @@ describe("renderTemplate — m_quote fetch-failure diagnostics (v0.8.20+)", () =
   // v0.8.20+ — when fetchQuoteFromAddress returns null (curl exit /
   // non-JSON body / all paths miss), it appends a structured warning
   // to diagnostics.jsonl so a postmortem can grep why the local
-  // QUOTES fallback fired. Gate is TOPGAUGE_DIAGNOSTICS_ENABLE=1;
+  // QUOTES fallback fired. Gate is CREDITGAUGE_DIAGNOSTICS_ENABLE=1;
   // these tests enable it for the duration.
   //
   // The diagnostics module reads state root from process.env.HOME /
   // CLAUDE_CONFIG_DIR at append-time; we redirect both to the
   // per-test _tmpDir so the JSONL file lands at
-  // `<_tmpDir>/.claude/plugins/topgauge/state/<projectHash(cwd)>/diagnostics.jsonl`.
+  // `<_tmpDir>/.claude/plugins/creditgauge/state/<projectHash(cwd)>/diagnostics.jsonl`.
   // We use setSessionCwd to encode the originating project's hash on
   // the row's `cwd` field AND on the file path (Per-Project Layout).
 
@@ -676,7 +676,7 @@ describe("renderTemplate — m_quote fetch-failure diagnostics (v0.8.20+)", () =
     diagRoot = join(_tmpDir, "diagnostics-root");
     process.env.HOME = diagRoot;
     process.env.CLAUDE_CONFIG_DIR = diagRoot;
-    process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = "1";
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
     diagnostics.setSessionCwd("D:\\test");
     diagnostics.__resetDedupeForTest();
   });
@@ -686,15 +686,15 @@ describe("renderTemplate — m_quote fetch-failure diagnostics (v0.8.20+)", () =
   // diagnostics.stateRoot() — see src/diagnostics.ts.
   function readDiagLines(): Array<Record<string, unknown>> {
     // diagnostics.stateRoot() returns either
-    //   $CLAUDE_CONFIG_DIR/plugins/topgauge/state (when set), or
-    //   $HOME/.claude/plugins/topgauge/state (when unset).
+    //   $CLAUDE_CONFIG_DIR/plugins/creditgauge/state (when set), or
+    //   $HOME/.claude/plugins/creditgauge/state (when unset).
     // We set CLAUDE_CONFIG_DIR=diagRoot in beforeEach so the
-    // per-project file lands at diagRoot/plugins/topgauge/state/<hash>/diagnostics.jsonl
+    // per-project file lands at diagRoot/plugins/creditgauge/state/<hash>/diagnostics.jsonl
     // (no .claude infix — CLAUDE_CONFIG_DIR is the literal config root).
     const path = join(
       diagRoot,
       "plugins",
-      "topgauge",
+      "creditgauge",
       "state",
       projectHash("D:\\test"),
       "diagnostics.jsonl",
@@ -742,7 +742,7 @@ describe("renderTemplate — m_quote fetch-failure diagnostics (v0.8.20+)", () =
   it("address|gate OFF (env unset) → no JSONL file written", () => {
     // Disable the gate. Reset dedupe so the only thing gating the
     // append is isEnabled().
-    process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = "";
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "";
     diagnostics.__resetDedupeForTest();
     const out = renderTemplate(
       ["m_quote|address:http://127.0.0.1:1/|quote:x"],
@@ -756,7 +756,7 @@ describe("renderTemplate — m_quote fetch-failure diagnostics (v0.8.20+)", () =
       "diagnostics.jsonl should not be written when gate is off",
     );
     // Restore gate for downstream tests.
-    process.env.TOPGAUGE_DIAGNOSTICS_ENABLE = "1";
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
   });
 });
 
@@ -1922,9 +1922,9 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     assert.equal(strip(out), "high");
   });
 
-  it("m_repo| 'github.com/cwf818/topgauge'", () => {
+  it("m_repo| 'github.com/cwf818/creditgauge'", () => {
     const out = renderTemplate(["m_repo"], ctxFor(fakeSnapshot())).join("\n");
-    assert.equal(strip(out), "github.com/cwf818/topgauge");
+    assert.equal(strip(out), "github.com/cwf818/creditgauge");
   });
 
   it("m_branch| emits 'branch|n/a' when cwd is not a git repo (v6.x placeholder)", () => {
@@ -1999,7 +1999,7 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     } catch {
       return; // skip
     }
-    repoDir = mkdtempSync(join(tmpdir(), "topgauge-render-git-"));
+    repoDir = mkdtempSync(join(tmpdir(), "creditgauge-render-git-"));
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repoDir });
     execFileSync("git", ["config", "user.email", "t@t"], { cwd: repoDir });
     execFileSync("git", ["config", "user.name", "t"], { cwd: repoDir });

@@ -1,4 +1,4 @@
-// Kimi user plugin for topgauge. POST {scope:["FEATURE_CODING"]}
+// Kimi user plugin for creditgauge. POST {scope:["FEATURE_CODING"]}
 // → usages[] entry with resetTime + limits[] + totalQuota. Maps:
 //   intervals.short ← usages.limits[0].detail  (intervalMs = window.duration MINUTES × 60s × 1000)
 //   intervals.mid   ← usages.detail            (intervalMs = 7d, fixed — primary weekly cycle)
@@ -12,7 +12,7 @@
 // AUTHENTICATION_KEY: the Kimi dashboard's localStorage `access_token`
 // (the one issued after browser login at https://kimi.com), NOT the
 // API token under Settings. Configure it via providers.kimi.AUTHENTICATION_KEY
-// in ~/.claude/plugins/topgauge/config.json. The plugin sends it as
+// in ~/.claude/plugins/creditgauge/config.json. The plugin sends it as
 // `Authorization: Bearer <key>` against the GetUsages endpoint.
 //
 // Auth note: the GetUsages endpoint is the same gRPC-over-HTTP the

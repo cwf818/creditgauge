@@ -2,7 +2,7 @@
 // Copy built-in plugin .js files from src/plugins/<id>/index.js to
 // dist/plugins/<id>/index.js. Built-in plugins are plain ESM JS —
 // the same shape as user-written plugins under
-// ~/.claude/plugins/topgauge/query_plugins/<id>/index.{js,mjs}.
+// ~/.claude/plugins/creditgauge/query_plugins/<id>/index.{js,mjs}.
 // No transpile step; the host loader imports these directly via
 // dynamic `import()`.
 

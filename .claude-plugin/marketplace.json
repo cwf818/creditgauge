@@ -1,15 +1,15 @@
 {
-  "name": "topgauge",
+  "name": "creditgauge",
   "owner": {
     "name": "cwf818"
   },
   "plugins": [
     {
-      "name": "topgauge",
+      "name": "creditgauge",
       "source": "./",
-      "description": "Provider-agnostic Claude Code statusline plugin (ToPGauge) for token-plan usage and account balance. Picks the provider from ANTHROPIC_BASE_URL (currently MiniMax + DeepSeek); hides itself otherwise. Ships :install, :uninstall, :clean, and :clean-cache slash commands.",
-      "version": "0.9.7"
+      "description": "Provider-agnostic Claude Code statusline plugin (CreditGauge) for token-plan usage and account balance. Picks the provider from ANTHROPIC_BASE_URL (currently MiniMax + DeepSeek); hides itself otherwise. Ships :install, :uninstall, :clean, and :clean-cache slash commands.",
+      "version": "1.0.0"
     }
   ],
-  "version": "0.9.7"
+  "version": "1.0.0"
 }

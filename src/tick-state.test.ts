@@ -36,7 +36,7 @@ let _tmpDir: string;
 let _prevConfigDir: string | undefined;
 
 beforeEach(() => {
-  _tmpDir = mkdtempSync(join(tmpdir(), "topgauge-tick-state-"));
+  _tmpDir = mkdtempSync(join(tmpdir(), "creditgauge-tick-state-"));
   _prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = _tmpDir;
   statusStore.setStatusPathResolver(() => join(_tmpDir, "status.json"));

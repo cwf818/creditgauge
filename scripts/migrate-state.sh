@@ -60,7 +60,7 @@ for arg in "$@"; do
 done
 
 CLAUDE_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-STATE_DIR="${CLAUDE_ROOT}/plugins/topgauge/state"
+STATE_DIR="${CLAUDE_ROOT}/plugins/creditgauge/state"
 if [ ! -d "$STATE_DIR" ]; then
   echo "migrate-state.sh: no state dir at $STATE_DIR"
   echo "  (nothing to migrate; you are already on the v0.4.x+ layout, or"

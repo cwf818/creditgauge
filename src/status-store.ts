@@ -1,7 +1,7 @@
 // Runtime state boundary for stdin-derived data.
 //
 // This module owns three related state files under
-// `${CLAUDE_CONFIG_DIR}/plugins/topgauge/state/`:
+// `${CLAUDE_CONFIG_DIR}/plugins/creditgauge/state/`:
 //
 //   - `cache.stat.json`                    — cross-project sum/avg stat cache
 //   - `<projectHash>/state.json`           — per-project accumulated state
@@ -258,7 +258,7 @@ const STAT_CACHE_TTL_MS = 300_000;
 function defaultStateRoot(): string {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
   const claudeRoot = process.env.CLAUDE_CONFIG_DIR ?? join(home, ".claude");
-  return join(claudeRoot, "plugins", "topgauge", "state");
+  return join(claudeRoot, "plugins", "creditgauge", "state");
 }
 
 let _stateRoot: () => string = defaultStateRoot;
@@ -350,7 +350,7 @@ function parseStore(raw: string): Store {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    process.stderr.write("topgauge: state file is malformed; ignoring\n");
+    process.stderr.write("creditgauge: state file is malformed; ignoring\n");
     return {};
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
@@ -490,7 +490,7 @@ function flushToDiskInternal(cwd: string, store: Store): void {
   try {
     mkdirSync(dir, { recursive: true });
   } catch {
-    process.stderr.write("topgauge: state mkdir failed; in-memory only\n");
+    process.stderr.write("creditgauge: state mkdir failed; in-memory only\n");
     return;
   }
   const payload = JSON.stringify(store);
@@ -498,7 +498,7 @@ function flushToDiskInternal(cwd: string, store: Store): void {
   try {
     writeFileSync(path, payload);
   } catch {
-    process.stderr.write("topgauge: state write failed; in-memory only\n");
+    process.stderr.write("creditgauge: state write failed; in-memory only\n");
     return;
   }
   _stores.set(cwd, store);
@@ -700,7 +700,7 @@ export function appendSample(
     logFsWrite(path, "status-store.appendSample", payload.length, cwd);
     appendFileSync(path, payload, "utf8");
   } catch {
-    process.stderr.write("topgauge: token-sample append failed\n");
+    process.stderr.write("creditgauge: token-sample append failed\n");
   }
 }
 
@@ -1054,7 +1054,7 @@ function loadStatCacheFromDisk(): void {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    process.stderr.write("topgauge: stat cache file is malformed; ignoring\n");
+    process.stderr.write("creditgauge: stat cache file is malformed; ignoring\n");
     return;
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
@@ -1073,7 +1073,7 @@ function flushStatCacheToDisk(): void {
   try {
     mkdirSync(dir, { recursive: true });
   } catch {
-    process.stderr.write("topgauge: stat cache mkdir failed; in-memory only\n");
+    process.stderr.write("creditgauge: stat cache mkdir failed; in-memory only\n");
     return;
   }
   const now = Date.now();
@@ -1090,7 +1090,7 @@ function flushStatCacheToDisk(): void {
   try {
     writeFileSync(path, payload);
   } catch {
-    process.stderr.write("topgauge: stat cache write failed; in-memory only\n");
+    process.stderr.write("creditgauge: stat cache write failed; in-memory only\n");
   }
 }
 
@@ -1513,7 +1513,7 @@ function normalizeTick(
   // field computed above so a postmortem can confirm accTokenHitRate /
   // accTokenTotalIn pre-compute math at the source rather than chasing
   // it through the read path.
-  if (process.env.TOPGAUGE_DIAGNOSTICS_ENABLE === "1") {
+  if (process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE === "1") {
     appendDiag(
       "info",
       "smoke-normalizeTick",
@@ -1990,7 +1990,7 @@ export function processTick(
       const replay = replayAccInit(scope, replayArgs);
       if (replay) {
         mark(key, replay);
-        if (process.env.TOPGAUGE_DIAGNOSTICS_ENABLE === "1") {
+        if (process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE === "1") {
           appendDiag(
             "info",
             "replay-acc-init",

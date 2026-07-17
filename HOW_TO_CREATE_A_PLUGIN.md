@@ -46,10 +46,10 @@ in [§5b](#5b-bundled-plugin-catalog)):
 
 ```bash
 # 1. Create the plugin directory (stable across cache rolls).
-mkdir -p ~/.claude/plugins/topgauge/query_plugins/myprovider
+mkdir -p ~/.claude/plugins/creditgauge/query_plugins/myprovider
 
 # 2. Drop your plugin file. Both .js and .mjs work; .js is conventional.
-cat > ~/.claude/plugins/topgauge/query_plugins/myprovider/index.js <<'EOF'
+cat > ~/.claude/plugins/creditgauge/query_plugins/myprovider/index.js <<'EOF'
 const ENDPOINT = "https://your.provider.example/api/quota";
 export default {
   async fetchAccountCredit(authenticationKey, ctx) {
@@ -115,12 +115,12 @@ export default {
 
 | Selector | Path |
 |---|---|
-| `<id>.js`   | `~/.claude/plugins/topgauge/query_plugins/<id>/index.js` |
-| `<id>.mjs`  | `~/.claude/plugins/topgauge/query_plugins/<id>/index.mjs` |
+| `<id>.js`   | `~/.claude/plugins/creditgauge/query_plugins/<id>/index.js` |
+| `<id>.mjs`  | `~/.claude/plugins/creditgauge/query_plugins/<id>/index.mjs` |
 
 - `<id>` is the **provider name** registered in `config.json`'s `providers` block. It must match `^[A-Za-z0-9_-]+$` (no `/`, `\\`, `:`, spaces, or control chars).
 - `.js` is conventional; `.mjs` is supported for users who'd rather skip the `package.json` inference check.
-- The directory is the **stable** one (`plugins/topgauge/query_plugins/`) — it survives `/plugin install` cache rolls and cache wipes. Don't put your plugin under `plugins/cache/topgauge/...`; that gets wiped on every install.
+- The directory is the **stable** one (`plugins/creditgauge/query_plugins/`) — it survives `/plugin install` cache rolls and cache wipes. Don't put your plugin under `plugins/cache/creditgauge/...`; that gets wiped on every install.
 
 ### What the host does with your return value
 
@@ -218,7 +218,7 @@ Note: `minValue` is optional — if you don't provide one, `ensureBalance` will 
 ## 5. Registration in `config.json`
 
 The provider id (`<id>`) is the directory name; the host looks up the
-config block by the same id. Edit `~/.claude/plugins/topgauge/config.json`:
+config block by the same id. Edit `~/.claude/plugins/creditgauge/config.json`:
 
 ```jsonc
 {
@@ -311,7 +311,7 @@ does **not** call your endpoint directly. Your plugin reads the URL
 from its own module-level constant.
 
 > ⚠️ **Never commit a real `AUTHENTICATION_KEY`.** `config.json` lives
-> outside the repo (`~/.claude/plugins/topgauge/config.json`) and is
+> outside the repo (`~/.claude/plugins/creditgauge/config.json`) and is
 > not tracked, but if you paste a real credential into any doc snippet,
 > scrub it before `git add`. The Kimi credential in particular is a
 > browser `localStorage.access_token` tied to your account — leaking it
@@ -442,14 +442,14 @@ The plugin receives `ctx.signal` — the host's per-tick `AbortSignal`. Always f
 For a provider id `<id>`, the host looks in this order:
 
 ```
-~/.claude/plugins/topgauge/query_plugins/<id>/index.js   ← user override (silently wins)
-~/.claude/plugins/topgauge/query_plugins/<id>/index.mjs  ← user override (mjs form)
+~/.claude/plugins/creditgauge/query_plugins/<id>/index.js   ← user override (silently wins)
+~/.claude/plugins/creditgauge/query_plugins/<id>/index.mjs  ← user override (mjs form)
 dist/plugins/<id>/index.js (or src/plugins/<id>/index.js during dev)  ← built-in (only for `minimax` / `deepseek` ids)
 ```
 
 The resolution side is stashed in `cache.json` under `<id>:pluginSource` so the `m_pluginSource` module can render 📌 (built-in) / 🎨 (user) / ❗ (missing). The renderer reads via `cache.peek` which **ignores TTL** — adding or removing an override file reflects on the next tick even before the data cache row expires.
 
-**Putting a file at `<dist>/plugins/<id>/` won't work** — that's the bundle output, regenerated on every `npm run build`. The user path is `~/.claude/plugins/topgauge/query_plugins/<id>/` (sibling of `state/` and `config.json`).
+**Putting a file at `<dist>/plugins/<id>/` won't work** — that's the bundle output, regenerated on every `npm run build`. The user path is `~/.claude/plugins/creditgauge/query_plugins/<id>/` (sibling of `state/` and `config.json`).
 
 ---
 
@@ -462,8 +462,8 @@ A user plugin imports cleanly as a normal ESM module — no testing harness need
 echo '{}' \
   | ANTHROPIC_BASE_URL=https://api.kimi.com/coding/ \
     ANTHROPIC_AUTH_TOKEN="$(jq -r '.providers.kimi.AUTHENTICATION_KEY' \
-      ~/.claude/plugins/topgauge/config.json)" \
-    node /path/to/cache/topgauge/topgauge/0.9.2/dist/index.js
+      ~/.claude/plugins/creditgauge/config.json)" \
+    node /path/to/cache/creditgauge/creditgauge/0.9.2/dist/index.js
 ```
 
 For unit-level testing of the fill function only:
@@ -484,18 +484,18 @@ The kimi plugin's `[fillQuota, findCodingUsage]` exports give you all the surfac
 | Symptom                                              | Likely cause                                                                  |
 |------------------------------------------------------|-------------------------------------------------------------------------------|
 | Plugin is ignored; `m_pluginSource` shows 📌 not 🎨  | Wrong provider id — directory name must match the config.json key byte-for-byte. |
-| Plugin is ignored; `m_pluginSource` shows ❗           | File isn't actually a valid ESM module — check `~/.claude/plugins/topgauge/state/diagnostics.jsonl` for the load error (60-second dedupe window). |
+| Plugin is ignored; `m_pluginSource` shows ❗           | File isn't actually a valid ESM module — check `~/.claude/plugins/creditgauge/state/diagnostics.jsonl` for the load error (60-second dedupe window). |
 | Hard-fail warnings every tick                        | Plugin throws on every invocation. Read the `user plugin` prefix in the JSONL row to see WHICH file the host loaded. |
 | Network errors but token is correct                  | Plugin forgot to forward `ctx.signal` — Abort timeout fired before the response. |
 | Numbers render as `n/a` or `0`                       | Plugin returned `null` (soft-fail) — check `if (!authenticationKey) return null` isn't gating when the key IS present. |
-| Built-in prints instead of override                  | Resolution is silently preferring the built-in. Verify the file is at the user path (`~/.claude/plugins/topgauge/query_plugins/<id>/`), not the cache dist dir. |
+| Built-in prints instead of override                  | Resolution is silently preferring the built-in. Verify the file is at the user path (`~/.claude/plugins/creditgauge/query_plugins/<id>/`), not the cache dist dir. |
 
 To enable the diagnostics log:
 
 ```bash
-export TOPGAUGE_DIAGNOSTICS_ENABLE=1
+export CREDITGAUGE_DIAGNOSTICS_ENABLE=1
 # Re-trigger a tick; tail the log:
-tail -f ~/.claude/plugins/topgauge/state/<projectHash>/diagnostics.jsonl
+tail -f ~/.claude/plugins/creditgauge/state/<projectHash>/diagnostics.jsonl
 ```
 
 Diagnostic rows are deduplicated within a 60-second window — a sustained error won't flood the file. The `cwd` field on each row tells you which project session it belongs to.
@@ -507,7 +507,7 @@ Diagnostic rows are deduplicated within a 60-second window — a sustained error
 ### Bundle layout reminder
 
 ```
-~/.claude/plugins/topgauge/
+~/.claude/plugins/creditgauge/
 ├── config.json                    # ← your providers.<id> block goes here
 ├── query_plugins/                 # ← user-side override directory
 │   ├── kimi/
