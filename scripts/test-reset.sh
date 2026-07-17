@@ -88,7 +88,11 @@ build_fixture() {
   hash="$(compute_hash "$proj_path")"
   local base="${root}/plugins/creditgauge/state"
   mkdir -p "${base}/${hash}"
-  printf '{"key":"v1"}\n'     > "${base}/${hash}/cache.json"
+  # v1.0.1+: cache.json is the top-level `state/cache.json` (shared
+  # across projects; per-project isolation is via `<projectHash>:` key
+  # prefix in src/cache.ts). state.json stays per-project under the
+  # hash subdir.
+  printf '{"key":"v1"}\n'     > "${base}/cache.json"
   printf '{"sid":"abc"}\n'    > "${base}/${hash}/state.json"
   printf '{"rows":[]}\n'      > "${base}/cache.stat.json"
   # Token sample + diagnostics MUST survive.
@@ -100,7 +104,6 @@ build_fixture() {
   printf '{}\n'                 > "${base}/config.json"
   # A sibling project that MUST NOT be touched.
   mkdir -p "${base}/other-project"
-  printf '{"key":"untouchable"}\n' > "${base}/other-project/cache.json"
   printf '{"sid":"other"}\n'       > "${base}/other-project/state.json"
   FIXTURE_ROOT="$root"
   FIXTURE_HASH="$hash"
@@ -153,8 +156,8 @@ out=$(run_reset "--dry-run")
 assert_eq "dry-run announces projectHash=${FIXTURE_HASH}" \
   "$(echo "$out" | grep -F "projectHash=${FIXTURE_HASH}" | head -1)" \
   "reset.sh: plan (projectHash=${FIXTURE_HASH})"
-if echo "$out" | grep -qF "rm $FIXTURE_ROOT/plugins/creditgauge/state/${FIXTURE_HASH}/cache.json"; then
-  echo "  ok  dry-run plans cache.json"
+if echo "$out" | grep -qF "rm $FIXTURE_ROOT/plugins/creditgauge/state/cache.json"; then
+  echo "  ok  dry-run plans cache.json (top-level)"
   PASS=$((PASS + 1))
 else
   echo "  FAIL dry-run missing cache.json plan"
@@ -186,7 +189,7 @@ else
 fi
 # After dry-run, NOTHING was removed.
 assert_file_exists "cache.json still present after dry-run" \
-  "$FIXTURE_ROOT/plugins/creditgauge/state/${FIXTURE_HASH}/cache.json"
+  "$FIXTURE_ROOT/plugins/creditgauge/state/cache.json"
 assert_file_exists "state.json still present after dry-run" \
   "$FIXTURE_ROOT/plugins/creditgauge/state/${FIXTURE_HASH}/state.json"
 assert_file_exists "cache.stat.json still present after dry-run" \
@@ -195,7 +198,7 @@ assert_file_exists "cache.stat.json still present after dry-run" \
 # Actual run.
 run_reset "" >/dev/null
 assert_file_missing "cache.json removed" \
-  "$FIXTURE_ROOT/plugins/creditgauge/state/${FIXTURE_HASH}/cache.json"
+  "$FIXTURE_ROOT/plugins/creditgauge/state/cache.json"
 assert_file_missing "state.json removed" \
   "$FIXTURE_ROOT/plugins/creditgauge/state/${FIXTURE_HASH}/state.json"
 assert_file_missing "cache.stat.json removed" \
@@ -212,8 +215,6 @@ assert_file_exists "upstream-cmd.txt preserved" \
 assert_file_exists "config.json preserved" \
   "$FIXTURE_ROOT/plugins/creditgauge/state/config.json"
 # Sibling project untouched.
-assert_file_exists "other-project/cache.json untouched" \
-  "$FIXTURE_ROOT/plugins/creditgauge/state/other-project/cache.json"
 assert_file_exists "other-project/state.json untouched" \
   "$FIXTURE_ROOT/plugins/creditgauge/state/other-project/state.json"
 rm -rf "$FIXTURE"
@@ -241,8 +242,8 @@ build_fixture "$FIXTURE" "$PROJ"
 rm -f "$FIXTURE/plugins/creditgauge/state/${FIXTURE_HASH}/state.json"
 rm -f "$FIXTURE/plugins/creditgauge/state/cache.stat.json"
 out=$(run_reset "")
-if echo "$out" | grep -qF "rm $FIXTURE_ROOT/plugins/creditgauge/state/${FIXTURE_HASH}/cache.json"; then
-  echo "  ok  partial state plans cache.json"
+if echo "$out" | grep -qF "rm $FIXTURE_ROOT/plugins/creditgauge/state/cache.json"; then
+  echo "  ok  partial state plans cache.json (top-level)"
   PASS=$((PASS + 1))
 else
   echo "  FAIL partial state plan missing cache.json"
@@ -274,11 +275,16 @@ echo "-- state dir exists, project hash subdir missing --"
 FIXTURE="$TEST_BASE/fixture-$RANDOM"
 PROJ="$FIXTURE/proj"
 mkdir -p "$PROJ"
-# build_fixture sets FIXTURE_HASH + creates the hash subdir AND the
-# top-level cache.stat.json. We then remove ALL 3 target files (the
-# hash subdir + cache.stat.json) so the script reports "all 3 missing".
+# v1.0.1+ fixture: hash subdir holds state.json; cache.json + cache.stat.json
+# live at the state root. To exercise the "all 3 missing" branch we
+# must remove the hash subdir (which kills state.json) AND the two
+# top-level files. Otherwise the top-level cache.json still exists
+# and the script legitimately wipes it — that's correct behavior
+# (not a no-op), but the fixture must construct the all-missing
+# state to assert on it.
 build_fixture "$FIXTURE" "$PROJ"
 rm -rf "$FIXTURE/plugins/creditgauge/state/${FIXTURE_HASH}"
+rm -f "$FIXTURE/plugins/creditgauge/state/cache.json"
 rm -f "$FIXTURE/plugins/creditgauge/state/cache.stat.json"
 out=$(run_reset "")
 EXPECTED_HASH="$FIXTURE_HASH"

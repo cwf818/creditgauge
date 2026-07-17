@@ -9,10 +9,13 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/reset.sh:*)"]
 Targets 3 runtime cache files for the **current project only** (other
 projects' caches are never touched):
 
-- `cache.json` — per-project provider data cache (60s TTL on-disk shadow)
+- `cache.json` — provider data cache (60s TTL on-disk shadow; top-level
+  `state/cache.json` shared across projects — per-project isolation
+  is via `<projectHash>:` key prefix, not by file split)
 - `state.json` — per-project tick / acc / prev-tick state
+  (`state/<projectHash>/state.json`)
 - `cache.stat.json` — cross-project sum/avg stat cache (regenerated
-  on next read; 300s TTL gate either way)
+  on next read; 300s TTL gate either way; top-level `state/cache.stat.json`)
 
 When to use this:
 

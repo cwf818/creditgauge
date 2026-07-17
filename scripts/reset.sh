@@ -3,14 +3,16 @@
 # (no other project's caches are touched).
 #
 # Targets (all under ${CLAUDE_ROOT}/plugins/creditgauge/state/):
-#   - cache.json         — per-project provider data cache
-#                          (state/<projectHash>/cache.json; v0.4.x Per-Project Layout)
+#   - cache.json         — provider data cache (state/cache.json; TOP-LEVEL
+#                          single file shared across projects; per-project
+#                          isolation is via `<projectHash>:` key prefix in
+#                          src/cache.ts / src/render.ts, NOT by file split)
 #   - state.json         — per-project tick / acc / prev-tick state
 #                          (state/<projectHash>/state.json; v0.4.x Per-Project Layout)
 #   - cache.stat.json    — cross-project sum/avg stat cache, regenerated
 #                          on next read (TTL=300s gate either way)
-#                          (state/cache.stat.json; v0.9.8+; sibling of
-#                           upstream-cmd.sh under state/)
+#                          (state/cache.stat.json; v0.9.8+; top-level,
+#                           sibling of upstream-cmd.sh under state/)
 #
 # Intent: when you suspect the runtime caches are corrupt / stale /
 # misleading, blow them away and let the next tick rebuild from
@@ -128,7 +130,7 @@ case "$PROJECT_HASH" in
     ;;
 esac
 
-CACHE_JSON="${STATE_DIR}/${PROJECT_HASH}/cache.json"
+CACHE_JSON="${STATE_DIR}/cache.json"
 STATE_JSON="${STATE_DIR}/${PROJECT_HASH}/state.json"
 STAT_JSON="${STATE_DIR}/cache.stat.json"
 
