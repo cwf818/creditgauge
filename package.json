@@ -1,11 +1,11 @@
 {
   "name": "creditgauge",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Claude Code statusline plugin (CreditGauge) for MiniMax/DeepSeek token-plan usage and account balance. Ships an `npx creditgauge` TUI for install/uninstall/clean/diagnostics.",
   "type": "module",
   "license": "MIT",
   "bin": {
-    "creditgauge": "./bin/cli.js"
+    "creditgauge": "bin/cli.js"
   },
   "files": [
     "bin",

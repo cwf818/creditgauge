@@ -43,6 +43,20 @@ const require2 = createRequire(import.meta.url);
 const pkg = require2(join(pkgRoot, "package.json"));
 
 // ---------------------------------------------------------------------------
+// Platform helpers
+// ---------------------------------------------------------------------------
+
+// Convert a Windows backslash path (C:\Users\...) to POSIX (/c/Users/...)
+// so bash can open it. On non-Windows — identity.
+function toPosixPath(p) {
+  if (process.platform !== "win32") return p;
+  const abs = resolve(p);
+  const m = abs.match(/^([a-zA-Z]):\\(.*)$/);
+  if (m) return `/${m[1].toLowerCase()}/${m[2].replace(/\\/g, "/")}`;
+  return abs.replace(/\\/g, "/");
+}
+
+// ---------------------------------------------------------------------------
 // Bash pre-flight
 // ---------------------------------------------------------------------------
 
@@ -102,7 +116,9 @@ function cacheMissHint() {
 
 function runScript(scriptName, extraArgs = []) {
   return new Promise((resolveP) => {
-    const scriptPath = join(scriptsDir, scriptName);
+    // Convert to POSIX path so bash can open it on Windows (where
+    // backslashes are interpreted as escape characters).
+    const scriptPath = toPosixPath(join(scriptsDir, scriptName));
     const args = [scriptPath, ...extraArgs];
     const child = spawn("bash", args, {
       stdio: "inherit",

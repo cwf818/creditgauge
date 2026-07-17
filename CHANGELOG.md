@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.1.1 (2026-07-18)
+
+### Fix
+
+- **`npx creditgauge` Windows path** — `runScript` now converts the
+  script path to POSIX (`/c/Users/...`) before passing to bash, so
+  backslashes aren't eaten as escape characters on Windows.
+
 ## v1.1.0 (2026-07-18)
 
 ### Add
