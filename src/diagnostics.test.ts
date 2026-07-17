@@ -676,6 +676,121 @@ describe("diagnostics — fetch error dedupe (v0.6.x+)", () => {
   });
 });
 
+describe("diagnostics — debug subkeys", () => {
+  // Reset before/after so this block doesn't leak into other suites.
+  beforeEach(() => diag.__resetDebugFlagsForTest());
+  afterEach(() => diag.__resetDebugFlagsForTest());
+
+  it("isSubkeyEnabled returns false when env is unset", () => {
+    diag.setDebugFlags({ stdin: true });
+    assert.equal(diag.isSubkeyEnabled("stdin", {}), false);
+  });
+
+  it("isSubkeyEnabled returns false when env is truthy but flag is unset", () => {
+    assert.equal(
+      diag.isSubkeyEnabled("stdin", { CREDITGAUGE_DIAGNOSTICS_ENABLE: "1" }),
+      false,
+    );
+  });
+
+  it("isSubkeyEnabled returns true only when env AND flag are truthy", () => {
+    diag.setDebugFlags({ stdin: true });
+    assert.equal(
+      diag.isSubkeyEnabled("stdin", { CREDITGAUGE_DIAGNOSTICS_ENABLE: "1" }),
+      true,
+    );
+  });
+
+  it("setDebugFlags overwrites prior flags", () => {
+    diag.setDebugFlags({ stdin: true, cache: true });
+    diag.setDebugFlags({ stdin: false });
+    assert.equal(
+      diag.isSubkeyEnabled("cache", { CREDITGAUGE_DIAGNOSTICS_ENABLE: "1" }),
+      false,
+      "cache was cleared by second call",
+    );
+    assert.equal(
+      diag.isSubkeyEnabled("stdin", { CREDITGAUGE_DIAGNOSTICS_ENABLE: "1" }),
+      false,
+      "stdin explicitly false",
+    );
+  });
+
+  it("unknown subkey in flags is silently ignored", () => {
+    diag.setDebugFlags({ typo: true } as never);
+    assert.equal(
+      diag.isSubkeyEnabled("stdin", { CREDITGAUGE_DIAGNOSTICS_ENABLE: "1" }),
+      false,
+      "typo did not leak into a real subkey",
+    );
+  });
+});
+
+describe("diagnostics — end-to-end subkey gate", () => {
+  let sandbox: string;
+  let prevConfigDir: string | undefined;
+  let prevEnable: string | undefined;
+
+  beforeEach(() => {
+    sandbox = mkdtempSync(join(tmpdir(), "creditgauge-subkey-e2e-"));
+    prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = sandbox;
+    prevEnable = process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
+    diag.__resetDebugFlagsForTest();
+  });
+
+  afterEach(() => {
+    diag.__resetDebugFlagsForTest();
+    if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
+    if (prevEnable === undefined) delete process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
+    else process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = prevEnable;
+    rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  function readRows() {
+    const p = diagnosticsPath(null);
+    if (!existsSyncSafe(p)) return [];
+    return readFileSync(p, "utf8")
+      .split("\n")
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l));
+  }
+
+  it("env=1 + subkey=true → row lands via logFsRead", () => {
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
+    diag.setDebugFlags({ cache: true });
+    diag.logFsRead(join(sandbox, "x.json"), "x.fn", undefined, null, "cache");
+    const rows = readRows();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].source, "fs:read");
+    assert.equal(rows[0].fn, "x.fn");
+  });
+
+  it("env=1 + subkey=false → no row even with subkey arg", () => {
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
+    diag.setDebugFlags({ cache: false });
+    diag.logFsRead(join(sandbox, "x.json"), "x.fn", undefined, null, "cache");
+    assert.equal(readRows().length, 0);
+  });
+
+  it("env unset + subkey=true → no row", () => {
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "";
+    diag.__resetDebugFlagsForTest();
+    diag.setDebugFlags({ cache: true });
+    diag.logFsRead(join(sandbox, "x.json"), "x.fn", undefined, null, "cache");
+    assert.equal(readRows().length, 0);
+  });
+
+  it("no subkey arg → falls back to env-only path", () => {
+    process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
+    // No setDebugFlags() — flags empty.
+    diag.logFsRead(join(sandbox, "x.json"), "x.fn");
+    const rows = readRows();
+    assert.equal(rows.length, 1, "legacy env-only path still writes");
+  });
+});
+
 import * as diag from "./diagnostics.ts";
 
 const {

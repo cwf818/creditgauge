@@ -122,7 +122,7 @@ function loadFromDisk(): void {
   // diagnostics.jsonl (passing cwd=null bypasses the global session
   // cwd store so the row lands where a postmortem reader expects to
   // find cross-project IO).
-  logFsRead(loadPath, "cache.loadFromDisk", undefined, null);
+  logFsRead(loadPath, "cache.loadFromDisk", undefined, null, "cache");
   let raw: string;
   try {
     raw = readFileSync(loadPath, "utf8");
@@ -167,7 +167,7 @@ function loadFromDisk(): void {
 function flushToDisk(): void {
   const path = _pathResolver();
   const dir = dirname(path);
-  logFsMkdir(dir, "cache.flushToDisk", null);
+  logFsMkdir(dir, "cache.flushToDisk", null, "cache");
   try {
     mkdirSync(dir, { recursive: true });
   } catch {
@@ -193,7 +193,7 @@ function flushToDisk(): void {
     obj[k] = v;
   }
   const payload = JSON.stringify(obj);
-  logFsWrite(path, "cache.flushToDisk", payload.length, null);
+  logFsWrite(path, "cache.flushToDisk", payload.length, null, "cache");
   try {
     writeFileSync(path, payload);
   } catch {

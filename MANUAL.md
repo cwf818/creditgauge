@@ -831,3 +831,46 @@ On a Quota provider the `usage` branch renders; on a BALANCE provider the `balan
 ```jsonc
 "statuslineTemplate": "standard"
 ```
+
+---
+
+## 20. Debug logging
+
+Opt-in JSONL log of plugin-internal events. Disabled by default;
+opt-in via two-level AND-gate:
+
+1. Set the env var: `export CREDITGAUGE_DIAGNOSTICS_ENABLE=1`
+2. Pick the slices you want in `state/config.json`:
+
+```jsonc
+{
+  "debug": {
+    "stdin": true,
+    "cache": true
+  }
+}
+```
+
+Both must be truthy for a write to land — env alone is not enough
+(this is a v0.10.x change from the v0.8.x default where env alone
+enabled everything).
+
+### Subkey table
+
+| Subkey | Writes enabled |
+|--------|----------------|
+| `stdin` | raw stdin frame per tick |
+| `statusStore` | `state/<hash>/state.json` + `<sessionId>.jsonl` |
+| `config` | `state/config.json` reads |
+| `cache` | `state/cache.json` reads/writes |
+| `statCache` | `state/cache.stat.json` reads/writes |
+| `smokeNormalizeTick` | per-tick full-field snapshot info row |
+| `pluginVersion` | plugin manifest reads |
+| `parse` | `tokenTotalIn` invariant warnings + `m_quote` fetch failures |
+
+Truthy values: `1`, `true`, `yes` (case-insensitive, surrounding
+whitespace stripped). Unknown subkeys are silently dropped.
+
+Log file: `state/<projectHash>/diagnostics.jsonl` (or
+`state/diagnostics.jsonl` for plugin-level rows with no project
+affiliation). 1000-line cap.

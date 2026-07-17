@@ -24,6 +24,7 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, rmSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import * as diagnostics from "./diagnostics.ts";
 import * as statusStore from "./status-store.ts";
 import type { TokenSample, TokenSnapshot } from "./types.ts";
 
@@ -364,9 +365,12 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     statusStore.__resetStatCacheForTest();
 
     process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
+    diagnostics.__resetDebugFlagsForTest();
+    diagnostics.setDebugFlags({ statusStore: true, smokeNormalizeTick: true });
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, startAt: 50_000 }));
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000, startAt: 50_000 }));
     statusStore.processAndSaveTick("D:\\test", validTokens());
+    diagnostics.__resetDebugFlagsForTest();
 
     const diagB = join(tmpB, "plugins", "creditgauge", "state", statusStore.projectHash("D:\\test"), "diagnostics.jsonl");
     assert.ok(existsSync(diagB), `diagnostics.jsonl exists at ${diagB}`);

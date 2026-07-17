@@ -4,6 +4,15 @@
 
 ### Add
 
+- **Diagnostics debug.* subkeys (v0.10.x)** — the
+  `CREDITGAUGE_DIAGNOSTICS_ENABLE=1` env var is now the master
+  switch; per-slice opt-in lives under `state/config.json` →
+  `debug.<subkey>`. **Behavior change**: setting only the env var
+  no longer writes anything — both must be truthy. 8 subkeys:
+  `stdin`, `statusStore`, `config`, `cache`, `statCache`,
+  `smokeNormalizeTick`, `pluginVersion`, `parse`. Spec:
+  docs/superpowers/specs/2026-07-17-debug-subkeys-design.md.
+
 - **New `/creditgauge:reset` slash command** (`commands/reset.md`) — wipes the **current project's** 3 runtime cache files (`cache.json`, `state.json`, `cache.stat.json`) and nothing else. Targets the "statusline shows wrong numbers and I want to cold-start without losing my token-sample history" use case.
   - **`scripts/reset.sh`** — the underlying script. Mirrors `src/status-store.ts:projectHash()` exactly (verified by `scripts/test-reset.sh`'s 4 explicit hash-algorithm assertions against the canonical fixture paths). Supports `--dry-run`, `--help`. Idempotent. Refuses to compute a hash containing `/` or `\` (defensive against an attacker-controlled `$PWD`).
   - **What is INTENTIONALLY preserved** (so users don't lose debugging data): `<sessionId>.jsonl` token samples, `diagnostics.jsonl`, `state/upstream-cmd.{sh,txt}`, `state/config.json`, sibling projects.

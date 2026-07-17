@@ -275,55 +275,29 @@ A reference with every field is at [config.example.json](./config.example.json).
 
 ## Diagnostics log
 
-When the plugin encounters something worth telling you about — a malformed
-config field, a fetcher that returned an unexpected status code, an
-`m_quote` address fetch failure — it can append a JSONL entry to:
+Opt-in JSONL log of plugin-internal events. Gated by two-level AND-gate:
 
+1. Set the env var: `export CREDITGAUGE_DIAGNOSTICS_ENABLE=1`
+2. Pick slices in `state/config.json`:
+   ```json
+   { "debug": { "stdin": true, "cache": true } }
+   ```
+
+Both must be truthy — env alone is no longer enough (v0.10.x behavior
+change). 8 subkeys: `stdin`, `statusStore`, `config`, `cache`,
+`statCache`, `smokeNormalizeTick`, `pluginVersion`, `parse`. See
+[MANUAL.md SS20](./MANUAL.md#20-debug-logging) for the full subkey
+table, truthy-value rules, and file location.
+
+The log file lives at:
 ```
 ~/.claude/plugins/creditgauge/state/<projectHash>/diagnostics.jsonl
 ```
 
-Each line is a structured record:
-
-```jsonl
-{"at":1782576199672,"level":"warning","source":"config","msg":"invalid 'bar.width' value (got abc); using default 8"}
-{"at":1782576200103,"level":"error","source":"api","msg":"MiniMax /v1/token_plan/remains returned non-zero base_resp.status_code (status_code=1008)"}
-{"at":1782576231000,"level":"error","source":"m_quote","msg":"address fetch failed: curl exit 28 (timeout after 5000ms)"}
-```
-
-Use it as a postmortem trail — `tail -f` while debugging, or `grep` by level
-and source when something went wrong yesterday. JSONL is greppable and
-structured (timestamp + level + source + message).
-
-### Opt-in gate
-
-The log is **OFF by default** — set `CREDITGAUGE_DIAGNOSTICS_ENABLE=1` (or
-`true` / `yes`, case-insensitive) in your shell to enable file writes:
-
-```bash
-export CREDITGAUGE_DIAGNOSTICS_ENABLE=1
-```
-
-The rationale: the file lives in your plugins dir and may contain sensitive
-fragments (config paths, error text from upstream libraries). We don't write
-unless you explicitly ask. The stderr noise for append failures stays
-independent of the gate — silent when the write succeeds, present when it
-doesn't.
-
-### Size policy
-
-Capped at the last 1000 entries. Anything older than 1000 events is uninteresting by definition — we just want a tail. Trim is best-effort and runs after every append.
-
-### Wiping the log
-
-`/creditgauge:clean --purge-runtime` walks every
-`state/<projectHash>/` subdir and wipes its `diagnostics.jsonl`,
-`cache.json`, and `<*.jsonl>` token-sample files (per-project layout).
-It also cleans the legacy top-level `state/diagnostics.jsonl`,
-`state/cache.json`, and the legacy `state/token-samples/` tree for users
-upgrading from a pre-per-project-layout install. Top-level
-`upstream-cmd.{sh,txt}` and `config.json` are NEVER purged. Preview first with
-`/creditgauge:clean --purge-runtime --dry-run`.
+Capped at the last 1000 entries. Use it as a postmortem trail —
+`tail -f` while debugging, or `grep` by level and source. Wipe with
+`/creditgauge:reset` (per-project) or `/creditgauge:clean --purge-runtime`
+(all projects).
 
 ## Auth
 

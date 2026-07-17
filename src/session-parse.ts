@@ -163,6 +163,8 @@ export function parseTokenSnapshot(raw: string): TokenSnapshot | null {
       `total_input_tokens=${snap.totals.tokenTotalIn} != input_tokens(${snap.current.tokenIn}) + cache_read_input_tokens(${snap.current.tokenCachedIn})`,
       Date.now(),
       snap.cwd,
+      undefined,
+      "parse",
     );
   }
 

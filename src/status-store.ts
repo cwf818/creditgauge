@@ -31,6 +31,7 @@ import {
 import { dirname, join } from "node:path";
 import {
   append as appendDiag,
+  isSubkeyEnabled,
   logFsList,
   logFsMkdir,
   logFsRead,
@@ -456,7 +457,7 @@ function parseStore(raw: string): Store {
 }
 
 function loadStoreFromPath(path: string, cwd: string): Store | null {
-  logFsRead(path, "status-store.loadFromDisk", undefined, cwd);
+  logFsRead(path, "status-store.loadFromDisk", undefined, cwd, "statusStore");
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
@@ -486,7 +487,7 @@ function loadFromDiskInternal(cwd: string): Store {
 function flushToDiskInternal(cwd: string, store: Store): void {
   const path = _pathResolver(cwd);
   const dir = dirname(path);
-  logFsMkdir(dir, "status-store.flushToDisk", cwd);
+  logFsMkdir(dir, "status-store.flushToDisk", cwd, "statusStore");
   try {
     mkdirSync(dir, { recursive: true });
   } catch {
@@ -494,7 +495,7 @@ function flushToDiskInternal(cwd: string, store: Store): void {
     return;
   }
   const payload = JSON.stringify(store);
-  logFsWrite(path, "status-store.flushToDisk", payload.length, cwd);
+  logFsWrite(path, "status-store.flushToDisk", payload.length, cwd, "statusStore");
   try {
     writeFileSync(path, payload);
   } catch {
@@ -693,11 +694,11 @@ export function appendSample(
 ): void {
   const path = sampleFilePath(cwd, sessionId);
   const dir = dirname(path);
-  logFsMkdir(dir, "status-store.appendSample", cwd);
+  logFsMkdir(dir, "status-store.appendSample", cwd, "statusStore");
   try {
     mkdirSync(dir, { recursive: true });
     const payload = JSON.stringify(sample) + "\n";
-    logFsWrite(path, "status-store.appendSample", payload.length, cwd);
+    logFsWrite(path, "status-store.appendSample", payload.length, cwd, "statusStore");
     appendFileSync(path, payload, "utf8");
   } catch {
     process.stderr.write("creditgauge: token-sample append failed\n");
@@ -746,7 +747,7 @@ export function readSamples(
   modelFilter?: string,
 ): TokenSample[] {
   const path = sampleFilePath(cwd, sessionId);
-  logFsRead(path, "status-store.readSamples", undefined, cwd);
+  logFsRead(path, "status-store.readSamples", undefined, cwd, "statusStore");
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
@@ -774,7 +775,7 @@ export function readSamples(
 export function readAllSamples(sinceMs: number): TokenSample[] {
   const root = stateRoot();
   const out: TokenSample[] = [];
-  logFsList(root, "status-store.readAllSamples");
+  logFsList(root, "status-store.readAllSamples", undefined, "statusStore");
   let projectDirs: string[];
   try {
     projectDirs = readdirSync(root);
@@ -783,7 +784,7 @@ export function readAllSamples(sinceMs: number): TokenSample[] {
   }
   for (const projDir of projectDirs) {
     const projPath = join(root, projDir);
-    logFsStat(projPath, "status-store.readAllSamples");
+    logFsStat(projPath, "status-store.readAllSamples", undefined, "statusStore");
     let st;
     try {
       st = statSync(projPath);
@@ -791,7 +792,7 @@ export function readAllSamples(sinceMs: number): TokenSample[] {
       continue;
     }
     if (!st.isDirectory()) continue;
-    logFsList(projPath, "status-store.readAllSamples");
+    logFsList(projPath, "status-store.readAllSamples", undefined, "statusStore");
     let sessions: string[];
     try {
       sessions = readdirSync(projPath);
@@ -802,7 +803,7 @@ export function readAllSamples(sinceMs: number): TokenSample[] {
       if (!f.endsWith(".jsonl")) continue;
       const path = join(projPath, f);
       if (sinceMs > 0) {
-        logFsStat(path, "status-store.readAllSamples");
+        logFsStat(path, "status-store.readAllSamples", undefined, "statusStore");
         let fst;
         try {
           fst = statSync(path);
@@ -811,7 +812,7 @@ export function readAllSamples(sinceMs: number): TokenSample[] {
         }
         if (fst.mtimeMs < sinceMs) continue;
       }
-      logFsRead(path, "status-store.readAllSamples");
+      logFsRead(path, "status-store.readAllSamples", undefined, undefined, "statusStore");
       let raw: string;
       try {
         raw = readFileSync(path, "utf8");
@@ -918,7 +919,7 @@ function readReplaySamples(
 // filter, same mtime cutoff semantics.
 function readProjectSamples(cwd: string, sinceMs: number): TokenSample[] {
   const dir = join(stateRoot(), projectHash(cwd));
-  logFsList(dir, "status-store.readProjectSamples");
+  logFsList(dir, "status-store.readProjectSamples", undefined, "statusStore");
   const out: TokenSample[] = [];
   let files: string[];
   try {
@@ -930,7 +931,7 @@ function readProjectSamples(cwd: string, sinceMs: number): TokenSample[] {
     if (!f.endsWith(".jsonl")) continue;
     const path = join(dir, f);
     if (sinceMs > 0) {
-      logFsStat(path, "status-store.readProjectSamples");
+      logFsStat(path, "status-store.readProjectSamples", undefined, "statusStore");
       let fst;
       try {
         fst = statSync(path);
@@ -939,7 +940,7 @@ function readProjectSamples(cwd: string, sinceMs: number): TokenSample[] {
       }
       if (fst.mtimeMs < sinceMs) continue;
     }
-    logFsRead(path, "status-store.readProjectSamples");
+    logFsRead(path, "status-store.readProjectSamples", undefined, undefined, "statusStore");
     let raw: string;
     try {
       raw = readFileSync(path, "utf8");
@@ -1043,7 +1044,7 @@ function loadStatCacheFromDisk(): void {
   if (_statCacheLoaded) return;
   _statCacheLoaded = true;
   const path = _statCachePathResolver();
-  logFsRead(path, "status-store.loadStatCache", undefined, null);
+  logFsRead(path, "status-store.loadStatCache", undefined, null, "statCache");
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
@@ -1069,7 +1070,7 @@ function loadStatCacheFromDisk(): void {
 function flushStatCacheToDisk(): void {
   const path = _statCachePathResolver();
   const dir = dirname(path);
-  logFsMkdir(dir, "status-store.flushStatCache", null);
+  logFsMkdir(dir, "status-store.flushStatCache", null, "statCache");
   try {
     mkdirSync(dir, { recursive: true });
   } catch {
@@ -1086,7 +1087,7 @@ function flushStatCacheToDisk(): void {
     obj[k] = v;
   }
   const payload = JSON.stringify(obj);
-  logFsWrite(path, "status-store.flushStatCache", payload.length, null);
+  logFsWrite(path, "status-store.flushStatCache", payload.length, null, "statCache");
   try {
     writeFileSync(path, payload);
   } catch {
@@ -1513,7 +1514,7 @@ function normalizeTick(
   // field computed above so a postmortem can confirm accTokenHitRate /
   // accTokenTotalIn pre-compute math at the source rather than chasing
   // it through the read path.
-  if (process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE === "1") {
+  if (isSubkeyEnabled("smokeNormalizeTick")) {
     appendDiag(
       "info",
       "smoke-normalizeTick",
@@ -1990,7 +1991,7 @@ export function processTick(
       const replay = replayAccInit(scope, replayArgs);
       if (replay) {
         mark(key, replay);
-        if (process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE === "1") {
+        if (isSubkeyEnabled("statusStore")) {
           appendDiag(
             "info",
             "replay-acc-init",

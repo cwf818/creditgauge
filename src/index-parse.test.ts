@@ -11,7 +11,9 @@ import { fileURLToPath } from "node:url";
 import { parseTokenSnapshot } from "./session-parse.ts";
 import {
   __resetDedupeForTest,
+  __resetDebugFlagsForTest,
   diagnosticsPath,
+  setDebugFlags,
 } from "./diagnostics.ts";
 
 // Real-shape fixture (captured 2026-06-29). Loaded once at module top
@@ -234,6 +236,7 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
     process.env.CLAUDE_CONFIG_DIR = sandbox;
     process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
     __resetDedupeForTest();
+    __resetDebugFlagsForTest();
   });
 
   afterEach(() => {
@@ -260,6 +263,7 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
   });
 
   it("violation: totals=200, in=100, cacheRead=50 → warn (200 != 100+50)", () => {
+    setDebugFlags({ parse: true });
     const cwd = "D:\\invariant-test";
     const raw = JSON.stringify({
       session_id: "sess-1",

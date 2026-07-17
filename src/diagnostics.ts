@@ -214,6 +214,58 @@ export function isEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return s === "1" || s === "true" || s === "yes";
 }
 
+// ----- Debug subkeys (v0.10.x) -----
+//
+// Per-subsystem opt-in for `append()` / `logFs*` writes. AND-gated
+// with the env var (which remains the master switch); see
+// docs/superpowers/specs/2026-07-17-debug-subkeys-design.md.
+//
+// The 8 subkeys map to coherent slices of write sites — see the
+// Subkey Set table in the spec for the full mapping.
+export type Subkey =
+  | "stdin"
+  | "statusStore"
+  | "config"
+  | "cache"
+  | "statCache"
+  | "smokeNormalizeTick"
+  | "pluginVersion"
+  | "parse";
+
+// Process-level mutable singleton. Reset by `__resetDebugFlagsForTest`.
+// Each cc tick is a fresh child process, so this is written at most
+// once per tick from `index.ts:main()` after `loadConfig()`.
+const _debugFlags: Partial<Record<Subkey, boolean>> = {};
+
+export function setDebugFlags(flags: Partial<Record<Subkey, boolean>>): void {
+  // Replace, don't merge — the caller may want to clear stale
+  // subkeys by passing a partial map that omits them. Unknown keys
+  // are silently dropped (no throw); the Partial<Record<Subkey,
+  // boolean>> type guards the rest at compile time.
+  for (const k of Object.keys(_debugFlags) as Subkey[]) {
+    delete _debugFlags[k];
+  }
+  for (const k of Object.keys(flags) as Subkey[]) {
+    _debugFlags[k] = flags[k] === true;
+  }
+}
+
+export function __resetDebugFlagsForTest(): void {
+  for (const k of Object.keys(_debugFlags) as Subkey[]) {
+    delete _debugFlags[k];
+  }
+}
+
+// True iff (env truthy) AND (flags[subkey] === true). Unknown subkeys
+// always return false — the caller should typecheck.
+export function isSubkeyEnabled(
+  subkey: Subkey,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (!isEnabled(env)) return false;
+  return _debugFlags[subkey] === true;
+}
+
 // ----- Dedupe window -----
 
 // In-process dedupe map: when fetch is failing continuously, the
@@ -297,8 +349,9 @@ export function append(
   now: number = Date.now(),
   cwd?: string | null,
   fn?: string,
+  subkey?: Subkey,
 ): void {
-  if (!isEnabled()) return;
+  if (subkey !== undefined ? !isSubkeyEnabled(subkey) : !isEnabled()) return;
   if (!shouldEmit(source, msg, now)) return;
   // Resolve cwd: three states matter here:
   //   1. cwd === undefined → caller did not pass anything. Fall back
@@ -434,27 +487,27 @@ function ioMsg(path: string, bytes?: number): string {
 // `append` reads from the per-tick session cwd store (see
 // `setSessionCwd`) so cwd-unaware callers (cache.ts reading the
 // shared top-level cache.json) still get their audit rows stamped.
-export function logFsRead(path: string, fn?: string, bytes?: number, cwd?: string | null): void {
-  if (!isEnabled()) return;
+export function logFsRead(path: string, fn?: string, bytes?: number, cwd?: string | null, subkey?: Subkey): void {
+  if (subkey !== undefined ? !isSubkeyEnabled(subkey) : !isEnabled()) return;
   append("info", IO_SOURCE.read, ioMsg(path, bytes), Date.now(), cwd, fn);
 }
 
 // Record a file write (writeFileSync / appendFileSync). `bytes` is
 // the payload size written when known.
-export function logFsWrite(path: string, fn?: string, bytes?: number, cwd?: string | null): void {
-  if (!isEnabled()) return;
+export function logFsWrite(path: string, fn?: string, bytes?: number, cwd?: string | null, subkey?: Subkey): void {
+  if (subkey !== undefined ? !isSubkeyEnabled(subkey) : !isEnabled()) return;
   append("info", IO_SOURCE.write, ioMsg(path, bytes), Date.now(), cwd, fn);
 }
 
 // Record a directory listing (readdirSync).
-export function logFsList(path: string, fn?: string, cwd?: string | null): void {
-  if (!isEnabled()) return;
+export function logFsList(path: string, fn?: string, cwd?: string | null, subkey?: Subkey): void {
+  if (subkey !== undefined ? !isSubkeyEnabled(subkey) : !isEnabled()) return;
   append("info", IO_SOURCE.list, ioMsg(path), Date.now(), cwd, fn);
 }
 
 // Record a stat() call.
-export function logFsStat(path: string, fn?: string, cwd?: string | null): void {
-  if (!isEnabled()) return;
+export function logFsStat(path: string, fn?: string, cwd?: string | null, subkey?: Subkey): void {
+  if (subkey !== undefined ? !isSubkeyEnabled(subkey) : !isEnabled()) return;
   append("info", IO_SOURCE.stat, ioMsg(path), Date.now(), cwd, fn);
 }
 
@@ -463,8 +516,8 @@ export function logFsStat(path: string, fn?: string, cwd?: string | null): void 
 // appendSample, status-store.ts flushToDisk), so each is one
 // audit row even though the actual filesystem call may be a
 // no-op (dir already exists).
-export function logFsMkdir(path: string, fn?: string, cwd?: string | null): void {
-  if (!isEnabled()) return;
+export function logFsMkdir(path: string, fn?: string, cwd?: string | null, subkey?: Subkey): void {
+  if (subkey !== undefined ? !isSubkeyEnabled(subkey) : !isEnabled()) return;
   append("info", IO_SOURCE.mkdir, ioMsg(path), Date.now(), cwd, fn);
 }
 

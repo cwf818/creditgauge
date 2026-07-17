@@ -5144,6 +5144,9 @@ function fetchQuoteFromAddress(
       "m_quote",
       `address fetch failed (no body): ${truncateForLog(address)}`,
       ctx.nowMs,
+      undefined,
+      undefined,
+      "parse",
     );
     return null;
   }
@@ -5162,6 +5165,9 @@ function fetchQuoteFromAddress(
       "m_quote",
       `address fetch returned non-JSON body: ${truncateForLog(address)}`,
       ctx.nowMs,
+      undefined,
+      undefined,
+      "parse",
     );
     return null;
   }
@@ -5172,6 +5178,9 @@ function fetchQuoteFromAddress(
       "m_quote",
       `address fetch OK but quote miss: ${truncateForLog(address)} (quote=${quote})`,
       ctx.nowMs,
+      undefined,
+      undefined,
+      "parse",
     );
     return null;
   }

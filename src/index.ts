@@ -253,7 +253,7 @@ async function main(): Promise<void> {
   // `state/<projectHash>/diagnostics.jsonl` rather than the legacy
   // top-level file — keeping concurrent Claude Code instances on
   // different projects from racing on the same write stream.
-  diagnostics.append("info", "stdin", stdinRaw, Date.now(), tokens?.cwd ?? null);
+  diagnostics.append("info", "stdin", stdinRaw, Date.now(), tokens?.cwd ?? null, undefined, "stdin");
 
   const baseUrl = process.env.ANTHROPIC_BASE_URL;
   const upstream = UPSTREAM;
@@ -338,6 +338,10 @@ process.on("uncaughtException", (err) => {
 // fall back to DEFAULT_CONFIG (with a stderr line) — never blocks
 // startup on a missing file.
 await loadConfig();
+// v0.10.x — wire the diagnostics subkey gate. Called once per cc
+// tick after loadConfig() so isSubkeyEnabled() can AND-gate against
+// the master env switch.
+diagnostics.setDebugFlags(configStore.get().debug ?? {});
 // v0.2.17: load the plugin version from .claude-plugin/plugin.json
 // and inject it into the configStore so the m_version display module
 // can render it. Failure to find/parse the manifest is non-fatal —
@@ -356,7 +360,7 @@ function loadPluginVersion(): void {
     join(here, ".claude-plugin", "plugin.json"),
   ];
   for (const p of candidates) {
-    diagnostics.logFsRead(p, "index.loadPluginVersion");
+    diagnostics.logFsRead(p, "index.loadPluginVersion", undefined, undefined, "pluginVersion");
     if (!existsSync(p)) continue;
     try {
       const raw = readFileSync(p, "utf8");

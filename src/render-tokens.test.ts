@@ -679,6 +679,8 @@ describe("renderTemplate — m_quote fetch-failure diagnostics (v0.8.20+)", () =
     process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
     diagnostics.setSessionCwd("D:\\test");
     diagnostics.__resetDedupeForTest();
+    diagnostics.__resetDebugFlagsForTest();
+    diagnostics.setDebugFlags({ parse: true });
   });
 
   // Helper: read all JSONL rows from the project's diagnostics

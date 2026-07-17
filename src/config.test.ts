@@ -171,3 +171,55 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     assert.deepEqual(cfg.statuslineTemplate, ["m_template|quota|type:quota", "m_template|balance|type:balance"]);
   });
 });
+
+describe("Config.debug parser", () => {
+  let prevEnable: string | undefined;
+
+  beforeEach(() => {
+    prevEnable = process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
+  });
+
+  afterEach(() => {
+    if (prevEnable === undefined) delete process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE;
+    else process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = prevEnable;
+  });
+
+  it("missing debug → {}", async () => {
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ display: "used" }));
+    const cfg = await loadConfig();
+    assert.deepEqual(cfg.debug, {});
+  });
+
+  it("accepts 1 / true / yes for known subkeys", async () => {
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({
+        debug: { stdin: "1", cache: "true", statusStore: "yes", parse: true },
+      }),
+    );
+    const cfg = await loadConfig();
+    assert.equal(cfg.debug.stdin, true);
+    assert.equal(cfg.debug.cache, true);
+    assert.equal(cfg.debug.statusStore, true);
+    assert.equal(cfg.debug.parse, true);
+  });
+
+  it("unknown subkeys silently ignored", async () => {
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ debug: { stdin: true, typo: true } }),
+    );
+    const cfg = await loadConfig();
+    assert.equal(cfg.debug.stdin, true);
+    assert.equal((cfg.debug as Record<string, unknown>).typo, undefined);
+  });
+
+  it("non-object debug falls back to {}", async () => {
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ debug: "not an object" }),
+    );
+    const cfg = await loadConfig();
+    assert.deepEqual(cfg.debug, {});
+  });
+});

@@ -226,6 +226,42 @@ const DEFAULT_COUNTDOWN: Countdown = {
 };
 
 
+// v0.10.x — fine-grained diagnostics opt-in. AND-gated with the
+// CREDITGAUGE_DIAGNOSTICS_ENABLE env var (see diagnostics.ts:
+// isSubkeyEnabled). Missing or `false` is equivalent at the gate;
+// truthy strings ("1"/"true"/"yes", case-insensitive) and boolean
+// `true` are accepted. Unknown keys are silently dropped.
+function parseDebugFlags(
+  raw: unknown,
+): Partial<Record<import("./diagnostics.ts").Subkey, boolean>> {
+  const validKeys = new Set<import("./diagnostics.ts").Subkey>([
+    "stdin",
+    "statusStore",
+    "config",
+    "cache",
+    "statCache",
+    "smokeNormalizeTick",
+    "pluginVersion",
+    "parse",
+  ]);
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const out: Partial<Record<import("./diagnostics.ts").Subkey, boolean>> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!validKeys.has(k as import("./diagnostics.ts").Subkey)) continue;
+    if (v === true) {
+      out[k as import("./diagnostics.ts").Subkey] = true;
+    } else if (typeof v === "string") {
+      const s = v.trim().toLowerCase();
+      if (s === "1" || s === "true" || s === "yes") {
+        out[k as import("./diagnostics.ts").Subkey] = true;
+      }
+      // else: leave unset (falsy)
+    }
+    // else (number, object, null, undefined): leave unset
+  }
+  return out;
+}
+
 // Declarative provider list. Each entry describes URL matching,
 // rendering overrides, interval/currency mappings, and credentials.
 // Acquisition and parsing are owned by the dynamically imported plugin
@@ -402,6 +438,12 @@ const DEFAULT_CONFIG: {
   // URL you're willing to skip TLS validation for is a config-
   // level decision, not a shell-environment one.
   quoteInsecureTls: boolean;
+  // v0.10.x — fine-grained diagnostics opt-in. AND-gated with the
+  // CREDITGAUGE_DIAGNOSTICS_ENABLE env var. Missing or `false` is
+  // equivalent at the gate; truthy strings ("1"/"true"/"yes",
+  // case-insensitive) and boolean `true` are accepted. Unknown keys
+  // are silently dropped.
+  debug: Partial<Record<import("./diagnostics.ts").Subkey, boolean>>;
 } = {
   cacheTtlMs: 60_000,
   fetchTimeoutMs: 5_000,
@@ -485,6 +527,12 @@ const DEFAULT_CONFIG: {
   version: "",
   providers: DEFAULT_PROVIDERS,
   quoteInsecureTls: false,
+  // v0.10.x — fine-grained diagnostics opt-in. AND-gated with the
+  // CREDITGAUGE_DIAGNOSTICS_ENABLE env var. Missing or `false` is
+  // equivalent at the gate; truthy strings ("1"/"true"/"yes",
+  // case-insensitive) and boolean `true` are accepted. Unknown keys
+  // are silently dropped.
+  debug: {} as Partial<Record<import("./diagnostics.ts").Subkey, boolean>>,
 };
 
 export type Config = typeof DEFAULT_CONFIG;
@@ -532,7 +580,7 @@ export async function loadConfig(): Promise<Config> {
 
   // Cheap existence probe — the common case is no config file, no need
   // to even open the file descriptor.
-  diagnostics.logFsRead(path, "config.loadConfig");
+  diagnostics.logFsRead(path, "config.loadConfig", undefined, undefined, "config");
   if (!existsSync(path)) {
     _current = DEFAULT_CONFIG;
     return _current;
@@ -562,7 +610,10 @@ export async function loadConfig(): Promise<Config> {
     return _current;
   }
 
+  // Merge user config on top of DEFAULT_CONFIG, then apply
+  // fine-grained debug flags on top of the merged result.
   _current = mergeConfig(parsed as Record<string, unknown>);
+  _current.debug = parseDebugFlags((parsed as Record<string, unknown>).debug);
   return _current;
 }
 

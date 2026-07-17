@@ -372,6 +372,9 @@ export async function preFetchQuotes(
         "m_quote",
         `address fetch failed (curl exit): ${truncateForLog(target.address)} freq=${target.freq.raw} (reason=${result.reason})`,
         nowMs,
+        undefined,
+        undefined,
+        "parse",
       );
     } else {
       out.set(target.address, stale.body);
