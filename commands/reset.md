@@ -1,5 +1,5 @@
 ---
-description: Wipe runtime cache files for the current project (cache.json, state.json, cache.stat.json)
+description: Wipe the 3 cache files for the current project only (cache.json, state.json, cache.stat.json); preserves diagnostics + token-sample history
 argument-hint: "[--dry-run]"
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/reset.sh:*)"]
 ---
@@ -9,11 +9,10 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/reset.sh:*)"]
 Targets 3 runtime cache files for the **current project only** (other
 projects' caches are never touched):
 
-- `cache.json` — per-project provider data cache (60s TTL on-disk
-  shadow; v0.4.x Per-Project Layout)
+- `cache.json` — per-project provider data cache (60s TTL on-disk shadow)
 - `state.json` — per-project tick / acc / prev-tick state
-- `cache.stat.json` — cross-project sum/avg stat cache; regenerated
-  on next read (TTL=300s gate either way)
+- `cache.stat.json` — cross-project sum/avg stat cache (regenerated
+  on next read; 300s TTL gate either way)
 
 When to use this:
 
@@ -28,17 +27,17 @@ What is INTENTIONALLY preserved:
 
 - `state/upstream-cmd.{sh,txt}` and `state/config.json` — install /
   user state. Wiping these would break future uninstalls.
-- `<sessionId>.jsonl` — append-only token-sample history (debugging
-  data; `m_sum*` modules read from this).
+- `<sessionId>.jsonl` — append-only token-sample history (the data
+  source for `m_sum*` modules).
 - `diagnostics.jsonl` — append-only warning log.
 - `<otherProjectHash>/**` — never touched.
+
+Pass `--dry-run` to preview what would be removed without changing
+anything.
 
 Use `clean.sh --purge-runtime` to also wipe diagnostics + .jsonl, or
 `uninstall.sh` to wipe everything. `:reset` is the targeted version
 that keeps your history.
-
-Pass `--dry-run` to preview what would be removed without changing
-anything.
 
 Execute the reset script with whatever arguments were passed:
 

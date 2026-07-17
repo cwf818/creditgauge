@@ -7,7 +7,8 @@
     "./commands/install.md",
     "./commands/uninstall.md",
     "./commands/clean.md",
-    "./commands/clean-cache.md"
+    "./commands/clean-cache.md",
+    "./commands/reset.md"
   ],
   "keywords": [
     "statusline",
