@@ -3119,7 +3119,7 @@ m_quota: Object.assign(
   // pct still renders as a 0-value bar (the user's "0 直接显示"
   // rule preserves the natural 0-value render path).
   m_windowContext: (c) =>
-    c.contextWindow ? formatOneChunk(c.contextWindow, c.mode, cfg().bar.width, c.stale) : placeholderBare("m_windowContext", c),
+    c.contextWindow ? formatOneChunk(c.contextWindow, c.mode, cfg().bar.width, false) : placeholderBare("m_windowContext", c),
   // v0.8.16 — TTL gauge modules. Each picks a TTL-aware entry
   // from its respective cache (response cache for m_cacheTtlStatus,
   // stat cache for m_statTtlStatus), computes remainingFraction =
@@ -3210,7 +3210,7 @@ m_quota: Object.assign(
     const m = getMemUsage();
     if (!m || m.total <= 0) return placeholderBare("m_windowMemUsage", c);
     const pct = (m.used / m.total) * 100;
-    return formatOneChunk({ pct } as Window, c.mode, cfg().bar.width, c.stale);
+    return formatOneChunk({ pct } as Window, c.mode, cfg().bar.width, false);
   },
 };
 
@@ -6828,7 +6828,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (color) return formatOneChunkColored(ctx.contextWindow, mode, color);
     // v0.6.0+: stale-aware — see m_window5h/7d path. :color| above
     // always wins, so explicit user color stays sticky even on stale.
-    return formatOneChunk(ctx.contextWindow, mode, cfg().bar.width, ctx.stale);
+    return formatOneChunk(ctx.contextWindow, mode, cfg().bar.width, false);
   },
   // v0.8.16 — TTL gauge inline-args renderer. Mirror of the bare
   // MODULES entry but with the user's |color|<c> override applied
@@ -6903,7 +6903,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const color = params.color as string | undefined;
     const window: Window = { pct } as Window;
     if (color) return formatOneChunkColored(window, mode, color);
-    return formatOneChunk(window, mode, cfg().bar.width, ctx.stale);
+    return formatOneChunk(window, mode, cfg().bar.width, false);
   },
   // v0.4.0+ — expand a registered lineTemplates fragment. The
   // loader strips any `m_template:` tokens from lineTemplates

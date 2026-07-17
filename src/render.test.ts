@@ -1137,12 +1137,11 @@ describe("m_window5h/7d — stale coloring (v0.6.0+)", () => {
     }
   });
 
-  it("m_windowContext (synthetic context-window bar) also goes gray on stale", () => {
-    // The m_windowContext module goes through the same formatOneChunk
-    // path, so the bar-blocks-stale-grayscale extension covers it
-    // automatically — but we pin the behavior here so a future
-    // refactor of the context-window path doesn't quietly break
-    // the contract. v0.6.0+.
+  it("m_windowContext (synthetic context-window bar) stays colored even when provider data is stale", () => {
+    // m_windowContext reads from live stdin (contextWindow.pct), NOT
+    // from the provider fetch. Its data is always fresh, so the global
+    // `stale` flag (which signals the provider fetch failed) must NOT
+    // discolor it. v0.9.x+.
     __resetForTest({
       statuslineTemplate:["m_windowContext"],
       timeFormat: { minUnit: "s", maxUnitCount: 4 },
@@ -1154,13 +1153,16 @@ describe("m_window5h/7d — stale coloring (v0.6.0+)", () => {
         contextWindow: { pct: 75, resetAt: null },
         ageMs: 5 * 60_000, stale: true, version: "",
       });
+      // 75% used → band color (NOT STALE_COLOR). With default
+      // percentBands [20,40,60,80], 75 is index 3 → orange, not gray.
       assert.ok(
-        stale.includes(`${STALE_COLOR}75%`),
-        `stale m_windowContext should wrap '75%' in STALE_COLOR: ${stale}`,
+        !stale.includes(`${STALE_COLOR}75%`),
+        `stale m_windowContext should NOT wrap '75%' in STALE_COLOR: ${stale}`,
       );
+      // Bar chunks should also NOT be STALE_COLOR.
       assert.ok(
-        stale.includes(`${STALE_COLOR}▓`),
-        `stale m_windowContext bar chunks should be STALE_COLOR: ${stale}`,
+        !stale.includes(`${STALE_COLOR}▓`),
+        `stale m_windowContext bar should NOT be STALE_COLOR: ${stale}`,
       );
     } finally {
       __resetForTest();
