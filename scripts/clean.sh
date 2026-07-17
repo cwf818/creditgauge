@@ -14,19 +14,21 @@
 # User-named backups (e.g. `settings.json.bak-pre-v0.1.8`) are NOT touched —
 # only the script-generated `.bak.YYYYMMDDTHHMMSS` pattern.
 #
-# Optionally purges the diagnostics log, per-project cache.json, and
-# per-project token-samples (`--purge-runtime`). These are not backups,
-# but they accumulate over weeks of use and benefit from the same
-# "housekeeping" command.
+# Optionally purges the diagnostics log, per-project cache.json, per-project
+# token-samples, and the cross-project cache.stat.json (`--purge-runtime`).
+# These are not backups, but they accumulate over weeks of use and benefit
+# from the same "housekeeping" command.
 #
 # Per-Project Layout (v0.4.x+): with `--purge-runtime`, this script
 # walks every `<projectHash>/` subdirectory under state/ and removes
 # the cache.json, diagnostics.jsonl, and `<sessionId>.jsonl` files
-# inside each.
+# inside each. It also removes the top-level state/cache.stat.json
+# (the cross-project sum/avg aggregation cache; regenerated on the
+# next m_sum*/m_stat* read with a 300s throttle).
 #
-# `state/upstream-cmd.{sh,txt}` are NEVER purged here — they're
-# managed by install/uninstall, not by per-tick IO, and wiping them
-# would break future uninstalls.
+# `state/upstream-cmd.{sh,txt}` and `state/config.json` are NEVER
+# purged here — they're managed by install/uninstall, not by per-tick
+# IO, and wiping them would break future uninstalls.
 #
 # Idempotent: if there is 0 or 1 backup per file, nothing happens.
 # Local-only. Never reads ANTHROPIC_AUTH_TOKEN. No network access.
@@ -37,7 +39,12 @@
 #   clean.sh --dry-run        # print what would be removed, change nothing
 #   clean.sh --purge-runtime  # also wipe state/<projectHash>/{cache.json,
 #                             # diagnostics.jsonl, <sessionId>.jsonl}
+#                             # + state/cache.stat.json
 #   clean.sh -h | --help
+#
+# For the targeted "wipe THIS project's cache.json + state.json + cache.stat.json"
+# use case (without touching history/diagnostics/other projects), see reset.sh
+# (called via /creditgauge:reset).
 #
 # Portable: Linux, macOS, Git Bash on Windows.
 
@@ -175,6 +182,18 @@ if [ "$PURGE_RUNTIME" = 1 ]; then
         fi
       done
       shopt -u nullglob
+
+      # Top-level state/cache.stat.json — cross-project sum/avg stat
+      # cache, regenerated on next read (TTL=300s). It's not under any
+      # <projectHash>/ subdir so it didn't get hit by the loop above.
+      for f in "${STATE_DIR}/cache.stat.json"; do
+        if [ -e "$f" ]; then
+          echo "  rm $f"
+          if [ "$DRY_RUN" = 0 ]; then
+            rm -f "$f"
+          fi
+        fi
+      done
     fi
   fi
 fi

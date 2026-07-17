@@ -22,6 +22,7 @@
     "scripts:test": "bash scripts/test-edit-settings.sh",
     "scripts:test:install": "bash scripts/test-install.sh",
     "scripts:test:clean-cache": "bash scripts/test-clean-cache.sh",
+    "scripts:test:reset": "bash scripts/test-reset.sh",
     "scripts:test:rename": "bash scripts/test-rename-consistency.sh",
     "dev:uninstall": "bash scripts/dev-uninstall.sh",
     "dev:uninstall:dry": "bash scripts/dev-uninstall.sh --dry-run"

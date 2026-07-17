@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Add
+
+- **New `/creditgauge:reset` slash command** (`commands/reset.md`) — wipes the **current project's** 3 runtime cache files (`cache.json`, `state.json`, `cache.stat.json`) and nothing else. Targets the "statusline shows wrong numbers and I want to cold-start without losing my token-sample history" use case.
+  - **`scripts/reset.sh`** — the underlying script. Mirrors `src/status-store.ts:projectHash()` exactly (verified by `scripts/test-reset.sh`'s 4 explicit hash-algorithm assertions against the canonical fixture paths). Supports `--dry-run`, `--help`. Idempotent. Refuses to compute a hash containing `/` or `\` (defensive against an attacker-controlled `$PWD`).
+  - **What is INTENTIONALLY preserved** (so users don't lose debugging data): `<sessionId>.jsonl` token samples, `diagnostics.jsonl`, `state/upstream-cmd.{sh,txt}`, `state/config.json`, sibling projects.
+  - **`scripts/test-reset.sh`** — 31 assertions: dry-run announces correct projectHash + plans the 3 files + touches no decoy entries; actual run removes only those 3; preserves all must-keep files; sibling-project cache.json/state.json untouched; idempotent on re-run; missing-state-dir and missing-hash-subdir both print "nothing to reset"; unknown arg exits 2; help text prints the header.
+  - **`scripts/clean.sh --purge-runtime`** — now also removes the top-level `state/cache.stat.json` (was previously untouched). `:reset` is the targeted per-project version; `:clean --purge-runtime` is the bigger hammer that also drops `<sessionId>.jsonl` + `diagnostics.jsonl`.
+
+### Docs
+
+- `commands/clean.md` — `--purge-runtime` section now mentions `cache.stat.json` and cross-references `:reset` as the targeted alternative.
+
 ## v1.0.0
 
 ### Breaking

@@ -39,6 +39,11 @@ directory itself is removed (via `rmdir` — fails safely on non-empty
 dirs). Project dirs that still contain non-runtime files are left in
 place.
 
+The cross-project `state/cache.stat.json` (the sum/avg aggregation
+cache; regenerated on the next `m_sum*`/`m_stat*` read with a 300s
+throttle) is also removed. It lives at the state root, not under any
+projectHash subdir, so the per-project walk above doesn't catch it.
+
 `state/upstream-cmd.{sh,txt}` and `state/config.json` are NEVER
 purged — they're managed by install/uninstall, not by per-tick IO,
 and wiping them would break future uninstalls.
@@ -52,6 +57,11 @@ this script as its final step (without `--purge-runtime`), so explicit
 cleanup of backups is usually unnecessary after a fresh uninstall.
 `--purge-runtime` is opt-in because the runtime state contains your
 diagnostics history — only wipe when you actually want it gone.
+
+For a **targeted reset of just the current project's 3 cache files**
+(`cache.json` + `state.json` + `cache.stat.json`) — keeping
+diagnostics + token-sample history — use `/creditgauge:reset`
+instead. `:clean --purge-runtime` is the bigger hammer.
 
 Execute the clean script with whatever arguments were passed to this
 command:
