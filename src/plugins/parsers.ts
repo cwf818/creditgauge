@@ -161,6 +161,10 @@ export function ensureQuota(value: unknown): Quota | null {
 // and is the ONLY place the canonical `Balance` shape is produced.
 //
 // Returns null when `value` is not a record.
+//
+// v2026.07.17+ — `minValue` is no longer consulted by the renderer
+// for color (per-entry 5-band drives hue). The field is still
+// computed here for downstream plugins / alerting / introspection.
 export function ensureBalance(value: unknown): Balance | null {
   if (!value || typeof value !== "object") return null;
   const partial = value as { isAvailable?: boolean; entries?: BalanceEntry[] };

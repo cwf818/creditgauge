@@ -211,6 +211,8 @@ export default {
 };
 ```
 
+Note: `minValue` is optional — if you don't provide one, `ensureBalance` will compute it from your entries. As of v2026.07.17+ the renderer no longer reads this field for color; it is retained as a worst-case indicator for plugins/alerting.
+
 ---
 
 ## 5. Registration in `config.json`
@@ -412,7 +414,7 @@ type BalanceEntry = {
 type Balance = {
   isAvailable: boolean;
   entries:     BalanceEntry[];   // joined by " · " in the renderer
-  minValue:    number | null;    // high-water mark for color banding
+  minValue:    number | null;    // host-computed worst-case entry value; renderer no longer uses for color (v2026.07.17+)
 };
 ```
 

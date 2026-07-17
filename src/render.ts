@@ -1135,14 +1135,25 @@ type BalanceLike = {
 //
 // v0.3.3+ `override` parameter: when supplied, replaces the band-based
 // `colorForBalance` choice (used by the inline-args m_balance path).
-function formatBalanceEntriesColored(b: BalanceLike, override?: string): string {
+//
+// v2026.07.17+ — per-entry 5-band color: each entry is rendered as its
+// own `<color><text>${RESET}` block, joined by ` · `. Color follows
+// each entry's totalBalance through colorForBalance, NOT minValue.
+// This means a multi-currency account reflects each currency's own
+// urgency (CNY 110 → BRIGHT_GREEN, USD 3.5 → RED, both visible
+// independently). `override` (when supplied) is applied to every
+// entry — preserves the "force whole account one color" semantic
+// while mechanically operating per-entry.
+export function formatBalanceEntriesColored(b: BalanceLike, override?: string): string {
   if (!b.isAvailable || b.entries.length === 0 || b.minValue == null) {
     return "";
   }
-  const chunks = b.entries.map((e) => formatBalanceChunk(e.currency, e.totalBalance));
-  // Color follows the LOWEST entry — most urgent currency drives the hue.
-  const color = override ?? colorForBalance(b.minValue);
-  return `${color}${chunks.join(" · ")}${RESET}`;
+  return b.entries
+    .map((e) => {
+      const color = override ?? colorForBalance(e.totalBalance);
+      return `${color}${formatBalanceChunk(e.currency, e.totalBalance)}${RESET}`;
+    })
+    .join(" · ");
 }
 
 // ----- lineTemplate / module renderer (v0.2.17) -------------------------

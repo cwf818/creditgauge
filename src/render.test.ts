@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   colorFor,
   colorForBalance,
+  formatBalanceEntriesColored,
   formatResetSuffix,
   formatStaleSuffix,
   pctBar,
@@ -23,6 +24,7 @@ const DARK_GREEN = "\x1b[38;5;29m";
 const YELLOW = "\x1b[38;5;220m";
 const ORANGE = "\x1b[38;5;208m";
 const RED = "\x1b[38;5;196m";
+const CYAN = "\x1b[36m";
 const STALE_COLOR = "\x1b[90m";
 // Mirror the new colors.broken default from src/config.ts so the
 // tests pin the shipped values.
@@ -888,10 +890,11 @@ describe("renderBalanceLine — multi-currency joined by ·", () => {
   });
   afterEach(() => __resetForTest());
 
-  it("renders all entries, joined by ' · ', single color from lowest", () => {
-    // CNY 110 (BRIGHT_GREEN) + USD 3.5 (RED). minValue=3.5 → RED band.
-    // Each entry's currency code is mapped to its display symbol via
-    // the renderer-owned `currencyLabel(code)` helper (CNY → ￥, USD → $).
+  it("renders all entries, joined by ' · ', each entry in its own band color", () => {
+    // v2026.07.17+ — each entry is its own SGR block; color follows
+    // each entry's totalBalance through colorForBalance, NOT the
+    // minValue across all entries. CNY 110 → BRIGHT_GREEN band;
+    // USD 3.5 → RED band; both rendered as independent chunks.
     const line = renderBalanceLine({
       isAvailable: true,
       entries: [
@@ -901,11 +904,11 @@ describe("renderBalanceLine — multi-currency joined by ·", () => {
       minValue: 3.5,
     });
     assert.equal(strip(line), "Balance: ￥110 · $3.5");
-    assert.ok(line.startsWith(`Balance: ${RED}`));
-    assert.ok(line.endsWith(RESET));
-    // The colored chunk wraps both chunks together (single SGR block).
-    const colored = line.slice("Balance: ".length, -RESET.length);
-    assert.equal(colored, `${RED}￥110 · $3.5`);
+    // Each entry wrapped in its own color + RESET.
+    assert.ok(line.includes(`${BRIGHT_GREEN}￥110${RESET}`), `expected CNY chunk in BRIGHT_GREEN, got: ${line}`);
+    assert.ok(line.includes(`${RED}$3.5${RESET}`), `expected USD chunk in RED, got: ${line}`);
+    // Joined by ' · ' between chunks.
+    assert.ok(line.includes(`${RESET} · ${RED}`), `expected ' · ' separator between chunks, got: ${line}`);
   });
 
   it("integer formatting per-chunk", () => {
@@ -918,6 +921,74 @@ describe("renderBalanceLine — multi-currency joined by ·", () => {
       minValue: 100,
     });
     assert.equal(strip(line), "Balance: ￥100 · $200.5");
+    // v2026.07.17+: each chunk is its own SGR block.
+    // Both CNY 100 and USD 200.5 are >= 50, so both land in the top band
+    // (BRIGHT_GREEN) under default balanceBands=[5,10,20,50].
+    assert.ok(
+      line.includes(`${BRIGHT_GREEN}￥100${RESET}`),
+      `expected CNY chunk in BRIGHT_GREEN, got: ${line}`,
+    );
+    assert.ok(
+      line.includes(`${BRIGHT_GREEN}$200.5${RESET}`),
+      `expected USD chunk in BRIGHT_GREEN, got: ${line}`,
+    );
+  });
+
+  it("override |color|cyan forces every entry to cyan, multi-currency", () => {
+    // v2026.07.17+: |color| inline arg applies to every entry. Same
+    // "force whole account one color" semantic as v0.9.x, but
+    // mechanically it's per-entry now (each chunk wrapped in cyan +
+    // RESET). Exercised directly via formatBalanceEntriesColored
+    // because the test-file `renderBalanceLine` shim doesn't accept
+    // an override (it goes through renderProviderLine which reads
+    // override from `m_balance|color:…` in the lineTemplate; the
+    // raw function lets us pin the override behavior without
+    // standing up another template path).
+    const line = formatBalanceEntriesColored(
+      {
+        isAvailable: true,
+        entries: [
+          { currency: "CNY", totalBalance: 110 },
+          { currency: "USD", totalBalance: 3.5 },
+        ],
+        minValue: 3.5,
+      },
+      CYAN,
+    );
+    assert.equal(strip(line), "￥110 · $3.5");
+    assert.ok(line.includes(`${CYAN}￥110${RESET}`), `expected CNY chunk in CYAN, got: ${line}`);
+    assert.ok(line.includes(`${CYAN}$3.5${RESET}`), `expected USD chunk in CYAN, got: ${line}`);
+  });
+
+  it("single entry with override produces single color block (byte-identical to v0.9.x)", () => {
+    const line = formatBalanceEntriesColored(
+      {
+        isAvailable: true,
+        entries: [{ currency: "USD", totalBalance: 25 }],
+        minValue: 25,
+      },
+      CYAN,
+    );
+    assert.equal(strip(line), "$25");
+    assert.ok(line.includes(`${CYAN}$25${RESET}`), `got: ${line}`);
+    // Only one RESET (no separator needed for single entry).
+    assert.equal((line.match(/\x1b\[0m/g) ?? []).length, 1);
+  });
+
+  it("multi-entry with no override: count of RESETs equals entries.length", () => {
+    // v2026.07.17+: each entry contributes exactly one RESET
+    // (the wrapper around its own SGR block). Joined string has no
+    // trailing RESET beyond the last entry's.
+    const line = formatBalanceEntriesColored({
+      isAvailable: true,
+      entries: [
+        { currency: "CNY", totalBalance: 110 },
+        { currency: "USD", totalBalance: 3.5 },
+        { currency: "EUR", totalBalance: 50 },
+      ],
+      minValue: 3.5,
+    });
+    assert.equal((line.match(/\x1b\[0m/g) ?? []).length, 3, `expected 3 RESETs, got: ${line}`);
   });
 });
 

@@ -295,7 +295,7 @@ type BalanceEntry = {
 type Balance = {
   isAvailable: boolean,
   entries:     BalanceEntry[],
-  minValue:    number | null,  // high-water mark for color banding
+  minValue:    number | null,  // host-computed worst-case entry value; renderer no longer uses for color (v2026.07.17+)
 };
 ```
 
@@ -314,7 +314,7 @@ The host runs `ensureQuota` / `ensureBalance` on whatever the plugin returns. A 
 **`ensureBalance` rules**:
 - `entries` missing or empty + `isAvailable = false` → placeholder "not available!".
 - `entries` missing or empty + `isAvailable = true` (or missing) → "n/a".
-- `minValue` host-computed as `min(entries[].totalBalance)`.
+- `minValue` host-computed as `min(entries[].totalBalance)` (renderer no longer reads it; per-entry 5-band drives hue since v2026.07.17+).
 
 ### Plugin ABI
 

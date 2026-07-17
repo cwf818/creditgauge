@@ -40,6 +40,11 @@ export type BalanceEntry = {
 export type Balance = {
   isAvailable: boolean;
   entries: BalanceEntry[];
+  // v2026.07.17+: host-computed worst-case entry value (lowest
+  // totalBalance). The renderer no longer consults this for color
+  // (per-entry 5-band now drives hue). The field is retained so
+  // plugins reading it for alerting/introspection keep working,
+  // and ensureBalance keeps computing it.
   minValue: number | null;
 };
 
