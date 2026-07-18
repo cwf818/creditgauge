@@ -1,12 +1,27 @@
 # Changelog
 
+## v1.1.5 (2026-07-18)
+
+### Misc
+
+- Bump version to 1.1.5
+
 ## v1.1.1 (2026-07-18)
 
 ### Fix
 
-- **`npx creditgauge` Windows path** — `runScript` now converts the
-  script path to POSIX (`/c/Users/...`) before passing to bash, so
-  backslashes aren't eaten as escape characters on Windows.
+- **`npx creditgauge` Windows — WSL bash conflict + missing PATH.**
+  Two bugs blocked `npx creditgauge install` on Windows:
+  1. `spawn("bash", [path])` found `C:\Windows\System32\bash.exe` (WSL bash)
+     before Git Bash — WSL bash doesn't understand Windows paths like
+     `D:/WorkSpace/...`, exits with `No such file or directory`.
+     Fixed by explicitly detecting Git Bash's `bash.exe` at the standard
+     install location and using its full path.
+  2. Even with the right bash, Git Bash's `/usr/bin/` (where `dirname`,
+     `readlink` etc. live) was not on the inherited PATH from cmd.exe,
+     so `install.sh` failed with `dirname: command not found`.
+     Fixed by prepending Git Bash's `usr/bin/` to the spawned process's
+     PATH environment variable.
 
 ## v1.1.0 (2026-07-18)
 
