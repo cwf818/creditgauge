@@ -148,7 +148,7 @@ export type TokenSample = {
 //   totals.tokenTotalIn     ← m_tokenTotalIn / m_tokenInTotal / m_contextSize
 //                                  stdin: context_window.total_input_tokens
 //   totals.tokenTotalOut    ← m_tokenTotalOut,   stdin: context_window.total_output_tokens
-//   contextWindow.contextWindowSize        ← m_contextWindowsSize (typo preserved),
+//   contextWindow.contextWindowSize        ← m_contextWindowSize (typo fixed),
 //                                                stdin: context_window.context_window_size
 //   contextWindow.contextUsedPercent       ← m_contextUsedPercent,
 //                                                stdin: context_window.used_percentage

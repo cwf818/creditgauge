@@ -172,7 +172,7 @@ type LabelAxis =
   | "inSpeed" | "outSpeed" | "apiMs" | "apiCalls"
   | "memUsage" // v0.8.36+ windowMemUsage axis removed in the bar+percent refactor (parallel of m_windowContext)
   | "hitRate"   // v0.8.22+ — lifted out of hardcoded literal
-  | "contextSize" | "contextWindowsSize" | "contextUsedPercent" | "contextRemainingPercent" // v0.8.23+
+  | "contextSize" | "contextWindowSize" | "contextUsedPercent" | "contextRemainingPercent" // v0.8.23+
   | "startTime" | "endTime" // v0.8.24+ — start/end of the tick statistics window
   | "quota"   // v0.9.0+ — quota module prefix ("quota(5h):123/500")
   | "cost"    // vX.X.X+ — token cost module prefix ("cost:$0.0123")
@@ -205,7 +205,7 @@ function labelFor(axis: LabelAxis): string {
     // v0.8.23+ — context-window prefix knobs (were hardcoded
     // "size:" / "size:" / "used:" / "remain:" in v0.8.22).
     case "contextSize": return labels.labelContextSize;
-    case "contextWindowsSize": return labels.labelContextWindowsSize;
+    case "contextWindowSize": return labels.labelContextWindowSize;
     case "contextUsedPercent": return labels.labelContextUsedPercent;
     case "contextRemainingPercent": return labels.labelContextRemainingPercent;
     // v0.8.24+ — start/end of the tick statistics window.
@@ -2102,7 +2102,7 @@ m_quota: Object.assign(
   // semantic is what users mean when they say "size" — the actual
   // occupancy, sourced from the cumulative `total_input_tokens`
   // field. Prefix: `size:<N>`. The capacity (upper bound) is a
-  // separate module: `m_contextWindowsSize` (typo preserved per
+  // separate module: `m_contextWindowSize` (typo fixed per
   // user direction). See [[token-modules-redesign-v0-8-0]].
   //
   // v6.x: zero length renders as "size:0" (the user's "0 直接显示"
@@ -3075,15 +3075,15 @@ m_quota: Object.assign(
   //
   // Source: `context_window.context_window_size`. v6.x: size=null →
   // "size:n/a" placeholder. v0.8.23+ — prefix routes through
-  // labelFor("contextWindowsSize") (labels.labelContextWindowsSize;
+  // labelFor("contextWindowSize") (labels.labelContextWindowSize;
   // default "size:").
-  m_contextWindowsSize: (c) => {
+  m_contextWindowSize: (c) => {
     // vX.X.X+ — |valueOnly|true drops the "size:" prefix.
-    const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("contextWindowsSize");
+    const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("contextWindowSize");
     const sz = c.tokens?.contextWindow?.contextWindowSize;
     return sz != null
-      ? wrapPlainDefault("m_contextWindowsSize", `${prefix}${formatCompactToken(sz)}`, undefined)
-      : placeholderBare("m_contextWindowsSize", c);
+      ? wrapPlainDefault("m_contextWindowSize", `${prefix}${formatCompactToken(sz)}`, undefined)
+      : placeholderBare("m_contextWindowSize", c);
   },
   // v0.8.0+ — renamed from `m_contextUsed` (the `Percent` suffix
   // makes the unit explicit and matches m_tokenHitRate's % output
@@ -3840,7 +3840,7 @@ const DEFAULT_COLORS: Record<string, string> = {
   m_sumTokenOut: configStore.get().colors.red,
   m_countdown: NAMED_PALETTE.teal,
   m_contextSize: NAMED_PALETTE.gray,
-  m_contextWindowsSize: NAMED_PALETTE.gray,
+  m_contextWindowSize: NAMED_PALETTE.gray,
   m_contextUsedPercent: NAMED_PALETTE.gray,
   m_contextRemainingPercent: NAMED_PALETTE.gray,
   // v0.8.24+ — start/end time of the tick statistics window.
@@ -4674,11 +4674,11 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   m_tokenHitRate: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("hitRate")}n/a`,
   // v0.8.23+ — context-window placeholders route through the
   // dedicated labelContext* axes (labels.labelContextSize /
-  // labelContextWindowsSize / labelContextUsedPercent /
+  // labelContextWindowSize / labelContextUsedPercent /
   // labelContextRemainingPercent; defaults "size:" / "size:" /
   // "used:" / "remain:" preserve the v0.8.22 hardcoded literals).
   m_contextSize: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("contextSize")}n/a`,
-  m_contextWindowsSize: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("contextWindowsSize")}n/a`,
+  m_contextWindowSize: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("contextWindowSize")}n/a`,
   // m_contextUsedPercent's natural shape is "${pct}%" — the
   // placeholder preserves the unit suffix so users see "used:n/a%"
   // rather than bare "n/a" when usedPct is null.
@@ -5457,7 +5457,7 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_tokenTotalOut: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_tokenTotalIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_apiCalls: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_contextWindowsSize: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_contextWindowSize: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_contextUsedPercent: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_contextRemainingPercent: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_windowContext: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...NULDROP_PARAM.named } },
@@ -6793,17 +6793,17 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (!acc) return wrapPlainDefault("m_apiCalls", `${prefix}0`, params.color as string | undefined);
     return wrapValueDefault("m_apiCalls", acc.accApiCalls, `${prefix}${acc.accApiCalls}`, params.color as string | undefined);
   },
-  // v0.8.0+ — inline form of m_contextWindowsSize (capacity).
+  // v0.8.0+ — inline form of m_contextWindowSize (capacity).
   // v0.8.23+ — context-window inline forms route through the
   // dedicated labelContext* axes (labels.labelContext*; defaults
   // "size:" / "size:" / "used:" / "remain:" preserve the v0.8.22
   // hardcoded literals).
-  m_contextWindowsSize: (params, ctx) => {
+  m_contextWindowSize: (params, ctx) => {
     const sz = ctx.tokens?.contextWindow?.contextWindowSize;
-    if (sz == null) return placeholderWithColor("m_contextWindowsSize", params, ctx);
+    if (sz == null) return placeholderWithColor("m_contextWindowSize", params, ctx);
     // vX.X.X+ — |valueOnly|true drops the "size:" prefix.
-    const prefix = params.valueOnly === "true" ? "" : labelFor("contextWindowsSize");
-    return wrapPlainDefault("m_contextWindowsSize", `${prefix}${formatCompactToken(sz)}`, params.color as string | undefined);
+    const prefix = params.valueOnly === "true" ? "" : labelFor("contextWindowSize");
+    return wrapPlainDefault("m_contextWindowSize", `${prefix}${formatCompactToken(sz)}`, params.color as string | undefined);
   },
   // v0.8.0+ — inline form of m_contextUsedPercent.
   m_contextUsedPercent: (params, ctx) => {
@@ -7453,9 +7453,9 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       } else if (tok.startsWith("m_linesRemoved|")) {
         // m_linesRemoved|color|<c> → skip "m_|" (length 15).
         inline = expandInlineToken(tok, "m_linesRemoved", 15, ctx);
-      } else if (tok.startsWith("m_contextWindowsSize|")) {
-        // m_contextWindowsSize → skip prefix+colon (21 chars).
-        inline = expandInlineToken(tok, "m_contextWindowsSize", 21, ctx);
+      } else if (tok.startsWith("m_contextWindowSize|")) {
+        // m_contextWindowSize → skip prefix+colon (20 chars).
+        inline = expandInlineToken(tok, "m_contextWindowSize", 20, ctx);
       } else if (tok.startsWith("m_contextUsedPercent|")) {
         inline = expandInlineToken(tok, "m_contextUsedPercent", 21, ctx);
       } else if (tok.startsWith("m_contextRemainingPercent|")) {

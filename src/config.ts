@@ -320,7 +320,7 @@ const DEFAULT_CONFIG: {
     // "remain:" in v0.8.22). Defaults preserve the literals so
     // existing renders stay byte-identical.
     labelContextSize: string;
-    labelContextWindowsSize: string;
+    labelContextWindowSize: string;
     labelContextUsedPercent: string;
     labelContextRemainingPercent: string;
     // v0.8.24+ — start of the tick statistics window. Read by
@@ -473,7 +473,7 @@ const DEFAULT_CONFIG: {
     // v0.8.22 hardcoded literals so existing renders stay
     // byte-identical).
     labelContextSize: "size:",
-    labelContextWindowsSize: "size:",
+    labelContextWindowSize: "size:",
     labelContextUsedPercent: "used:",
     labelContextRemainingPercent: "remain:",
     // v0.8.24+ — start/end of the tick statistics window. Net-new
@@ -815,7 +815,7 @@ function applyOverrides(base: Config, raw: Record<string, unknown>): Config {
         "labelMemUsage",
         "labelTokenHitRate",
         "labelContextSize",
-        "labelContextWindowsSize",
+        "labelContextWindowSize",
         "labelContextUsedPercent",
         "labelContextRemainingPercent",
         // v0.8.24+ — start/end of the tick statistics window.

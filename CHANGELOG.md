@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.1.7 (2026-07-18)
+
+### Feat
+
+- **New `npx creditgauge install`** — on cache miss, auto-mirrors plugin files from the npm package into the Claude Code plugin cache so the CLI works without a prior marketplace install.
+- **New `/creditgauge:reset` slash command** — wipes per-project runtime caches (`cache.json`, `state.json`, `cache.stat.json`) while preserving token-sample history and diagnostics logs.
+- **New `standard-slim` preset** — narrower sibling of `standard` with compressed header row (context + memory + cost + version), `tickline-slim` / `combline1-slim` / `combline2-slim` fragments, reduced labels and spacing.
+- **`m_contextWindowSize`** — module renamed from `m_contextWindowsSize` (typo fixed).
+
 ## v1.1.6 (2026-07-18)
 
 ### Feat
@@ -242,7 +251,7 @@ Optional: `~/.claude/plugins/topgauge/config.json` and `~/.claude/plugins/topgau
 - **`|valueOnly|<true|false>` inline arg on all label-using
   `m_*` modules (~36 modules: per-turn tokens / cost / speed /
   hit-rate / api-ms / api-calls, `m_acc*` family, `m_sum*`
-  family, `m_memUsage`, `m_contextSize` / `m_contextWindowsSize`
+  family, `m_memUsage`, `m_contextSize` / `m_contextWindowSize`
   / `m_contextUsedPercent` / `m_contextRemainingPercent`,
   `m_tokenInTotal` / `m_tokenTotalOut` / `m_tokenTotalIn`,
   `m_accStartTime`, `m_sumStartTime`, `m_sumEndTime`).** Opt-in

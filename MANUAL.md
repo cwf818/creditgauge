@@ -377,12 +377,13 @@ Nesting protection: `lineTemplates` entries cannot themselves contain `m_templat
 
 Four presets ship in `DEFAULT_STATUSLINE_PRESETS` (`src/config.template.ts:419-516`). Set `"statuslineTemplate": "<name>"` in `config.json` to use one. To customize, copy the body into `lineTemplates.<your_key>` and reference it via `m_template|<your_key>`.
 
-| Key         | Lines | Use it when                                                                                       |
-|-------------|-------|---------------------------------------------------------------------------------------------------|
-| `simple`    | 1     | One-line minimal: provider-type dispatch + `m_age`. Default for users chaining another statusline. |
-| `compact`   | 4     | Multi-line eval stack (`tick_eval` / `acc_eval` / `stat_eval`) + a single-line dispatch footer + mem-info + version. Mid-density. |
-| `standard`  | 5     | Adds an `information` + `git_info` header row above the `compact` eval stack.                      |
-| `abundant`  | 9     | Per-scope `tokens_acc` (session/model/project) + per-window `tokens_stat` (5h-align / 7d-align) + `m_quote`. Kitchen-sink; verbose. |
+| Key             | Lines | Use it when                                                                                       |
+|-----------------|-------|---------------------------------------------------------------------------------------------------|
+| `simple`        | 1     | One-line minimal: provider-type dispatch + `m_age`. Default for users chaining another statusline. |
+| `compact`       | 4     | Multi-line eval stack (`tick_eval` / `acc_eval` / `stat_eval`) + a single-line dispatch footer + mem-info + version. Mid-density. |
+| `standard`      | 5     | Adds an `information` + `git_info` header row above the `compact` eval stack.                      |
+| `standard-slim` | 5     | Narrower sibling of `standard`: compresses the header row into context + memory + cost + version, uses `tickline-slim` / `combline1-slim` / `combline2-slim` fragments with reduced labels and spacing while keeping the same eval and quota rows. Best when vertical space is tight but you still want the full eval + quota stack. |
+| `abundant`      | 9     | Per-scope `tokens_acc` (session/model/project) + per-window `tokens_stat` (5h-align / 7d-align) + `m_quote`. Kitchen-sink; verbose. |
 
 Source bodies: `src/config.template.ts:DEFAULT_STATUSLINE_PRESETS`.
 
@@ -468,7 +469,7 @@ Three semantic variants per metric: **per-turn** (stdin-only, zero IO), **acc** 
 | Module | Renders | Source | Inline args |
 | ------ | ------- | ------ | ----------- |
 | `m_contextSize` | Cumulative context input tokens, `size:163.5k`. | `tokens.totals.tokenTotalIn` | `color`, `nulldrop`, `valueOnly` |
-| `m_contextWindowsSize` | Capacity of the context window, `size:200k`. | `context_window.size` | `color`, `nulldrop`, `valueOnly` |
+| `m_contextWindowSize` | Capacity of the context window, `size:200k`. | `context_window.size` | `color`, `nulldrop`, `valueOnly` |
 | `m_contextUsedPercent` | Percentage of capacity used, `used:82%`. | `context_window.usedPct` | `color`, `nulldrop` |
 | `m_contextRemainingPercent` | Percentage of capacity remaining, `remain:18%`. | `context_window.remainingPct` | `color`, `nulldrop` |
 

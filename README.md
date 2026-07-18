@@ -23,6 +23,8 @@ ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / ora
 
 ## What's new
 
+**v1.1.7** — New `npx creditgauge install` (auto-mirrors into plugin cache on cache miss, no marketplace required); new `/creditgauge:reset` slash command to wipe per-project runtime caches; new `standard-slim` preset with compressed header row and reduced spacing.
+
 **v1.0.0** — Renamed from `topgauge` to `creditgauge` (hard cut, no compat shim). See CHANGELOG for the rename history (`tokenplan-usage-hud` → `topgauge` v0.7.0 → `creditgauge` v1.0.0).
 
 **v0.9.7** — Install-journal: `install.sh` records every per-field change to `settings.json.statusLine` to a write-ahead log; `uninstall.sh` reverts field-by-field, preserving any field the user touched after install.
@@ -33,13 +35,17 @@ ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / ora
 
 ## Snapshots
 
-**Simple preset** (default `statuslineTemplate`, working with a pre-installed `claude-hud`) — minimal layout, single Quota line on its own:
+**`simple` preset** (default `statuslineTemplate`, working with a pre-installed `claude-hud`) — minimal layout, single Quota line on its own:
 
-![toPGauge simple preset](./screenshots/screenshot-simple.png)
+![toPGauge simple preset](https://github.com/cwf818/creditgauge/raw/main/screenshots/screenshot-simple.png)
 
-**Standard preset** — context, memory, git, session / project / 5h-align / 7d-align scanners, m_statTtlStatus tail, plus the live quota line:
+**`standard` preset** — context, memory, git, session / project / 5h-align / 7d-align scanners, m_sumTtlStatus tail, plus the live quota line:
 
-![toPGauge standard preset](./screenshots/screenshot-standard.png)
+![toPGauge standard preset](https://github.com/cwf818/creditgauge/raw/main/screenshots/screenshot-standard.png)
+
+**`standard-slim` preset** — slim version of `standard`, contains context, memory, git, session / project / 5h-align / 7d-align scanners, m_sumTtlStatus tail, plus the live quota line:
+
+![toPGauge standard-slim preset](https://github.com/cwf818/creditgauge/raw/main/screenshots/screenshot-standard-slim.png)
 
 ## Documentation
 

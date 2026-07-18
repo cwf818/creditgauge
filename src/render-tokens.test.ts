@@ -2366,16 +2366,16 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
   it("m_contextSize| 'size|163.5k' (cumulative occupancy from totals.input)", () => {
     // v0.8.0+ — m_contextSize source is total_input_tokens. The
     // fakeSnapshot has totals.input=163479 → "size:163.5k". The
-    // capacity is the separate m_contextWindowsSize module.
+    // capacity is the separate m_contextWindowSize module.
     const out = renderTemplate(["m_contextSize"], ctxFor(fakeSnapshot())).join("\n");
     assert.equal(strip(out), "size:163.5k");
   });
 
-  it("m_contextWindowsSize| 'size|200.0k' (capacity from context_window.size)", () => {
+  it("m_contextWindowSize| 'size|200.0k' (capacity from context_window.size)", () => {
     // v0.8.0+ — the new module for the capacity (upper bound),
     // sourced from context_window.size. The typo `Widows` is
     // preserved per user direction.
-    const out = renderTemplate(["m_contextWindowsSize"], ctxFor(fakeSnapshot())).join("\n");
+    const out = renderTemplate(["m_contextWindowSize"], ctxFor(fakeSnapshot())).join("\n");
     assert.equal(strip(out), "size:200.0k");
   });
 
@@ -2490,7 +2490,7 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
       ["m_linesRemoved", "- --"],
       ["m_tokenInTotal", "in:n/a"],
       ["m_tokenTotalOut", "out:n/a"],
-      ["m_contextWindowsSize", "size:n/a"],
+      ["m_contextWindowSize", "size:n/a"],
       ["m_contextSize", "size:n/a"],
       ["m_contextUsedPercent", "used:n/a%"],
       ["m_contextRemainingPercent", "remain:n/a%"],
@@ -2667,13 +2667,13 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
     assert.equal(strip(out), "hit:0.0%");
   });
 
-  it("m_contextWindowsSize|nulldrop|false renders 'size|n/a' when context_window.size is null", () => {
-    // v0.8.0+ — m_contextSize was renamed to m_contextWindowsSize
+  it("m_contextWindowSize|nulldrop|false renders 'size|n/a' when context_window.size is null", () => {
+    // v0.8.0+ — m_contextSize was renamed to m_contextWindowSize
     // (capacity, sourced from context_window.size). The new
     // m_contextSize (cumulative occupancy) is tested separately
     // above.
     const out = renderTemplate(
-      ["m_contextWindowsSize|nulldrop:false"],
+      ["m_contextWindowSize|nulldrop:false"],
       ctxFor(
         fakeSnapshot({ contextWindow: { contextWindowSize: null, contextUsedPercent: null, contextRemainingPercent: null } }),
       ),
@@ -5762,10 +5762,10 @@ describe("renderTemplate — v0.8.0+ labels.* config customization", () => {
     });
   });
 
-  it("labelContextWindowsSize override reaches m_contextWindowsSize prefix", () => {
-    withLabels({ labelContextWindowsSize: "Cap:" }, () => {
+  it("labelContextWindowSize override reaches m_contextWindowSize prefix", () => {
+    withLabels({ labelContextWindowSize: "Cap:" }, () => {
       const out = renderTemplate(
-        ["m_contextWindowsSize"],
+        ["m_contextWindowSize"],
         ctxFor(fakeSnapshot()),
       ).join("\n");
       assert.match(strip(out), /^Cap:/);
@@ -5800,7 +5800,7 @@ describe("renderTemplate — v0.8.0+ labels.* config customization", () => {
     // snapshot — assert the n/a-family bodies.
     const ctx = ctxFor(fakeSnapshot());
     assert.match(strip(renderTemplate(["m_contextSize"], ctx).join("\n")), /^size:/);
-    assert.match(strip(renderTemplate(["m_contextWindowsSize"], ctx).join("\n")), /^size:/);
+    assert.match(strip(renderTemplate(["m_contextWindowSize"], ctx).join("\n")), /^size:/);
     assert.match(strip(renderTemplate(["m_contextUsedPercent"], ctx).join("\n")), /^used:/);
     assert.match(strip(renderTemplate(["m_contextRemainingPercent"], ctx).join("\n")), /^remain:/);
   });
