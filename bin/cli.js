@@ -25,7 +25,8 @@ import {
   note,
 } from "@clack/prompts";
 import { spawn, spawnSync } from "node:child_process";
-import { readFile, readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { cp, mkdir, readFile, readdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
@@ -46,22 +47,32 @@ const pkg = require2(join(pkgRoot, "package.json"));
 // Platform helpers
 // ---------------------------------------------------------------------------
 
-// Convert a Windows backslash path (C:\Users\...) to POSIX (/c/Users/...)
-// so bash can open it. On non-Windows — identity.
-function toPosixPath(p) {
-  if (process.platform !== "win32") return p;
-  const abs = resolve(p);
-  const m = abs.match(/^([a-zA-Z]):\\(.*)$/);
-  if (m) return `/${m[1].toLowerCase()}/${m[2].replace(/\\/g, "/")}`;
-  return abs.replace(/\\/g, "/");
+// ---------------------------------------------------------------------------
+// Bash resolution (Windows: prefer Git Bash over WSL bash)
+// ---------------------------------------------------------------------------
+
+const GIT_BASH_PATH =
+  process.platform === "win32"
+    ? ["C:\\Program Files\\Git\\usr\\bin\\bash.exe",
+       "C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe"].find(existsSync)
+    : null;
+
+function bashExe() {
+  return GIT_BASH_PATH || "bash";
 }
 
-// ---------------------------------------------------------------------------
-// Bash pre-flight
-// ---------------------------------------------------------------------------
+function bashEnv() {
+  if (!GIT_BASH_PATH) return process.env;
+  // Git Bash's /usr/bin (where dirname, readlink, etc. live) is NOT on
+  // the cmd.exe PATH. Prepend it so spawned bash finds its own tools.
+  const gitUsrBin = dirname(GIT_BASH_PATH);
+  const PATH = process.env.PATH || "";
+  if (PATH.startsWith(gitUsrBin)) return process.env; // already there
+  return { ...process.env, PATH: `${gitUsrBin};${PATH}` };
+}
 
 function hasBash() {
-  const r = spawnSync("bash", ["--version"], { stdio: "ignore" });
+  const r = spawnSync(bashExe(), ["--version"], { stdio: "ignore", env: bashEnv() });
   return r.status === 0;
 }
 
@@ -111,18 +122,41 @@ function cacheMissHint() {
 }
 
 // ---------------------------------------------------------------------------
+// Self-mirror: npm package → plugin cache
+// ---------------------------------------------------------------------------
+
+async function ensurePluginCache() {
+  const version = pkg.version;
+  const versionDir = join(pluginCacheDir(), version);
+  try {
+    await mkdir(versionDir, { recursive: true });
+  } catch {
+    return false;
+  }
+  const items = ["dist", "scripts", ".claude-plugin", "commands"];
+  for (const item of items) {
+    const src = join(pkgRoot, item);
+    const dst = join(versionDir, item);
+    try {
+      await cp(src, dst, { recursive: true });
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Script runner
 // ---------------------------------------------------------------------------
 
 function runScript(scriptName, extraArgs = []) {
   return new Promise((resolveP) => {
-    // Convert to POSIX path so bash can open it on Windows (where
-    // backslashes are interpreted as escape characters).
-    const scriptPath = toPosixPath(join(scriptsDir, scriptName));
-    const args = [scriptPath, ...extraArgs];
-    const child = spawn("bash", args, {
+    const scriptPath = resolve(join(scriptsDir, scriptName));
+    const bash = bashExe();
+    const child = spawn(bash, [scriptPath, ...extraArgs], {
       stdio: "inherit",
-      env: process.env,
+      env: bashEnv(),
     });
     child.on("error", (err) => {
       process.stderr.write(
@@ -207,13 +241,18 @@ function formatDiagnostics(rows) {
 
 async function menuInstall() {
   if (!(await isInPluginCache())) {
-    log.warn("Plugin is not in Claude Code's cache yet.");
-    note(cacheMissHint(), "cache miss");
-    const action = await select({
-      message: "What now?",
-      options: [{ value: "back", label: "Back to menu" }],
-    });
-    return action !== "back"; // stay in menu
+    log.step(`Mirroring creditgauge v${pkg.version} into plugin cache...`);
+    if (await ensurePluginCache()) {
+      log.success(`Plugin cache: v${pkg.version}`);
+    } else {
+      log.warn("Could not populate plugin cache automatically.");
+      note(cacheMissHint(), "cache miss");
+      const action = await select({
+        message: "What now?",
+        options: [{ value: "back", label: "Back to menu" }],
+      });
+      return action !== "back";
+    }
   }
   const proceed = await select({
     message: "Install will edit your Claude Code settings.json. Continue?",
@@ -390,8 +429,12 @@ async function main() {
     process.exit(2);
   }
   if (cmd === "install" && !(await isInPluginCache())) {
-    process.stderr.write(cacheMissHint() + EOL);
-    process.exit(1);
+    log.step(`Mirroring creditgauge v${pkg.version} into plugin cache...`);
+    if (!(await ensurePluginCache())) {
+      process.stderr.write(cacheMissHint() + EOL);
+      process.exit(1);
+    }
+    log.success(`Plugin cache: v${pkg.version}`);
   }
   const code = await withScript(entry.label, entry.script, restArgs);
   process.exit(code === 0 ? 0 : 1);

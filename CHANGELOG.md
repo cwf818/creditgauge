@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.1.6 (2026-07-18)
+
+### Feat
+
+- **`npx creditgauge install` — auto-mirror into plugin cache on cache miss.**
+  Previously the CLI refused to run with a hint to use the marketplace flow first.
+  Now it automatically copies `dist/`, `scripts/`, `.claude-plugin/`, `commands/`
+  from the npm package into `~/.claude/plugins/cache/creditgauge/creditgauge/<version>/`
+  and then proceeds with the install, so `npx creditgauge install` works out of the
+  box without a prior marketplace install.
+
 ## v1.1.5 (2026-07-18)
 
 ### Misc
