@@ -13,6 +13,7 @@
     "scripts",
     ".claude-plugin",
     "commands",
+    "query_plugins",
     "docs",
     "README.md",
     "MANUAL.md",

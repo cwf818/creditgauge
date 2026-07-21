@@ -1,0 +1,51 @@
+{
+  "bigmodel": {
+    "title": "BigModel (智谱) API 配额查询",
+    "template": {
+      "TYPE": "QUOTA",
+      "BASE_URL_COMPARED_TO": "bigmodel.cn/api/anthropic",
+      "COMPARE_METHOD": "INCLUDE",
+      "AUTHENTICATION_KEY": ""
+    },
+    "hasAuth": false
+  },
+  "copilot-api": {
+    "title": "GitHub Copilot 本地代理配额查询",
+    "description": "该供应商的默认 BASE_URL_COMPARED_TO 为 copilot-api 本地代理服务地址，配额查询由代理提供，无需 AUTHENTICATION_KEY。",
+    "template": {
+      "TYPE": "QUOTA",
+      "BASE_URL_COMPARED_TO": "http://localhost:4141",
+      "COMPARE_METHOD": "EXACT",
+      "AUTHENTICATION_KEY": ""
+    },
+    "hasAuth": false
+  },
+  "kimi": {
+    "title": "Kimi (月之暗面) API 配额查询",
+    "description": "该供应商的 AUTHENTICATION_KEY 请提供 access_token，获取方式请参考文档",
+    "template": {
+      "TYPE": "QUOTA",
+      "BASE_URL_COMPARED_TO": "https://api.kimi.com/coding/",
+      "COMPARE_METHOD": "EXACT",
+      "AUTHENTICATION_KEY": ""
+    },
+    "hasAuth": false,
+    "alternativeToken": true,
+    "alternativeTokenHint": "AUTHENTICATION_KEY 请提供 access_token， 查询页面 > F12 > Application > Local Storage > https://www.kimi.com/ > access_token"
+  },
+  "opencode": {
+    "title": "opencode.ai 工作区用量查询",
+    "description": "该供应商的 AUTHENTICATION_KEY 请提供 workspace_id，获取方式请参考文档。默认 BASE_URL_COMPARED_TO 为 routatic-proxy 代理服务地址",
+    "template": {
+      "TYPE": "QUOTA",
+      "BASE_URL_COMPARED_TO": "http://127.0.0.1:3456",
+      "COMPARE_METHOD": "EXACT",
+      "AUTHENTICATION_KEY": ""
+    },
+    "hasAuth": true,
+    "authScript": "auth.cjs",
+    "alternativeToken": true,
+    "alternativeTokenHint": "AUTHENTICATION_KEY 请提供 workspace_id，查询链接中的 wrk_xxx 字串",
+    "credentialsDir": "credentials/opencode"
+  }
+}

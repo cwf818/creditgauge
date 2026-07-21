@@ -9,6 +9,10 @@
 //   npx creditgauge clean-cache      → non-interactive
 //   npx creditgauge reset            → non-interactive
 //   npx creditgauge diagnostics      → print last 20 diagnostics rows
+//   npx creditgauge plugin add       → install a query plugin
+//   npx creditgauge plugin remove    → remove a query plugin
+//   npx creditgauge plugin auth      → authenticate a plugin
+//   npx creditgauge plugin list      → list available plugins
 //   npx creditgauge --version / -v
 //   npx creditgauge --help / -h
 //
@@ -236,6 +240,43 @@ function formatDiagnostics(rows) {
 }
 
 // ---------------------------------------------------------------------------
+// Plugin subcommand dispatcher
+// ---------------------------------------------------------------------------
+
+async function dispatchPlugin(sub, subArgs) {
+  if (!sub || sub === "--help" || sub === "-h") {
+    process.stdout.write(
+      [
+        "creditgauge plugin — query plugin management",
+        "",
+        "Usage:",
+        "  npx creditgauge plugin add <provider> [--dry-run]",
+        "  npx creditgauge plugin remove <provider> [--dry-run]",
+        "  npx creditgauge plugin auth <provider> [--mode ...]",
+        "  npx creditgauge plugin list",
+      ].join("\n") + EOL,
+    );
+    process.exit(sub ? 0 : 1);
+  }
+
+  const subMap = {
+    add:    "./commands/plugin-add.js",
+    remove: "./commands/plugin-remove.js",
+    auth:   "./commands/plugin-auth.js",
+    list:   "./commands/plugin-list.js",
+  };
+  const modPath = subMap[sub];
+  if (!modPath) {
+    process.stderr.write(
+      `creditgauge plugin: unknown command '${sub}'. Try --help.${EOL}`,
+    );
+    process.exit(2);
+  }
+  const mod = await import(modPath);
+  await mod.default(subArgs);
+}
+
+// ---------------------------------------------------------------------------
 // TUI menu
 // ---------------------------------------------------------------------------
 
@@ -398,6 +439,10 @@ async function main() {
         "  npx creditgauge clean-cache      run scripts/clean-cache.sh",
         "  npx creditgauge reset            run scripts/reset.sh",
         "  npx creditgauge diagnostics      print last 20 diagnostics rows",
+        "  npx creditgauge plugin add <provider>       install a query plugin",
+        "  npx creditgauge plugin remove <provider>    remove a query plugin",
+        "  npx creditgauge plugin auth <provider>      authenticate a plugin",
+        "  npx creditgauge plugin list                 list available plugins",
         "  npx creditgauge --version",
         "  npx creditgauge --help",
       ].join("\n") + EOL,
@@ -407,6 +452,15 @@ async function main() {
 
   // Subcommands
   const restArgs = process.argv.slice(3);
+
+  // Plugin subcommands
+  if (cmd === "plugin") {
+    const sub = restArgs[0];
+    const subArgs = restArgs.slice(1);
+    await dispatchPlugin(sub, subArgs);
+    return;
+  }
+
   const scriptMap = {
     install: { script: "install.sh", label: "Install" },
     uninstall: { script: "uninstall.sh", label: "Uninstall" },
