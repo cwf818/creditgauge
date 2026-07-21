@@ -237,11 +237,6 @@ async function main(): Promise<void> {
   // reset on every tick — the plugin is a per-tick child process so
   // _sessionCwd never leaks across sessions.
   diagnostics.setSessionCwd(tokens?.cwd ?? null);
-  // Centralized stdin-derived state pipeline. status-store owns the
-  // per-project state transaction, validation gate, one-shot state.json
-  // flush, and the optional sample JSONL append. It runs before render
-  // regardless of whether any module ends up producing output.
-  statusStore.processAndSaveTick(tokens?.cwd ?? null, tokens);
   // Record the raw stdin frame for postmortem. Gated by the same
   // CREDITGAUGE_DIAGNOSTICS_ENABLE switch as the rest of diagnostics.jsonl
   // (no-op when off). Source "stdin" so it doesn't collide with the
@@ -258,6 +253,24 @@ async function main(): Promise<void> {
   const baseUrl = process.env.ANTHROPIC_BASE_URL;
   const upstream = UPSTREAM;
   const provider = matchProvider(baseUrl);
+
+  // v0.4.0+ — apply the active provider's `config` overlay BEFORE
+  // processAndSaveTick so the cost computation sees the fully merged
+  // config (including tokenPricesOverride). Three-layer precedence:
+  //   defaults  ⊕  config.json top-level  ⊕  providerEntry.config
+  // with providerEntry.config having the highest priority.
+  const entry = provider !== null ? getProviderEntry(provider) : null;
+  if (entry?.config) {
+    applyProviderOverrides(entry.config);
+  }
+
+  // vX.X.X+ — centralized stdin-derived state pipeline. Runs AFTER
+  // provider resolution and override application so the cost
+  // computation in normalizeTick can use the 5-layer token price
+  // resolution cascade (which depends on both the active provider
+  // and the applied provider overrides). Runs regardless of whether
+  // any module produces output.
+  statusStore.processAndSaveTick(tokens?.cwd ?? null, tokens, provider);
 
   // v0.4.x — when no provider entry matches ANTHROPIC_BASE_URL,
   // dispatch through buildProviderLine anyway so provider-AGNOSTIC
@@ -283,19 +296,6 @@ async function main(): Promise<void> {
     );
     process.stdout.write(compose(upstream, line));
     return;
-  }
-
-  // v0.4.0+ — apply the active provider's `config` overlay on top of
-  // the just-loaded config snapshot. Three-layer precedence becomes
-  //   defaults  ⊕  config.json top-level  ⊕  providerEntry.config
-  // with providerEntry.config having the highest priority. Runs once
-  // per tick (the plugin is a per-tick child process) so the active
-  // Config seen by every cfg() call downstream is already the merged
-  // view. If the matched provider has no `config` block, this is a
-  // no-op (applyProviderOverrides early-returns on undefined input).
-  const entry = getProviderEntry(provider);
-  if (entry?.config) {
-    applyProviderOverrides(entry.config);
   }
 
   // v0.6.0+ — pre-read the env token once but DON'T short-circuit

@@ -1,8 +1,17 @@
 {
   "name": "creditgauge",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "description": "Claude Code statusline plugin (CreditGauge) for MiniMax/DeepSeek token-plan usage and account balance. Ships an `npx creditgauge` TUI for install/uninstall/clean/diagnostics.",
   "type": "module",
+  "author": "cwf818",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cwf818/creditgauge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cwf818/creditgauge/issues"
+  },
+  "homepage": "https://github.com/cwf818/creditgauge",
   "license": "MIT",
   "bin": {
     "creditgauge": "bin/cli.js"

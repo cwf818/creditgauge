@@ -1,7 +1,7 @@
 <pre>
 [upstream statusline lines]
 Usage: ▓▓▓▓░░░░ 40% (1h27m🕗 5h) · ▓▓░░░░░░ 20% (4d3h🕔 7d)    # Quota
-Balance: ￥110.00 · $3.5                                        # Balance
+Balance: ¥110.00 · $3.5                                        # Balance
 </pre>
 
 # CreditGauge
@@ -20,18 +20,6 @@ For vanilla Anthropic, OpenRouter, or any other provider not on the list above, 
 We deliberately don't reimplement the kitchen-sink statuslines that already exist for vanilla Anthropic — [`claude-hud`](https://github.com/jarrodwatts/claude-hud) and [`ccstatusline`](https://github.com/sirmalloc/ccstatusline) cover that. This plugin focuses on provider-specific **quota / balance** data, plus lightweight usage statistics read from Claude Code's stdin payload.
 
 ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / orange / red. Applied to the displayed value + the colored bar segment; the empty part of the bar stays uncolored so it remains readable.
-
-## What's new
-
-**v1.1.7** — New `npx creditgauge install` (auto-mirrors into plugin cache on cache miss, no marketplace required); new `/creditgauge:reset` slash command to wipe per-project runtime caches; new `standard-slim` preset with compressed header row and reduced spacing.
-
-**v1.0.0** — Renamed from `topgauge` to `creditgauge` (hard cut, no compat shim). See CHANGELOG for the rename history (`tokenplan-usage-hud` → `topgauge` v0.7.0 → `creditgauge` v1.0.0).
-
-**v0.9.7** — Install-journal: `install.sh` records every per-field change to `settings.json.statusLine` to a write-ahead log; `uninstall.sh` reverts field-by-field, preserving any field the user touched after install.
-
-**v0.9.6** — `m_sumEstQuota|term:short` projects the spent cost up to a full-period spend using the aligned plan window's `used%`. Renders `est:$30.20` (fixed 2dp, per-model currency). Prefix is configurable via `labels.labelEstQuota` (default `"est:"`).
-
-> Requires `tokenPrices.<modelId>` to be configured for the target model (see MANUAL §m_tokenCost). Without it, the module renders `est:n/a`.
 
 ## Snapshots
 
@@ -92,6 +80,10 @@ npx creditgauge uninstall
 npx creditgauge clean --dry-run
 npx creditgauge reset
 npx creditgauge diagnostics      # last 20 plugin warning/error entries
+npx creditgauge plugin add       # install a query plugin (interactive)
+npx creditgauge plugin remove    # remove a query plugin
+npx creditgauge plugin auth      # authenticate a query plugin
+npx creditgauge plugin list      # list available plugins
 npx creditgauge --version
 npx creditgauge --help
 ```
@@ -102,7 +94,7 @@ npx creditgauge --help
 > marketplace flow. Once installed once via marketplace, all subsequent
 > `npx creditgauge install` calls work.
 
-1. If `statusLine` is already managed by us (`_creditgauge_managed: true`), the command is a no-op.
+1. If `statusLine.command` already points to our wrapper (checked via `isOurWrapperCommand` — the command string itself, not the `_creditgauge_managed` marker), the command is a no-op.
 2. Otherwise, the current `settings.json` is backed up to `settings.json.bak.<ISO-timestamp>`.
 3. The original `statusLine.command` is preserved at `<claude-root>/plugins/creditgauge/state/upstream-cmd.sh` and `<claude-root>/plugins/creditgauge/state/upstream-cmd.txt` — sibling of `config.json`, **stable** across `/plugin install` rolls and cache wipes.
 4. The `statusLine` is rewritten to invoke our wrapper, which sets `CREDITGAUGE_UPSTREAM_CMD=<upstream-cmd.sh>` so the original statusline runs above our line.
@@ -158,7 +150,7 @@ This is a self-contained cleanup that works even after the plugin's cache and ma
 1. **Restore `statusLine`** — strategy in order:
    - If `<claude-root>/plugins/creditgauge/state/install-journal.json` has unapplied entries, apply them **field-by-field**: each entry's `after` is compared against the *current* `settings.json`; matching fields are reverted (created → removed, mutated → restored to `before`, clamped → restored to `before`), and fields the user changed after install are left alone. This is the journal-driven path — the **default for any install that ran with the journal writer enabled**.
    - Else (legacy / pre-journal install), fall back to `${CLAUDE_ROOT}/plugins/creditgauge/state/upstream-cmd.txt` (byte-for-byte restore of the original command).
-   - Else, fall back to the most recent `settings.json.bak.<ts>` whose `statusLine` does **not** have `_creditgauge_managed: true` (the state before the plugin was installed).
+   - Else, fall back to the most recent `settings.json.bak.<ts>` whose `statusLine.command` does **not** point to our wrapper (the state before the plugin was installed).
    - Else, strip the marker but leave the wrapper in place and print a warning.
 2. **Remove `creditgauge@creditgauge` from `settings.json.enabledPlugins`** (other plugins preserved).
 3. **Remove `creditgauge` from `settings.json.extraKnownMarketplaces`** (Claude Code records the marketplace source there too — leaving it would re-add the marketplace on next `/plugin marketplace add` with no visible diff).
@@ -265,15 +257,15 @@ kept (`2h0m` → `2h0m`, NOT `2h`). See `timeFormat.maxUnitCount` in
 When `ANTHROPIC_BASE_URL` matches the configured `providers.deepseek` entry (default: exact match against `https://api.deepseek.com/anthropic`), the plugin fetches the user's account balance and renders:
 
 ```
-Balance: ￥110.00             # is_available=true, single CNY entry
+Balance: ¥110.00             # is_available=true, single CNY entry
 Balance: $25.00               # is_available=true, single USD entry
-Balance: ￥110 · $3.5         # multi-currency: ALL entries from balance_infos,
+Balance: ¥110 · $3.5         # multi-currency: ALL entries from balance_infos,
                              # joined by ' · ', single color band from the
                              # LOWEST balance (most urgent currency drives hue).
 Balance: not available!       # is_available=false or no parseable entries
 ```
 
-Per-currency display prefix: `USD` → `$`, `CNY` / `RMB` → `￥`. Any other
+Per-currency display prefix: `USD` → `$`, `CNY` / `RMB` → `¥`. Any other
 currency code is rendered as itself, uppercased (e.g. `EUR42.50`).
 
 5-band color thresholds on the **lowest** entry's numeric value
@@ -366,7 +358,7 @@ Three outcomes when the provider API is called:
 | Outcome                    | What you see on the statusline                                                                                                                                                |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Fresh fetch                | The normal `Usage: …` / `Balance: …` line, no suffix on the default template. (Includes within-TTL cache hits — the broken-chain suffix is reserved for stale state. If your template includes `m_age`, you'll see a healthy `🔗 X ago` here instead.) |
-| Fetch failed, cache exists | The last good value, **with a dim `⛓️‍💥 X ago` suffix** at the end (e.g. `Balance: ￥110 ⛓️‍💥 5m ago`). The broken-chain emoji IS the indicator (no leading separator).   |
+| Fetch failed, cache exists | The last good value, **with a dim `⛓️‍💥 X ago` suffix** at the end (e.g. `Balance: ¥110 ⛓️‍💥 5m ago`). The broken-chain emoji IS the indicator (no leading separator).   |
 | Fetch failed, no cache     | `Usage: not available!` (MiniMax) or `Balance: not available!` (DeepSeek) in red. Plugin is alive but the provider is unreachable.                                            |
 
 The `X ago` format uses the **same template as the reset countdown**:
@@ -503,6 +495,22 @@ scripts/
   test-clean-cache.sh    # shell regression tests for clean-cache.sh
 settings.example.json # template (NEVER commit real settings.json)
 ```
+
+## What's new
+
+**v1.1.9** — Token cost tracking at processTick time (cost stored in JSONL + accumulator, survives across sessions via replay); dedicated `config.tokenPrices.json` with 5-layer cascade; default provider filter on `m_sum*` modules now defaults to all models instead of active-only; install-journal change report display with tiered command handling; ⏱️ API ms integrated into default statusline preset; unified ¥ (U+00A5) symbol; fix uninstall.sh `set -u` crash.
+
+**v1.1.8** — New `creditgauge-plugin` CLI (`npx creditgauge plugin add/remove/auth/list`) for query plugin lifecycle management; new opencode.ai workspace quota plugin; query plugin metadata registry (`query_plugins/plugins.json`). Supports `opencode`, `bigmodel`, `copilot-api`, `kimi` out of the box.
+
+**v1.1.7** — New `npx creditgauge install` (auto-mirrors into plugin cache on cache miss, no marketplace required); new `/creditgauge:reset` slash command to wipe per-project runtime caches; new `standard-slim` preset with compressed header row and reduced spacing.
+
+**v1.0.0** — Renamed from `topgauge` to `creditgauge` (hard cut, no compat shim). See CHANGELOG for the rename history (`tokenplan-usage-hud` → `topgauge` v0.7.0 → `creditgauge` v1.0.0).
+
+**v0.9.7** — Install-journal: `install.sh` records every per-field change to `settings.json.statusLine` to a write-ahead log; `uninstall.sh` reverts field-by-field, preserving any field the user touched after install.
+
+**v0.9.6** — `m_sumEstQuota|term:short` projects the spent cost up to a full-period spend using the aligned plan window's `used%`. Renders `est:$30.20` (fixed 2dp, per-model currency). Prefix is configurable via `labels.labelEstQuota` (default `"est:"`).
+
+> Requires `tokenPrices.<modelId>` to be configured for the target model (see MANUAL §m_tokenCost). Without it, the module renders `est:n/a`.
 
 ## License
 

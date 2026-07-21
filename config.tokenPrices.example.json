@@ -1,0 +1,12 @@
+{
+  "_comment": "config.tokenPrices.json — per-model token pricing for m_tokenCost / m_accTokenCost / m_sumTokenCost. Prices are per-million tokens. See MANUAL.md §2 for the 5-layer resolution cascade.",
+  "default": { "currency": "CNY", "in": 2.1, "out": 8.4, "cachedIn": 0.42 },
+  "minimax": {
+    "default": { "currency": "USD", "in": 1, "out": 5, "cachedIn": 0.5 },
+    "MiniMax-M3": { "currency": "USD", "in": 0.5, "out": 5, "cachedIn": 0.75 }
+  },
+  "deepseek": {
+    "default": { "currency": "CNY", "in": 0.2, "out": 2, "cachedIn": 0.05 },
+    "deepseek-chat": { "currency": "CNY", "in": 0.2, "out": 2, "cachedIn": 0.05 }
+  }
+}

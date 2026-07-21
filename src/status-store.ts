@@ -40,6 +40,7 @@ import {
 } from "./diagnostics.ts";
 import type { TokenSample, TokenSnapshot } from "./types.ts";
 import { normalizeUrl } from "./utils.ts";
+import { configStore, resolveTokenPrice } from "./config.ts";
 
 // ----- Persisted value families ------------------------------------------------
 
@@ -62,6 +63,12 @@ export type TickStatusValue = {
   // startAt is null). `null` = "no writes yet" → m_accStartTime
   // renders the "start:n/a" placeholder.
   startAt?: number | null;
+  // vX.X.X+ — accumulated per-tick token costs grouped by
+  // currency. Each element is { currency, value } where value
+  // is a decimal string (e.g. "0.0123") to avoid floating-point
+  // drift across many ticks. Empty array = no costs accumulated
+  // (default for legacy slots / no tokenPrices config).
+  costs: Array<{ currency: string; value: string }>;
 };
 // the ONLY field the next tick subtracts against is `totalApiMs`
 // (apiMs = current.totalApiMs - prev.totalApiMs). All other per-turn
@@ -125,6 +132,9 @@ export type TickSnapshot = {
   totalOut: number;
   totalApiMs: number;
   apiMs: number;
+  // vX.X.X+ — per-tick cost derived at processTick time. null
+  // when no price matches the active model.
+  cost: { currency: string; value: string } | null;
 };
 
 export type AvgSnapshot = {
@@ -141,6 +151,11 @@ export type AvgSnapshot = {
   // renderer reads it through peekAcc / readAccumulator and
   // formats via formatAbsTime.
   startAt?: number | null;
+  // vX.X.X+ — propagated from TickStatusValue.costs. The renderer
+  // reads the accumulated costs array through peekAcc /
+  // readAccumulator. Optional for backward-compat with test
+  // call sites that construct AvgSnapshot without costs.
+  costs?: Array<{ currency: string; value: string }>;
 };
 
 // v0.8.10-alpha.2 — internal per-tick snapshot for the data-processor.
@@ -174,6 +189,10 @@ type CurrentTick = {
   tokenHitRate: number | null;
   tokenInSpeed: number | null;
   tokenOutSpeed: number | null;
+  // vX.X.X+ — per-tick token cost computed from stdin deltas
+  // × tokenPrices. null when no price entry matches the active
+  // model (no cost to compute).
+  cost: { currency: string; value: string } | null;
 };
 
 export type ProcessResult = {
@@ -207,6 +226,11 @@ export type SumFilter = {
   windowKey: string;
   sinceMs: number;
   modelFilter?: string;
+  // vX.X.X+ — default provider filter: only include JSONL rows whose
+  // base_url matches the current normalized ANTHROPIC_BASE_URL.
+  // Always set by parseWindowScope; no user-facing inline arg yet.
+  // undefined = no provider filtering (scan all rows).
+  providerBaseUrl?: string;
   // The renderer-side SumFilter declares more fields
   // (`windowIdMatch` / `interval` / `windowMs`) used by
   // m_sumStartTime / m_sumEndTime — those are read at the
@@ -237,6 +261,12 @@ export type StatAggregate = {
   // mirroring render.ts's intervalToWindow used%-pick rule.
   alignedUsedPercent?: number | null;
   generatedAt: number;
+  // vX.X.X+ — per-currency cost totals over the window.
+  // Each element is { currency, value } where value is a
+  // decimal string summed across all matching samples.
+  // Optional for backward-compat with test call sites that
+  // construct StatAggregate without costs.
+  costs?: Array<{ currency: string; value: string }>;
 };
 
 type StatCacheEntry<T> = { at: number; value: T; ttlMs?: number };
@@ -250,6 +280,7 @@ const EMPTY_TICK: TickSnapshot = {
   totalOut: 0,
   totalApiMs: 0,
   apiMs: 0,
+  cost: null,
 };
 
 const STAT_CACHE_TTL_MS = 300_000;
@@ -449,6 +480,8 @@ function parseStore(raw: string): Store {
           // placeholder until the next valid tick stamps
           // Date.now() via setAvg / bumpDeltaScope.
           startAt: typeof v.startAt === "number" ? v.startAt : null,
+          // vX.X.X+ — backfill costs from legacy rows.
+          costs: coerceCostsArray(v.costs),
         },
       };
     }
@@ -526,6 +559,7 @@ export function emptyTickStatus(): TickStatusValue {
     // bumpDeltaScope stamp Date.now() on the first valid
     // write.
     startAt: null,
+    costs: [],
   };
 }
 
@@ -722,7 +756,18 @@ function coerceSampleRow(r: Record<string, unknown>, sinceMs: number): TokenSamp
     out: typeof r.out === "number" ? r.out : 0,
     cacheCreation: typeof r.cacheCreation === "number" ? r.cacheCreation : 0,
     cacheIn: typeof r.cacheIn === "number" ? r.cacheIn : 0,
+    cost:
+      r.cost != null &&
+      typeof r.cost === "object" &&
+      typeof (r.cost as Record<string, unknown>).currency === "string" &&
+      typeof (r.cost as Record<string, unknown>).value === "string"
+        ? {
+            currency: (r.cost as Record<string, unknown>).currency as string,
+            value: (r.cost as Record<string, unknown>).value as string,
+          }
+        : undefined,
     model: typeof r.model === "string" ? r.model : undefined,
+    base_url: typeof r.base_url === "string" ? r.base_url : undefined,
     totalApiMs: typeof r.totalApiMs === "number" ? r.totalApiMs : undefined,
     apiMs: typeof r.apiMs === "number" ? r.apiMs : undefined,
     prevApiMs:
@@ -997,6 +1042,7 @@ export function replayAccInit(
   let accApiMs = 0;
   let accApiCalls = 0;
   let firstAt = Number.POSITIVE_INFINITY;
+  const costsMap = new Map<string, number>();
   for (const s of samples) {
     accTokenIn += s.in;
     accTokenOut += s.out;
@@ -1008,8 +1054,19 @@ export function replayAccInit(
     // aggregateSamples' firstAt semantics.
     const candidate = (Number.isFinite(s.at) && s.at > 0) ? s.at : null;
     if (candidate != null && candidate < firstAt) firstAt = candidate;
+    // vX.X.X+ — accumulate cost by currency from the JSONL samples.
+    if (s.cost) {
+      const prev = costsMap.get(s.cost.currency) ?? 0;
+      costsMap.set(s.cost.currency, prev + parseFloat(s.cost.value));
+    }
   }
   if (!Number.isFinite(firstAt)) firstAt = Date.now();
+
+  // Build the costs array from the map, matching aggregateSamples' format.
+  const costs: Array<{ currency: string; value: string }> = [];
+  for (const [currency, total] of costsMap) {
+    costs.push({ currency, value: total.toFixed(10) });
+  }
 
   return {
     accTokenIn,
@@ -1022,6 +1079,7 @@ export function replayAccInit(
       ? (accTokenCachedIn / accTokenTotalIn) * 100
       : 0,
     startAt: firstAt,
+    costs,
   };
 }
 
@@ -1160,6 +1218,7 @@ function aggregateSamples(samples: TokenSample[]): StatAggregate {
   // lastAt = max(s.at). firstAt <= 0 triggers the placeholder.
   let firstAt = Number.POSITIVE_INFINITY;
   let calls = 0;
+  const costsMap = new Map<string, number>();
   for (const s of samples) {
     sumIn += s.in;
     sumOut += s.out;
@@ -1174,8 +1233,17 @@ function aggregateSamples(samples: TokenSample[]): StatAggregate {
     ) {
       firstAt = s.at;
     }
+    // vX.X.X+ — accumulate cost by currency.
+    if (s.cost) {
+      const prev = costsMap.get(s.cost.currency) ?? 0;
+      costsMap.set(s.cost.currency, prev + parseFloat(s.cost.value));
+    }
   }
   if (!Number.isFinite(firstAt)) firstAt = 0;
+  const costs: Array<{ currency: string; value: string }> = [];
+  for (const [currency, total] of costsMap) {
+    costs.push({ currency, value: total.toFixed(10) });
+  }
   return {
     sumIn,
     sumOut,
@@ -1187,6 +1255,7 @@ function aggregateSamples(samples: TokenSample[]): StatAggregate {
     lastAt,
     firstAt,
     generatedAt: Date.now(),
+    costs,
   };
 }
 
@@ -1197,7 +1266,8 @@ function aggregateSamples(samples: TokenSample[]): StatAggregate {
 // key shape MUST stay in sync with getStatAggregate's composer —
 // if that template changes, update this helper too.
 export function statKeyForFilter(filter: SumFilter): string {
-  return `stat:${filter.modelFilter ?? "all"}:${filter.windowKey}:${(filter as { alignActive?: boolean }).alignActive ?? false}`;
+  const base = `stat:${filter.modelFilter ?? "all"}:${filter.windowKey}:${(filter as { alignActive?: boolean }).alignActive ?? false}`;
+  return filter.providerBaseUrl ? `${base}:${filter.providerBaseUrl}` : base;
 }
 
 export function getStatAggregate(filter: SumFilter): StatAggregate {
@@ -1224,7 +1294,13 @@ export function getStatAggregate(filter: SumFilter): StatAggregate {
     filter.modelFilter === undefined
       ? samples
       : samples.filter((s) => s.model === filter.modelFilter);
-  const agg = aggregateSamples(filtered);
+  // vX.X.X+ — default provider filter: when set, only include rows
+  // whose base_url matches the current normalized ANTHROPIC_BASE_URL.
+  const providerFiltered =
+    filter.providerBaseUrl === undefined
+      ? filtered
+      : filtered.filter((s) => s.base_url === filter.providerBaseUrl);
+  const agg = aggregateSamples(providerFiltered);
   // vX.X.X — when the caller resolved an aligned scan
   // (alignActive=true), stamp the aligned plan window's used% onto
   // the aggregate so downstream renders can read it without a
@@ -1396,6 +1472,7 @@ function detectRegression(
 function normalizeTick(
   tokens: TokenSnapshot | null,
   prev: PrevTickStatusValue | null,
+  provider: string | null,
 ): { snapshot: CurrentTick | null; measurement: TickSnapshot } {
   if (!tokens || !tokens.sessionId || !tokens.cwd) {
     return { snapshot: null, measurement: EMPTY_TICK };
@@ -1453,6 +1530,23 @@ function normalizeTick(
   const tokenInSpeed = apiMs > 0 ? (in_ / apiMs) * 1000 : null;
   const tokenOutSpeed = apiMs > 0 ? (out_ / apiMs) * 1000 : null;
 
+  // vX.X.X+ — per-tick token cost. Computed from stdin deltas ×
+  // tokenPrices via the 5-layer resolution cascade (config.json
+  // provider override > config.tokenPrices.json provider.model >
+  // config.tokenPrices.json provider.default > global default).
+  // Resolved at processTick time so the value is frozen in the
+  // JSONL sample and the accumulator independent of future config
+  // changes. null when no price entry matches the active model.
+  let cost: { currency: string; value: string } | null = null;
+  const modelId = tokens.modelId ?? null;
+  if (modelId) {
+    const tp = resolveTokenPrice(configStore.get(), provider, modelId);
+    if (tp && tp.in + tp.out + tp.cachedIn > 0) {
+      const raw = (in_ * tp.in + out_ * tp.out + cachedIn * tp.cachedIn) / 1_000_000;
+      cost = { currency: tp.currency, value: raw.toFixed(10) };
+    }
+  }
+
   // v0.8.11-alpha — full-snapshot smoke diagnostic at the post-derive
   // point: env-gated (default off), one line per tick carrying every
   // field computed above so a postmortem can confirm accTokenHitRate /
@@ -1478,6 +1572,12 @@ function normalizeTick(
     totalOut: totalOut ?? 0,
     totalApiMs,
     apiMs: valid ? apiMs : 0,
+    // vX.X.X+ — cost is always populated so idle ticks can
+    // STALE_COLOR the last-known cost (mirrors m_tokenIn's
+    // "live but stale" pattern). Gating on `valid` would
+    // drop the cost placeholder on idle ticks because the
+    // render path reads r.cost before checking r.hasMeasurement.
+    cost,
   };
 
   return {
@@ -1502,6 +1602,7 @@ function normalizeTick(
       tokenHitRate,
       tokenInSpeed,
       tokenOutSpeed,
+      cost,
     },
     measurement,
   };
@@ -1523,7 +1624,11 @@ export function beginTick(cwd: string | null, tokens: TokenSnapshot | null): Tic
   const loaded = cwd ? loadFromDiskInternal(cwd) : {};
   const prevEntry = loaded[PREV_TICK_KEY];
   const prev = prevEntry?.kind === "prevTickStatus" ? prevEntry.value : null;
-  const { snapshot, measurement } = normalizeTick(tokens, prev);
+  // vX.X.X+ — provider is unknown at beginTick time (runs before
+  // matchProvider in index.ts). Pass null so the initial validation
+  // gate uses config.tokenPrices.json (no provider override).
+  // processTick re-runs normalizeTick with the real provider later.
+  const { snapshot, measurement } = normalizeTick(tokens, prev, null);
   _tickState = {
     cwd,
     tokens,
@@ -1642,6 +1747,7 @@ export function peekAvg(
     accTokenHitRate: v.accTokenHitRate,
     // v0.8.24+ — propagated from TickStatusValue.startAt.
     startAt: v.startAt ?? null,
+    costs: v.costs ?? [],
   };
 }
 
@@ -1679,6 +1785,7 @@ export function readAccumulator(
     accTokenHitRate: v.accTokenHitRate,
     // v0.8.24+ — propagated from TickStatusValue.startAt.
     startAt: v.startAt ?? null,
+    costs: v.costs ?? [],
   };
 }
 
@@ -1697,7 +1804,10 @@ export function computeAndCacheTickDeltaPure(
   tokens: TokenSnapshot | null,
 ): TickSnapshot {
   const prev = _tickState?.prevTick ?? null;
-  return normalizeTick(tokens, prev).measurement;
+  // vX.X.X+ — called outside the normal tick pipeline (no provider
+  // context). Pass null so cost resolution uses config.tokenPrices.json
+  // without provider overrides.
+  return normalizeTick(tokens, prev, null).measurement;
 }
 
 // v0.8.10-alpha.2 — setPrevTick now stamps only totalApiMs (the one
@@ -1781,6 +1891,38 @@ export function setLastTokenHitRate(
   mark("lastActive:tokenHitRate", { direction: "tokenHitRate", tps: pct });
 }
 
+// vX.X.X+ — coerce a raw value to a costs array. Handles legacy
+// rows (undefined / non-array) and malformed entries gracefully.
+function coerceCostsArray(raw: unknown): Array<{ currency: string; value: string }> {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (e) =>
+      e != null &&
+      typeof e === "object" &&
+      typeof (e as Record<string, unknown>).currency === "string" &&
+      typeof (e as Record<string, unknown>).value === "string",
+  ) as Array<{ currency: string; value: string }>;
+}
+
+// vX.X.X+ — accumulate one per-tick cost delta into the costs array.
+// Finds the existing entry for the same currency and adds the parsed
+// values, preserving 6dp precision; appends a new entry when no match
+// exists. Never mutates the input array.
+function accumulateCosts(
+  existing: Array<{ currency: string; value: string }>,
+  delta: { currency: string; value: string },
+): Array<{ currency: string; value: string }> {
+  const copy = existing.map((c) => ({ ...c }));
+  const idx = copy.findIndex((c) => c.currency === delta.currency);
+  if (idx >= 0) {
+    const sum = parseFloat(copy[idx].value) + parseFloat(delta.value);
+    copy[idx] = { currency: delta.currency, value: sum.toFixed(10) };
+  } else {
+    copy.push({ currency: delta.currency, value: delta.value });
+  }
+  return copy;
+}
+
 export function setAvg(
   sessionId: string,
   snap: AvgSnapshot,
@@ -1796,6 +1938,8 @@ export function setAvg(
     deltaTokenCachedIn?: number;
     deltaApiMs?: number;
     deltaTokenTotalIn?: number;
+    // vX.X.X+ — per-tick cost delta to accumulate.
+    deltaCost?: { currency: string; value: string } | null;
   },
 ): void {
   if (!sessionId) return;
@@ -1845,6 +1989,10 @@ export function setAvg(
   sessionNext.accTokenHitRate = sessionNext.accTokenTotalIn > 0
     ? (sessionNext.accTokenCachedIn / sessionNext.accTokenTotalIn) * 100
     : 0;
+  // vX.X.X+ — accumulate per-tick cost into the costs array by currency.
+  if (extras?.deltaCost && extras.deltaCost.value) {
+    sessionNext.costs = accumulateCosts(sessionNext.costs, extras.deltaCost);
+  }
   mark(sessionKey, sessionNext);
 
   const bumpDeltaScope = (key: string) => {
@@ -1872,6 +2020,10 @@ export function setAvg(
     next.accTokenHitRate = next.accTokenTotalIn > 0
       ? (next.accTokenCachedIn / next.accTokenTotalIn) * 100
       : 0;
+    // vX.X.X+ — accumulate per-tick cost into the costs array by currency.
+    if (extras?.deltaCost && extras.deltaCost.value) {
+      next.costs = accumulateCosts(next.costs, extras.deltaCost);
+    }
     mark(key, next);
   };
 
@@ -1886,11 +2038,12 @@ export function setAvg(
 export function processTick(
   cwd: string | null,
   tokens: TokenSnapshot | null,
+  provider: string | null,
 ): void {
   const s = getState();
   const prevEntry = s.pending[PREV_TICK_KEY];
   const prev = prevEntry?.kind === "prevTickStatus" ? prevEntry.value : null;
-  const { snapshot, measurement } = normalizeTick(tokens, prev);
+  const { snapshot, measurement } = normalizeTick(tokens, prev, provider);
   // v0.8.15-alpha — measurement reflects the freshest normalizeTick
   // result even on invalid ticks. The render path's computeTickDelta
   // reads r.in / r.out here, gated on r.hasMeasurement; surfacing a
@@ -2023,6 +2176,7 @@ export function processTick(
     deltaTokenCachedIn: snapshot.hasCachedIn ? snapshot.cachedIn : 0,
     deltaApiMs: snapshot.apiMs,
     deltaTokenTotalIn: snapshot.totalIn ?? 0,
+    deltaCost: snapshot.cost,
   });
 
   if (snapshot.tokenInSpeed != null) {
@@ -2046,6 +2200,7 @@ export function processTick(
           out: snapshot.out,
           cacheCreation: snapshot.cacheCreation,
           cacheIn: snapshot.cachedIn,
+          cost: snapshot.cost ?? undefined,
           model: snapshot.modelId ?? undefined,
           base_url: normalizeUrl(process.env.ANTHROPIC_BASE_URL ?? "") || undefined,
           totalApiMs: snapshot.totalApiMs,
@@ -2058,9 +2213,10 @@ export function processTick(
 export function processAndSaveTick(
   cwd: string | null,
   tokens: TokenSnapshot | null,
+  provider: string | null,
 ): ProcessResult {
   beginTick(cwd, tokens);
-  processTick(cwd, tokens);
+  processTick(cwd, tokens, provider);
   const s = getState();
   // v0.8.10-alpha.2 — `s.valid` no longer gates flush. Sample-row
   // emission is still gated on `s.valid` (invalid ticks don't have

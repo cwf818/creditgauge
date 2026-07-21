@@ -1,5 +1,174 @@
 # Changelog
 
+## v1.1.9 (2026-07-21)
+
+### Feat
+
+- **`config.tokenPrices.json` extraction — dedicated file for per-model pricing.**
+  Token pricing moved from `config.json` (`tokenPrices` key) to a dedicated
+  `config.tokenPrices.json` file (sibling of `config.json`). `install.sh` seeds
+  a minimal file with a global `default` entry; existing files are never
+  overwritten. New structure: nested `provider→model` dict with 5-layer
+  resolution cascade:
+  1. `config.json` `providers.<p>.config.tokenPrices.<model>` (highest)
+  2. `config.tokenPrices.json` `<provider>.<model>`
+  3. `config.json` `providers.<p>.config.tokenPrices.default`
+  4. `config.tokenPrices.json` `<provider>.default`
+  5. `config.tokenPrices.json` `default` (lowest)
+  The canonical `resolveTokenPrice()` function in `config.ts` replaced the
+  inlined lookup in `render.ts`, shared by both the render path and the
+  `normalizeTick` cost computation in `status-store.ts`. New type exports:
+  `TokenPriceEntry`, `TokenPricesFile`, `TokenPricesProviderBlock`,
+  `TokenPricesOverride`. (PR: #???)
+
+- **Cost history accumulated from JSONL during `replayAccInit`.**
+  `replayAccInit` now accumulates per-currency cost totals from `s.cost` fields
+  in JSONL samples during cold-slot recovery, matching `aggregateSamples`'
+  format. Previously the replay path returned an empty `costs` array; now it
+  correctly carries forward cost history across sessions. Cost precision
+  increased from 6dp to 10dp. (PR: #???)
+
+- **Default provider filter for `m_sum*` modules.**
+  `SumFilter` gained `providerBaseUrl` — a default filter that narrows JSONL
+  rows to the current `ANTHROPIC_BASE_URL` (normalized). Always set by
+  `parseWindowScope` when a provider is configured; no user-facing inline arg
+  yet. The `statKeyForFilter` cache key includes the provider URL so
+  provider-scoped and all-provider scans have separate cache rows. (PR: #???)
+
+- **Default model changed from "active" to "all" for `m_sum*` modules.**
+  `parseWindowScope` now defaults `model` to `"all"` (was `"active"`).
+  Users who want the old per-model behavior must explicitly specify
+  `|model|active|`. (PR: #???)
+
+- **`term` alias no longer requires `modelFilter` to be set.**
+  The `term` convenience alias in `parseWindowScope` previously required
+  `modelFilter !== undefined` and silently fell through to the wall-clock
+  path when model was `"all"`. Now `term` alone determines the time window
+  regardless of model scope — a bare `|term|short|` works without specifying
+  model. (PR: #???)
+
+- **`base_url` field in JSONL token samples.**
+  `TokenSample` now carries `base_url` (normalized `ANTHROPIC_BASE_URL`),
+  populated by `coerceSampleRow` from the raw stored row. Enables
+  provider-scoped JSONL filtering without heuristics. (PR: #???)
+
+- **`processTicket` moved after provider resolution in `index.ts`.**
+  `processAndSaveTick` now runs after `matchProvider` + `applyProviderOverrides`,
+  so the cost computation in `normalizeTick` can use the full 5-layer token
+  price cascade (including provider-scoped overrides from `config.json`
+  `providers.<p>.config.tokenPrices`). Previously ran before provider
+  resolution and had no access to the active provider's override block. (PR: #???)
+
+### Refactor
+
+- **Install/uninstall: `_creditgauge_managed` gate removed from all decisions.**
+  Both `edit-settings.mjs` (`status` op) and `uninstall.sh` (`MANAGED` gate) now
+  rely solely on `isOurWrapperCommand()` — checking whether the
+  `statusLine.command` string points to our wrapper — instead of the
+  `_creditgauge_managed` boolean marker. The marker is still written by
+  `write-managed` but is purely informational: losing it no longer breaks
+  re-install detection or uninstall restore. This fixes a class of bugs where
+  a missing marker caused uninstall to skip restoring `statusLine`. (PR: #???)
+
+- **`status` op output unchanged.** The `status` op still emits `managed` /
+  `foreign:` / `none` — the contract is stable. The only change is the internal
+  condition: `isOurWrapperCommand(sl.command)` instead of `_creditgauge_managed
+  === true && isOurWrapperCommand(sl.command)`.
+
+- **Uninstall: journal-primary restore with change report display.**
+  `applyJournalEntry` now returns a `report` array with per-field details
+  (`field`, `original`, `current`, `action`). `uninstall.sh` captures the
+  report via a `---REPORT---` delimiter in the `apply-journal-entry` output
+  and renders a formatted table showing reverted, preserved, and
+  special-handled fields. The journal path is now the sole entry point for
+  statusLine restore — the legacy EP/EKM fallback pass is eliminated since
+  `apply-journal-entry` already handles all entry types in one pass.
+
+- **`edit-settings.mjs` applies richer per-field handling during revert.**
+  `applyJournalEntry` now detects when the `command` field still contains our
+  wrapper despite user modifications (e.g. `refreshInterval` changed but
+  `command` is ours) and restores it — previously any user modification on
+  a tracked field caused the entire block to be preserved. Truly foreign
+  commands are still preserved.
+
+- **`CACHE_DIR` defined in `uninstall.sh`** to prevent `set -u` crash when the
+  cache directory does not exist.
+
+- **`uninstall.sh` streamlined.** The legacy double-pass for EP/EKM cleanup
+  (once in the SL_PLAN branch, once unconditionally for non-MANAGED) is
+  eliminated — `apply-journal-entry` processes all entry types in a single
+  pass. The code structure is simplified: journal → legacy file → bak fallback,
+  with no per-type branching.
+
+### Feat
+
+- **`creditgauge-plugin` CLI — `npx creditgauge plugin` subcommand family.**
+  Four new subcommands for query plugin lifecycle management, ported from
+  the standalone `creditgauge-plugin` package:
+  - `npx creditgauge plugin add <provider>` — interactive installation wizard:
+    shows provider description, lets the user edit template fields (TYPE,
+    BASE_URL_COMPARED_TO, COMPARE_METHOD, AUTHENTICATION_KEY) via a
+    menu-driven interface, then copies `query_plugins/<provider>/` into
+    `~/.claude/plugins/creditgauge/query_plugins/<provider>/` and writes the
+    provider entry to `config.json`. Supports `--dry-run` for preview.
+    Backed by `query_plugins/plugins.json` metadata registry.
+  - `npx creditgauge plugin remove <provider>` — removes the config entry,
+    plugin directory, and credential files (if declared in the registry).
+    Interactive confirmation with `--dry-run` preview.
+  - `npx creditgauge plugin auth <provider>` — runs the provider's bundled
+    `auth.cjs` authentication script with forwarded arguments. Validates the
+    plugin is installed and the auth script exists before spawning.
+  - `npx creditgauge plugin list` — lists all available plugins from the
+    registry with their title and auth support indicator.
+
+- **opencode.ai workspace quota plugin.** New `query_plugins/opencode/`
+  provider that scrapes the opencode.ai workspace page (`/workspace/<id>/go`)
+  for usage quotas using plain HTTP fetch + session cookies (no Playwright):
+  - Maps three usage cards: "Rolling Usage" → short (3h rolling window),
+    "Weekly Usage" → mid (7d window), "Monthly Usage" → long (30d window).
+  - `AUTHENTICATION_KEY` is the workspace ID (`wrk_xxxxxxxxx`) — the plugin
+    derives the workspace URL and session-cookie path from it.
+  - Ships `auth.cjs` for interactive login + cookie persistence. Declared in
+    `plugins.json` with `hasAuth: true`, `credentialsDir: "credentials/opencode"`.
+  - Configured via `providers.opencode` in `config.json` with
+    `BASE_URL_COMPARED_TO: "https://opencode.ai"`, `COMPARE_METHOD: "STARTWITH"`.
+  - Dual-locale parsing of human-readable reset durations (English + Chinese).
+
+- **`query_plugins/plugins.json` metadata registry.** Centralized plugin
+  descriptor (`query_plugins/plugins.json`) declaring:
+  - Built-in supported plugins: `opencode`, `bigmodel` (智谱), `copilot-api`,
+    `kimi` (月之暗面).
+  - Each entry carries `title`, `description`, `template` (default config
+    fields), `hasAuth`, `authScript`, `alternativeToken` hints, and
+    `credentialsDir` path.
+  - Backed by `bin/commands/registry.js` with lazy-loaded getter, exported
+    helpers (`knownProviders`, `isKnownProvider`, `getProvider`).
+
+- **`bin/commands/config.js` / `utils.js`** — shared ESM utilities for
+  `config.json` read/write, directory copy/remove, interactive prompts
+  (confirm / free-text / select), text wrapping.
+
+### Fix
+
+- **Various refactors (squashed dev work):**
+  - Dynamic TTL support in cache layer (`src/cache.ts`) — entries carry their
+    own TTL instead of a global default, enabling different refresh cadences
+    per data source.
+  - Query plugin ABI widened (`src/plugins/data.ts`) — `context` payload
+    extended for richer plugin-accessible data.
+  - Status-store replay logic refactored (`src/status-store.ts`) — cold-slot
+    recovery streamlined; JSONL replay timing tightened.
+  - Renderer fixes (`src/render.ts`) — bar spacing corrections, color edge
+    cases for zero-rate windows.
+  - Provider defaults improved (`src/providers.ts`) — trailing-slash
+    normalization on URL comparison strengthened.
+  - Type definitions widened (`src/types.ts`) — better null-state contracts
+    for plugin-facing fields.
+  - Test coverage: `src/cache.test.ts`, `src/lineTemplate.test.ts`,
+    `src/status-store.replay.test.ts` updated for new cache/refactor paths.
+  - Query plugin fixtures (`src/__fixtures__/query_plugins/sample/index.js`)
+    updated for the widened ABI.
+
 ## v1.1.7 (2026-07-18)
 
 ### Feat

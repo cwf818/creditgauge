@@ -18,6 +18,9 @@ import type {
   CompareMethod,
   ProviderEntry,
   ProviderType,
+  TokenPriceEntry,
+  TokenPricesFile,
+  TokenPricesOverride,
 } from "./types.ts";
 import * as diagnostics from "./diagnostics.ts";
 import {
@@ -89,9 +92,9 @@ const DEFAULT_CURRENCY: {
   fallback: string;
   default: string;
 } = {
-  prefixes: { USD: "$", CNY: "￥", RMB: "￥" },
+  prefixes: { USD: "$", CNY: "¥", RMB: "¥" },
   // Fallback prefix when the API returns an unknown currency code.
-  fallback: "￥",
+  fallback: "¥",
   // Currency assumed when an entry omits its `currency` field.
   default: "CNY",
 };
@@ -397,19 +400,24 @@ const DEFAULT_CONFIG: {
   // `["m_template|_X"]` form with a one-shot warn.
   statuslineTemplate: string[];
   tokenFormat: typeof DEFAULT_TOKEN_FORMAT;
-  // v0.9.x — per-model token pricing dict for the m_tokenCost /
-  // m_accTokenCost / m_sumTokenCost modules. Keyed by stdin.model.id
-  // (NOT display_name). Each value has the same {in, out, cachedIn,
-  // currency} shape as the legacy tokenPrice field (removed in
-  // v0.9.x — no compat shim). Missing keys render cost:n/a
-  // placeholder. Default `{}` means every model is a miss → every
-  // cost module renders cost:n/a until the user opts in.
-  tokenPrices: Record<string, {
-    in: number;       // price per input token
-    out: number;      // price per output token
-    cachedIn: number; // price per cache-read token
-    currency: string; // currency code e.g. "USD", "CNY"
-  }>;
+  // vX.X.X+ — per-model token pricing for the m_tokenCost family.
+  // Loaded from config.tokenPrices.json at startup. Nested
+  // provider→model dict with `default` fallback at each level:
+  //   default          → global fallback (any provider, any model)
+  //   <provider>.default → provider-level fallback
+  //   <provider>.<model> → specific model price
+  // The active provider's config.json override (providers.<p>.config.
+  // tokenPrices) sits in tokenPricesOverride and wins at priority 1/3.
+  // See resolveTokenPrice() for the full 5-layer cascade.
+  // Default `{}` means every lookup is a miss → cost:n/a placeholder.
+  tokenPrices: TokenPricesFile;
+  // vX.X.X+ — provider-scoped token price override. Set by
+  // applyProviderOverrides from the active provider's config block.
+  // Flat model→price dict (no provider key — already scoped).
+  // `default` = provider-level fallback. Null when no provider
+  // matches or no override exists. Priority 1 (specific) and 3
+  // (default) in the resolution cascade.
+  tokenPricesOverride: TokenPricesOverride;
   // Plugin version, populated at startup by index.ts from
   // .claude-plugin/plugin.json. The m_version display module reads
   // this field; tests inject values via __resetForTest.
@@ -520,10 +528,17 @@ const DEFAULT_CONFIG: {
   lineTemplates: DEFAULT_LINE_TEMPLATES,
   statuslineTemplate: DEFAULT_STATUSLINE_TEMPLATE,
   tokenFormat: DEFAULT_TOKEN_FORMAT,
-  // v0.9.x — tokenPrices defaults (empty dict — opt-in per model).
+  // vX.X.X+ — tokenPrices defaults (empty file — opt-in per model).
   // Every model id is a lookup miss by default, so the cost
-  // modules render cost:n/a until the user adds entries.
+  // modules render cost:n/a until the user adds entries to
+  // config.tokenPrices.json. An install.sh-seeded default entry
+  // provides a global fallback; the user can add provider/model
+  // entries on top.
   tokenPrices: {},
+  // vX.X.X+ — no provider override by default. Set by
+  // applyProviderOverrides when the active provider's config has
+  // a `tokenPrices` block.
+  tokenPricesOverride: null,
   version: "",
   providers: DEFAULT_PROVIDERS,
   quoteInsecureTls: false,
@@ -558,6 +573,69 @@ export const configStore = {
     _current.version = v;
   },
 };
+
+// vX.X.X+ — resolve the effective token price for a given provider+model
+// pair via the 5-layer cascade:
+//   1. config.json providers.<p>.config.tokenPrices.<model>   (highest)
+//   2. config.tokenPrices.json <provider>.<model>
+//   3. config.json providers.<p>.config.tokenPrices.default
+//   4. config.tokenPrices.json <provider>.default
+//   5. config.tokenPrices.json default                         (lowest)
+// No match → null. Callers render cost:n/a placeholder.
+// Accepts a Config object (from configStore.get() or cfg()) so the
+// caller controls which snapshot is used, and a providerId (from
+// matchProvider or ctx.currentProvider) + modelId (from stdin.model.id).
+export function resolveTokenPrice(
+  config: Config,
+  providerId: string | null,
+  modelId: string | null,
+): TokenPriceEntry | null {
+  if (!modelId) return null;
+
+  const override = config.tokenPricesOverride;
+  const file = config.tokenPrices;
+
+  // 1. Provider override — specific model
+  if (override?.[modelId]) return override[modelId];
+
+  // 2. File — specific model
+  if (providerId) {
+    const providerBlock = file[providerId];
+    if (providerBlock && typeof providerBlock === "object" && !Array.isArray(providerBlock)) {
+      const modelEntry = (providerBlock as Record<string, unknown>)[modelId];
+      if (modelEntry && typeof modelEntry === "object" && !Array.isArray(modelEntry)) {
+        const e = modelEntry as Record<string, unknown>;
+        if (typeof e.in === "number" && typeof e.out === "number" &&
+            typeof e.cachedIn === "number" && typeof e.currency === "string") {
+          return { in: e.in, out: e.out, cachedIn: e.cachedIn, currency: e.currency };
+        }
+      }
+    }
+  }
+
+  // 3. Provider override — default
+  if (override?.default) return override.default;
+
+  // 4. File — provider default
+  if (providerId) {
+    const providerBlock = file[providerId];
+    if (providerBlock && typeof providerBlock === "object" && !Array.isArray(providerBlock)) {
+      const def = (providerBlock as Record<string, unknown>).default;
+      if (def && typeof def === "object" && !Array.isArray(def)) {
+        const e = def as Record<string, unknown>;
+        if (typeof e.in === "number" && typeof e.out === "number" &&
+            typeof e.cachedIn === "number" && typeof e.currency === "string") {
+          return { in: e.in, out: e.out, cachedIn: e.cachedIn, currency: e.currency };
+        }
+      }
+    }
+  }
+
+  // 5. File — global default
+  if (file.default) return file.default;
+
+  return null;
+}
 
 // ----- Loader -----
 
@@ -614,7 +692,115 @@ export async function loadConfig(): Promise<Config> {
   // fine-grained debug flags on top of the merged result.
   _current = mergeConfig(parsed as Record<string, unknown>);
   _current.debug = parseDebugFlags((parsed as Record<string, unknown>).debug);
+
+  // vX.X.X+ — load config.tokenPrices.json (sibling of config.json).
+  // On missing file / parse failure, keep the default {} (cost:n/a).
+  _current.tokenPrices = loadTokenPricesFile(path);
+
   return _current;
+}
+
+// vX.X.X+ — read and parse config.tokenPrices.json from the same
+// directory as config.json. Returns the parsed TokenPricesFile on
+// success, or {} on any failure (missing, bad JSON, wrong shape).
+function loadTokenPricesFile(configPath: string): TokenPricesFile {
+  const dir = configPath.replace(/[/\\][^/\\]*$/, "");
+  const tpPath = join(dir, "config.tokenPrices.json");
+
+  diagnostics.logFsRead(tpPath, "config.loadTokenPricesFile", undefined, undefined, "config");
+  if (!existsSync(tpPath)) return {};
+
+  let raw: string;
+  try {
+    raw = readFileSync(tpPath, "utf8");
+  } catch (e) {
+    warn(`config.tokenPrices.json read failed (${(e as Error).message}); using default {}`);
+    return {};
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    warn(`config.tokenPrices.json invalid JSON (${(e as Error).message}); using default {}`);
+    return {};
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    warn("config.tokenPrices.json root must be a JSON object; using default {}");
+    return {};
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  const out: TokenPricesFile = {};
+
+  // Validate the `default` global fallback entry.
+  if ("default" in obj) {
+    const entry = validateTokenPriceEntry(obj.default, "default");
+    if (entry) out.default = entry;
+  }
+
+  // Validate per-provider blocks.
+  for (const [key, val] of Object.entries(obj)) {
+    if (key === "default") continue;
+    if (!val || typeof val !== "object" || Array.isArray(val)) {
+      warn(`config.tokenPrices.json.${key} must be an object; skipping`);
+      continue;
+    }
+    const providerBlock = val as Record<string, unknown>;
+    const providerOut: Record<string, TokenPriceEntry> = {};
+
+    if ("default" in providerBlock) {
+      const entry = validateTokenPriceEntry(providerBlock.default, `${key}.default`);
+      if (entry) providerOut.default = entry;
+    }
+
+    for (const [modelId, entry] of Object.entries(providerBlock)) {
+      if (modelId === "default") continue;
+      const validated = validateTokenPriceEntry(entry, `${key}.${modelId}`);
+      if (validated) providerOut[modelId] = validated;
+    }
+
+    if (Object.keys(providerOut).length > 0) {
+      out[key] = providerOut;
+    }
+  }
+
+  return out;
+}
+
+// vX.X.X+ — validate a single token price entry from config.tokenPrices.json.
+// Returns the validated TokenPriceEntry or null on failure.
+function validateTokenPriceEntry(
+  raw: unknown,
+  path: string,
+): TokenPriceEntry | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    warn(`config.tokenPrices.json ${path} must be an object; skipping`);
+    return null;
+  }
+  const em = raw as Record<string, unknown>;
+  const built: TokenPriceEntry = { in: 0, out: 0, cachedIn: 0, currency: "USD" };
+  let ok = true;
+  for (const key of ["in", "out", "cachedIn"] as const) {
+    if (key in em) {
+      if (typeof em[key] === "number" && Number.isFinite(em[key] as number) && (em[key] as number) >= 0) {
+        built[key] = em[key] as number;
+      } else {
+        warn(`config.tokenPrices.json ${path}.${key} must be a non-negative number; using default`);
+        ok = false;
+      }
+    }
+  }
+  if ("currency" in em) {
+    if (typeof em.currency === "string" && (em.currency as string).length > 0) {
+      built.currency = (em.currency as string).toUpperCase();
+    } else {
+      warn(`config.tokenPrices.json ${path}.currency must be a non-empty string; using default`);
+      ok = false;
+    }
+  }
+  return ok || Object.keys(em).length > 0 ? built : null;
 }
 
 // v0.4.0+ — apply a provider-specific Config override on top of the
@@ -646,7 +832,7 @@ export function applyProviderOverrides(raw: Record<string, unknown>): void {
     delete (raw as Record<string, unknown>).providers;
   }
   const base = JSON.parse(JSON.stringify(_current)) as Config;
-  _current = applyOverrides(base, raw);
+  _current = applyOverrides(base, raw, true);
 }
 
 // v0.4.0+ — exported so renderer modules (src/render.ts) can warn
@@ -725,7 +911,7 @@ function normalizeColor(v: unknown): string | null {
 // get re-clobbered by an unrelated bad value in provider.config).
 // Re-validating on top of the merged snapshot keeps each layer's
 // effect independent.
-function applyOverrides(base: Config, raw: Record<string, unknown>): Config {
+function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOverride = false): Config {
   // Deep-clone the input Config — we mutate freely and don't want to
   // touch the caller's object. JSON round-trip is fine here: Config
   // is plain data, no functions / Dates / Maps.
@@ -1332,44 +1518,63 @@ function applyOverrides(base: Config, raw: Record<string, unknown>): Config {
     }
   }
 
-  // v0.9.x — tokenPrices: opt-in per-model pricing for m_tokenCost
-  // family. Top-level keys are stdin.model.id values. The legacy
-  // tokenPrice (singular, scalar) was REMOVED in v0.9.x — if seen,
-  // emit a stderr warn and ignore it. No compat shim (per
-  // [[new-feature-convention]]).
+  // v0.9.x — tokenPrice (singular, scalar) was REMOVED. Emit a
+  // stderr warn and ignore it. No compat shim.
   if ("tokenPrice" in raw) {
     warn("tokenPrice is removed; use tokenPrices (per-model dict keyed by model.id) instead — ignoring");
   }
+  // vX.X.X+ — tokenPrices handling depends on context:
+  //   - Top-level config.json: warn + ignore (pricing moved to
+  //     config.tokenPrices.json; the old flat dict is no longer read).
+  //   - Provider-level config (providers.<p>.config.tokenPrices):
+  //     validate and store in out.tokenPricesOverride (flat model→price,
+  //     no provider key — already scoped). This is the highest-priority
+  //     layer (priorities 1 and 3 in the 5-layer cascade).
   if ("tokenPrices" in raw) {
     const tp = raw.tokenPrices;
-    if (tp && typeof tp === "object" && !Array.isArray(tp)) {
-      for (const [modelId, entry] of Object.entries(tp as Record<string, unknown>)) {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          warn(`tokenPrices.${modelId} must be an object; ignoring entry`);
-          continue;
-        }
-        const em = entry as Record<string, unknown>;
-        const built = { in: 0, out: 0, cachedIn: 0, currency: "USD" };
-        for (const key of ["in", "out", "cachedIn"] as const) {
-          if (key in em) {
-            if (typeof em[key] === "number" && Number.isFinite(em[key] as number) && (em[key] as number) >= 0) {
-              built[key] = em[key] as number;
-            } else {
-              warn(`tokenPrices.${modelId}.${key} must be a non-negative number; using default`);
-            }
-          }
-        }
-        if ("currency" in em) {
-          if (typeof em.currency === "string" && (em.currency as string).length > 0) {
-            built.currency = (em.currency as string).toUpperCase();
-          } else {
-            warn(`tokenPrices.${modelId}.currency must be a non-empty string; using default`);
-          }
-        }
-        out.tokenPrices[modelId] = built;
+    if (!isProviderOverride) {
+      // Top-level config.json: pricing has moved to config.tokenPrices.json.
+      // The old top-level tokenPrices dict is silently ignored — no
+      // migration shim (per [[new-feature-convention]]). The user can
+      // copy their entries into config.tokenPrices.json manually.
+      if (tp && typeof tp === "object" && !Array.isArray(tp) && Object.keys(tp as Record<string, unknown>).length > 0) {
+        warn("tokenPrices in config.json is ignored; pricing moved to config.tokenPrices.json — copy your entries there");
       }
     } else {
-      warn("tokenPrices must be an object; using default {}");
+      // Provider-level override: validate and store as the active
+      // provider's override. Flat model→price dict (default key =
+      // provider-level fallback). No provider nesting needed.
+      if (tp && typeof tp === "object" && !Array.isArray(tp)) {
+        const override: NonNullable<TokenPricesOverride> = {};
+        for (const [modelId, entry] of Object.entries(tp as Record<string, unknown>)) {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+            warn(`tokenPrices.${modelId} must be an object; ignoring entry`);
+            continue;
+          }
+          const em = entry as Record<string, unknown>;
+          const built: TokenPriceEntry = { in: 0, out: 0, cachedIn: 0, currency: "USD" };
+          for (const key of ["in", "out", "cachedIn"] as const) {
+            if (key in em) {
+              if (typeof em[key] === "number" && Number.isFinite(em[key] as number) && (em[key] as number) >= 0) {
+                built[key] = em[key] as number;
+              } else {
+                warn(`tokenPrices.${modelId}.${key} must be a non-negative number; using default`);
+              }
+            }
+          }
+          if ("currency" in em) {
+            if (typeof em.currency === "string" && (em.currency as string).length > 0) {
+              built.currency = (em.currency as string).toUpperCase();
+            } else {
+              warn(`tokenPrices.${modelId}.currency must be a non-empty string; using default`);
+            }
+          }
+          override[modelId] = built;
+        }
+        out.tokenPricesOverride = Object.keys(override).length > 0 ? override : null;
+      } else {
+        warn("providers.<p>.config.tokenPrices must be an object; ignoring");
+      }
     }
   }
 

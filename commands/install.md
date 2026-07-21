@@ -11,7 +11,13 @@ backs up any pre-existing statusLine to `settings.json.bak.<ISO-timestamp>`,
 and preserves the original command in `<claude-root>/plugins/creditgauge/state/upstream-cmd.sh`
 (sibling of `config.json`, stable across `/plugin install` rolls and cache
 wipes) so it can be re-invoked as the upstream. Re-running on an
-already-managed statusLine is a no-op (`_creditgauge_managed: true`).
+already-owned statusLine (the `statusLine.command` string still points to our
+wrapper) is a no-op — the check uses `isOurWrapperCommand()`, not the
+`_creditgauge_managed` marker (which is informational only).
+
+Also seeds `config.tokenPrices.json` (sibling of `config.json`) if absent,
+providing a global default price entry for the cost modules (`m_tokenCost` /
+`m_accTokenCost` / `m_sumTokenCost`). Existing files are never overwritten.
 
 The script runs locally with no network access and never prints
 `ANTHROPIC_AUTH_TOKEN`.

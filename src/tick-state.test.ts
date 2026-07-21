@@ -368,7 +368,7 @@ describe("data-processor — contextUsedPercent=0 carry-over (v0.8.15-alpha)", (
     // durationMs comparison can flag a regression.
     t.cost = { totalDurationMs: 500_000, totalApiDurationMs: 2000, totalLinesAdded: 0, totalLinesRemoved: 0 };
     statusStore.beginTick("D:\\test", t);
-    statusStore.processTick("D:\\test", t);
+    statusStore.processTick("D:\\test", t, null);
 
     const s = statusStore.getState();
     const prev = s.pending[statusStore.PREV_TICK_KEY];

@@ -106,7 +106,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     //   2. setAvg adds this tick (tokenIn=100, tokenOut=50, calls=1)
     //   3. commit → state.json flushed with the merged value
     //   4. appendSample → this tick's row appended (now 4 rows in JSONL)
-    statusStore.processAndSaveTick("D:\\test", validTokens());
+    statusStore.processAndSaveTick("D:\\test", validTokens(), null);
 
     // Replayed (350) + this-tick (100) = 450. The new JSONL row
     // appended at step 4 is NOT included in the replay — replay ran
@@ -132,7 +132,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     statusStore.appendSample("D:\\test", "sess-B", makeSample({ at: 1_000_004, in: 75, out: 25, apiMs: 750 }));
     statusStore.appendSample("D:\\test", "sess-B", makeSample({ at: 1_000_005, in: 25, out: 10, apiMs: 250 }));
 
-    statusStore.processAndSaveTick("D:\\test", validTokens({ sessionId: "sess-A" }));
+    statusStore.processAndSaveTick("D:\\test", validTokens({ sessionId: "sess-A" }), null);
 
     const slot = statusStore.readAccumulator("project", { cwd: "D:\\test" });
     assert.ok(slot, "project slot exists after replay");
@@ -152,7 +152,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     statusStore.appendSample("D:\\test", "sess-X", makeSample({ at: 1_000_003, in: 999, out: 999, apiMs: 9999, model: "model-B" }));
     statusStore.appendSample("D:\\test", "sess-X", makeSample({ at: 1_000_004, in: 50, out: 25, apiMs: 500, model: "model-A" }));
 
-    statusStore.processAndSaveTick("D:\\test", validTokens({ modelId: "model-A" }));
+    statusStore.processAndSaveTick("D:\\test", validTokens({ modelId: "model-A" }), null);
 
     const slot = statusStore.readAccumulator("model", {
       modelId: "model-A",
@@ -195,7 +195,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
       },
     }), "utf8");
 
-    statusStore.processAndSaveTick("D:\\test", validTokens());
+    statusStore.processAndSaveTick("D:\\test", validTokens(), null);
 
     const slot = statusStore.readAccumulator("session", {
       sessionId: "sess-test",
@@ -212,7 +212,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     // No JSONL rows seeded. state.json is also missing. beginTick
     // loads {}; replay finds no samples, returns null, no mark();
     // setAvg seeds the slot from this tick's delta alone.
-    statusStore.processAndSaveTick("D:\\test", validTokens());
+    statusStore.processAndSaveTick("D:\\test", validTokens(), null);
 
     const slot = statusStore.readAccumulator("session", {
       sessionId: "sess-test",
@@ -240,7 +240,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
 
     // sessionId is undefined → the `if (cwd && tokens?.sessionId)` gate
     // blocks the entire REPLAY_SCOPES loop.
-    statusStore.processAndSaveTick("D:\\test", validTokens({ sessionId: undefined }));
+    statusStore.processAndSaveTick("D:\\test", validTokens({ sessionId: undefined }), null);
 
     // No slot exists because processTick bailed on the validity gate
     // before setAvg fired. Replay also did not fire (gated on sessionId).
@@ -260,7 +260,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_005, in: 50, out: 25, apiMs: 500 }));
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_012, in: 75, out: 35, apiMs: 750 }));
 
-    statusStore.processAndSaveTick("D:\\test", validTokens());
+    statusStore.processAndSaveTick("D:\\test", validTokens(), null);
 
     const slot = statusStore.readAccumulator("session", {
       sessionId: "sess-test",
@@ -297,7 +297,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "0";
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000 }));
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000 }));
-    statusStore.processAndSaveTick("D:\\test", validTokens());
+    statusStore.processAndSaveTick("D:\\test", validTokens(), null);
 
     const diagA = join(tmpA, "plugins", "creditgauge", "state", statusStore.projectHash("D:\\test"), "diagnostics.jsonl");
     if (existsSync(diagA)) {
@@ -325,7 +325,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     diagnostics.setDebugFlags({ statusStore: true, smokeNormalizeTick: true });
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000 }));
     statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000 }));
-    statusStore.processAndSaveTick("D:\\test", validTokens());
+    statusStore.processAndSaveTick("D:\\test", validTokens(), null);
     diagnostics.__resetDebugFlagsForTest();
 
     const diagB = join(tmpB, "plugins", "creditgauge", "state", statusStore.projectHash("D:\\test"), "diagnostics.jsonl");

@@ -114,7 +114,7 @@ Claude Code's `statusLine.command` spawns a child process that reads a session J
    - `m_sumApiMs` — sum of deltaApiMs over the window
    - `m_sumTokenHitRate` — `sumTokenCachedIn / sumTokenTotalIn` over the window
    - `m_sumTokenInSpeed` / `m_sumTokenOutSpeed` — `sumTokenIn / sumApiMs * 1000` (t/s) over the window
-   - Inline args: `:window:<dhms|all>` (default 5h), `:model:<active|name|all>` (default active), `:align:<true|false>` (default true; only effective when model=active AND window∈{5h,7d} AND ctx.fiveHour/weekly.resetStartAt is set, else wall-clock fallback), `:nulldrop:<b>`, `:color:<c>`.
+   - Inline args: `:window:<dhms|all>` (default all), `:model:<active|name|all>` (default all), `:align:<true|false>` (default true when model=active AND window∈{5h,7d} AND ctx.fiveHour/weekly.resetStartAt is set, else wall-clock fallback), `:nulldrop:<b>`, `:color:<c>`. vX.X.X+ — default provider filter (always on when `ANTHROPIC_BASE_URL` is set) narrows JSONL rows to the current provider. `term` alias no longer requires `modelFilter` to be set.
 
    **Removed in v0.8.0 (no alias):** `m_token5h`, `m_token7d`, `m_tokenInAvg`, `m_tokenOutAvg`, `m_ctx` (→ `m_contextSize`), `m_cachedTokenIn` (→ `m_tokenCachedIn`), `m_cacheRead` (→ `m_tokenCachedIn`), `m_contextUsed` (→ `m_contextUsedPercent`). The old v0.4.0 ADR at `memory/token-usage-design-adr.md` is marked DEPRECATED — refer to [[token-modules-redesign-v0-8-0]] + [[sum-avg-modules-step2]] for the v0.8.0 contract.
 
@@ -127,7 +127,7 @@ Claude Code's `statusLine.command` spawns a child process that reads a session J
 The per-tick pipeline is a two-phase split between **data-processor (writes)** and **render (reads)** — owned by `src/data-processor.ts` and `src/tick-state.ts`. The pipeline:
 
 1. **`beginTick(cwd, tokens)`** (index.ts:main, right after `diagnostics.setSessionCwd`) — loads `state/<projectHash>/status.json` into a per-tick `pending` map, validates the snapshot (see below), and exposes the pending map for the data-processor to mutate.
-2. **`processTick(cwd, tokens)`** (index.ts:main, right after `beginTick`) — ALREADY-RUNS data-processing pipeline. **Always fires**, independent of the user's `lineTemplate`. Even an empty template still has the data-processor run, so the next tick has a baseline. Five stages, gated on the validation flag:
+2. **`processTick(cwd, tokens, provider)`** (index.ts:main, AFTER provider resolution + `applyProviderOverrides`) — ALREADY-RUNS data-processing pipeline. Runs after provider resolution so the cost computation in `normalizeTick` can use the full 5-layer token price cascade (provider overrides + config.tokenPrices.json). **Always fires**, independent of the user's `lineTemplate`. Even an empty template still has the data-processor run, so the next tick has a baseline. Five stages, gated on the validation flag:
    - **Stage 1** — regression-reset: if `prev.totalApiMs > current.totalApiDurationMs` (claude-code process restarted), `tickState.mark(CCSESSION_KEY, emptyTickStatus())`.
    - **Stage 2** — compute deltas via `computeAndCacheTickDeltaPure(tokens)`; stash on `_state.delta` for render reads (no on-disk side effect).
    - **Stage 3** — `setPrevTick`: writes PREV_TICK_KEY for next tick's baseline.
@@ -155,6 +155,7 @@ The runtime state directory is partitioned by project so multiple Claude Code se
   upstream-cmd.sh              # top-level — install/uninstall dependency, NOT touched per tick
   upstream-cmd.txt             # top-level — install/uninstall dependency, NOT touched per tick
   config.json                  # top-level — install/uninstall dependency, NOT touched per tick
+  config.tokenPrices.json      # top-level — per-model token pricing, seeded by install.sh, 5-layer cascade
   <projectHash>/               # e.g. d--workspace-creditgauge-cc (the actual cwd on this machine)
     cache.json                 # disk-shadowed TTL cache (per-project, key-prefixed by <projectHash>:)
     diagnostics.jsonl          # append-only warning/error log (per-project)
@@ -178,12 +179,16 @@ The install script is the **only** way the plugin writes to `settings.json`. The
 1. Resolves the active `settings.json` (user-level by default; `--project` for project-level). If `--project` and the file is missing, creates a minimal one (it does NOT copy from user-level).
 2. **One-shot state-dir migration (v0.7.0):** if `${CLAUDE_ROOT}/plugins/tokenplan-usage-hud/state/` exists and `${CLAUDE_ROOT}/plugins/creditgauge/state/` does NOT, copies the legacy contents forward (preserving `upstream-cmd.sh`, `upstream-cmd.txt`, `cache.json`, `diagnostics.jsonl`, `<projectHash>/` subtree) so existing token-sample history, diagnostics logs, and preserved upstream commands follow the user. Idempotent and safe to re-run.
 3. Reads `statusLine` via `scripts/lib/edit-settings.mjs`:
-   - `_creditgauge_managed === true` → already ours, no-op.
+   - `isOurWrapperCommand(sl.command)` → the wrapper command string points to our cache → already ours, no-op.
    - `command` is some foreign string → back up the file to `settings.json.bak.<ISO-timestamp>`, preserve the original command at `<claude-root>/plugins/creditgauge/state/upstream-cmd.sh` (with shebang) and `<claude-root>/plugins/creditgauge/state/upstream-cmd.txt` (bare command), then rewrite `statusLine` to invoke our wrapper with `CREDITGAUGE_UPSTREAM_CMD=<upstream-cmd.sh>`. The state dir is sibling of `config.json` — STABLE across `/plugin install` rolls and cache wipes, so a future uninstall can always find it.
    - no `statusLine` → just install our wrapper.
-4. Rewrites the file via `scripts/lib/edit-settings.mjs`, which preserves the original line ending (CRLF on Windows, LF elsewhere).
+4. Seeds `config.tokenPrices.json` if absent (sibling of `config.json`): writes a minimal file with a global `default` price entry so the cost modules (`m_tokenCost` / `m_accTokenCost` / `m_sumTokenCost`) have a fallback value. Existing files are NEVER overwritten — re-running `:install` is a no-op for this step.
+5. Rewrites the file via `scripts/lib/edit-settings.mjs`, which preserves the original line ending (CRLF on Windows, LF elsewhere).
 
-`scripts/uninstall.sh` is the uninstall entry point — invoked by `/creditgauge:uninstall` (slash command) and `npm run dev:uninstall` (CLI). It works even when the plugin cache is gone (priority order: stable `state/upstream-cmd.txt` → highest-version legacy `state/upstream-cmd.txt` → most recent pre-managed `settings.json.bak.<ts>`). It also removes `creditgauge@creditgauge` from `settings.json.enabledPlugins` and wipes `cache/`, `marketplaces/`, `plugins/creditgauge/state/`, and the loader's JSON rows. v0.7.0 also strips the legacy `tokenplan-usage-hud@tokenplan-usage-hud` key and wipes the legacy `cache/`, `marketplaces/`, `plugins/tokenplan-usage-hud/state/` paths (one-release legacy dual-strip). Idempotent. See `scripts/uninstall.sh` for the full state machine.
+`scripts/uninstall.sh` is the uninstall entry point — invoked by `/creditgauge:uninstall` (slash command) and `npm run dev:uninstall` (CLI). It works even when the plugin cache is gone. The restore strategy:
+   1. **Install-journal** (primary): the journal records every per-field change made by `install.sh`. `applyJournalEntry` reverts fields that still match the install snapshot and preserves any field the user modified after install. Outputs a change report table showing which fields were reverted, preserved, or required special handling.
+   2. **Legacy file restore** (no journal): restore from `state/upstream-cmd.txt` (stable state dir → highest-version cache → most recent `settings.json.bak.<ts>` whose `statusLine` does NOT point to our wrapper).
+It also removes `creditgauge@creditgauge` from `settings.json.enabledPlugins` and wipes `cache/`, `marketplaces/`, `plugins/creditgauge/state/`, and the loader's JSON rows. v0.7.0 also strips the legacy `tokenplan-usage-hud@tokenplan-usage-hud` key and wipes the legacy `cache/`, `marketplaces/`, `plugins/tokenplan-usage-hud/state/` paths (one-release legacy dual-strip). Idempotent. See `scripts/uninstall.sh` for the full state machine.
 
 v0.9.x: `install.sh --uninstall` was REMOVED. The thin shim that used to forward to `uninstall.sh` is gone — use `/creditgauge:uninstall` (or call `scripts/uninstall.sh` directly). `install.sh --uninstall` now exits 2 with a hint message pointing at the dedicated command.
 
@@ -193,7 +198,7 @@ v0.9.x: `install.sh --uninstall` was REMOVED. The thin shim that used to forward
 
 The plugin is delivered as files at a fixed cache path: `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/creditgauge/creditgauge/<version>/`. The `wrapper.sh`, `install.sh`, and `dist/index.js` are picked up by the marketplace machinery once the version directory exists.
 
-After install, run `/creditgauge:install` to wire the wrapper into `settings.json`. The script marks `statusLine._creditgauge_managed = true` so re-running it is a no-op. If another plugin later overwrites `statusLine`, just re-run `/creditgauge:install` — it detects the marker is gone and re-establishes it.
+After install, run `/creditgauge:install` to wire the wrapper into `settings.json`. The script writes `_creditgauge_managed: true` as an informational marker, but the **authoritative check** is `isOurWrapperCommand()` — whether the `statusLine.command` string still points to our cache path. Re-running on an already-owned statusLine (wrapper command matches) is a no-op regardless of the marker. If another plugin later overwrites `statusLine`, just re-run `/creditgauge:install` — it detects the command is foreign and re-establishes it.
 
 **This plugin must be the sole `statusLine` owner.** Claude Code does not currently compose two plugins' `statusLine` fields — the later-installed plugin wins. To compose with another statusline (e.g. `ccstatusline`), invoke it from inside our wrapper via `CREDITGAUGE_UPSTREAM_CMD` rather than installing it as a second plugin.
 

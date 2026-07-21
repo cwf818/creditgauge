@@ -830,13 +830,13 @@ describe("renderBalanceLine — single-currency", () => {
   });
   afterEach(() => __resetForTest());
 
-  it("CNY uses ￥ prefix, integer value, bright-green band", () => {
+  it("CNY uses ¥ prefix, integer value, bright-green band", () => {
     const line = renderBalanceLine({
       isAvailable: true,
       entries: [{ currency: "CNY", totalBalance: 110 }],
       minValue: 110,
     });
-    assert.equal(strip(line), "Balance: ￥110");
+    assert.equal(strip(line), "Balance: ¥110");
     assert.ok(line.startsWith(`Balance: ${BRIGHT_GREEN}`));
     assert.ok(line.endsWith(RESET));
   });
@@ -851,7 +851,7 @@ describe("renderBalanceLine — single-currency", () => {
   });
 
   it("unknown currency falls back to bare code as prefix", () => {
-    // Currency code not in the default map → currencyLabel falls back
+    // Currency code not in the default map → currencySymbol falls back
     // to the uppercased code (e.g. EUR → "EUR"). No per-config lookup,
     // no legacy prefix resolution.
     const line = renderBalanceLine({
@@ -903,9 +903,9 @@ describe("renderBalanceLine — multi-currency joined by ·", () => {
       ],
       minValue: 3.5,
     });
-    assert.equal(strip(line), "Balance: ￥110 · $3.5");
+    assert.equal(strip(line), "Balance: ¥110 · $3.5");
     // Each entry wrapped in its own color + RESET.
-    assert.ok(line.includes(`${BRIGHT_GREEN}￥110${RESET}`), `expected CNY chunk in BRIGHT_GREEN, got: ${line}`);
+    assert.ok(line.includes(`${BRIGHT_GREEN}¥110${RESET}`), `expected CNY chunk in BRIGHT_GREEN, got: ${line}`);
     assert.ok(line.includes(`${RED}$3.5${RESET}`), `expected USD chunk in RED, got: ${line}`);
     // Joined by ' · ' between chunks.
     assert.ok(line.includes(`${RESET} · ${RED}`), `expected ' · ' separator between chunks, got: ${line}`);
@@ -920,12 +920,12 @@ describe("renderBalanceLine — multi-currency joined by ·", () => {
       ],
       minValue: 100,
     });
-    assert.equal(strip(line), "Balance: ￥100 · $200.5");
+    assert.equal(strip(line), "Balance: ¥100 · $200.5");
     // v2026.07.17+: each chunk is its own SGR block.
     // Both CNY 100 and USD 200.5 are >= 50, so both land in the top band
     // (BRIGHT_GREEN) under default balanceBands=[5,10,20,50].
     assert.ok(
-      line.includes(`${BRIGHT_GREEN}￥100${RESET}`),
+      line.includes(`${BRIGHT_GREEN}¥100${RESET}`),
       `expected CNY chunk in BRIGHT_GREEN, got: ${line}`,
     );
     assert.ok(
@@ -955,8 +955,8 @@ describe("renderBalanceLine — multi-currency joined by ·", () => {
       },
       CYAN,
     );
-    assert.equal(strip(line), "￥110 · $3.5");
-    assert.ok(line.includes(`${CYAN}￥110${RESET}`), `expected CNY chunk in CYAN, got: ${line}`);
+    assert.equal(strip(line), "¥110 · $3.5");
+    assert.ok(line.includes(`${CYAN}¥110${RESET}`), `expected CNY chunk in CYAN, got: ${line}`);
     assert.ok(line.includes(`${CYAN}$3.5${RESET}`), `expected USD chunk in CYAN, got: ${line}`);
   });
 

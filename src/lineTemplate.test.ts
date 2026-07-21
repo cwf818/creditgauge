@@ -1553,7 +1553,7 @@ describe("lineTemplate — colored modules :color override (user wins)", () => {
     // pending with a clone of the disk-loaded store).
     beginTickForTest(snap.cwd, snap);
     setPrevTick("sess-speed", { totalApiMs: 0 }, "C:\\fake");
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -1581,7 +1581,7 @@ describe("lineTemplate — colored modules :color override (user wins)", () => {
       cost: { totalDurationMs: 1000, totalApiDurationMs: 1000, totalLinesAdded: null, totalLinesRemoved: null },
     };
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -1617,7 +1617,7 @@ describe("lineTemplate — plain token-usage modules :color override", () => {
       cost: { totalDurationMs: 1_000, totalApiDurationMs: 1_000, totalLinesAdded: null, totalLinesRemoved: null },
     };
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -1647,7 +1647,7 @@ describe("lineTemplate — plain token-usage modules :color override", () => {
       cost: { totalDurationMs: 1_000, totalApiDurationMs: 1_000, totalLinesAdded: null, totalLinesRemoved: null },
     };
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -1791,7 +1791,7 @@ describe("lineTemplate — m_*tokenIn/m_*tokenOut default tints (v0.8.30+)", () 
     __resetForTest({ statuslineTemplate: ["m_tokenOut"] });
     const snap = makeSnap();
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -1823,7 +1823,7 @@ describe("lineTemplate — m_*tokenIn/m_*tokenOut default tints (v0.8.30+)", () 
     __resetForTest({ statuslineTemplate: ["m_tokenIn|color:yellow"] });
     const snap = makeSnap();
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -1841,7 +1841,7 @@ describe("lineTemplate — m_*tokenIn/m_*tokenOut default tints (v0.8.30+)", () 
     __resetForTest({ statuslineTemplate: ["m_tokenInSpeed"] });
     const snap = makeSnap();
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -1873,11 +1873,11 @@ describe("lineTemplate — m_*tokenIn/m_*tokenOut default tints (v0.8.30+)", () 
     // pre-seed via beginTickForTest / processTick on a
     // baseline tick, then call again with the same totalApiMs.
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     // Now call again with the SAME totalApiMs — deltaApi=0.
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -1896,10 +1896,10 @@ describe("lineTemplate — m_*tokenIn/m_*tokenOut default tints (v0.8.30+)", () 
     __resetForTest({ statuslineTemplate: ["m_tokenOut"] });
     const snap = makeSnap();
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -2711,7 +2711,7 @@ describe("lineTemplate — two-class separator (| + : or =)", () => {
       cost: { totalDurationMs: 1000, totalApiDurationMs: 1000, totalLinesAdded: null, totalLinesRemoved: null },
     };
     beginTickForTest(snap.cwd, snap);
-    processTick(snap.cwd, snap);
+    processTick(snap.cwd, snap, null);
     statusStore.commit();
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),

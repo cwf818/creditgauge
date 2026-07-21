@@ -407,7 +407,7 @@ type BalanceEntry = {
   currency:    string;        // ISO 4217 ("USD", "CNY"), or free-form
   totalBalance: number;       // balance value in `currency`
   // Display prefix is derived from `currency` via the renderer's
-  // `currencyLabel(code)` helper (CNY/RMB → ￥, USD → $, others → bare
+  // `currencyLabel(code)` helper (CNY/RMB → ¥, USD → $, others → bare
   // uppercase code). Plugins no longer carry a label per entry.
 };
 

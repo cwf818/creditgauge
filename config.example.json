@@ -20,8 +20,8 @@
     "balanceBands": [5, 10, 20, 50]
   },
   "currency": {
-    "prefixes": { "USD": "$", "CNY": "￥", "RMB": "￥" },
-    "fallback": "￥",
+    "prefixes": { "USD": "$", "CNY": "¥", "RMB": "¥" },
+    "fallback": "¥",
     "default": "CNY"
   },
   "stale": {
@@ -52,7 +52,9 @@
     "minimax": {
       "TYPE": "Quota",
       "BASE_URL_COMPARED_TO": "https://api.minimaxi.com/anthropic",
-      "COMPARE_METHOD": "EXACT"
+      "COMPARE_METHOD": "EXACT",
+      "//_config_comment": "Optional per-provider config overrides. tokenPrices here has the highest priority (levels 1 and 3 in the 5-layer cascade).",
+      "//_config_example": { "config": { "tokenPrices": { "MiniMax-M3": { "currency": "USD", "in": 15, "out": 75, "cachedIn": 1.5 } } } }
     },
     "deepseek": {
       "TYPE": "BALANCE",
@@ -60,9 +62,8 @@
       "COMPARE_METHOD": "EXACT"
     }
   },
-  "tokenPrices": {
-    "MiniMax-M3":      { "in": 10000, "out": 20000, "cachedIn": 5000, "currency": "USD" },
-    "claude-opus-4-8": { "in": 15000, "out": 75000, "cachedIn": 1500, "currency": "USD" },
-    "deepseek-chat":   { "in":   200, "out":  2000, "cachedIn":   50, "currency": "CNY" }
-  }
+  // vX.X.X+ — tokenPrices has moved to config.tokenPrices.json.
+  // See config.tokenPrices.example.json for the provider-model
+  // hierarchy and 5-layer resolution cascade.
+  "_comment_tokenPrices": "moved to config.tokenPrices.json"
 }

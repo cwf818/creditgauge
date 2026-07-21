@@ -145,7 +145,7 @@ function applyJournalEntry(data, entry) {
   const at = rawId.indexOf(":");
   const path = at >= 0 ? rawId.slice(at + 1).split(".") : rawId.split(".");
   if (path.length === 0 || path[0] === "") {
-    return { action: "skipped:bad-id", changed: false };
+    return { action: "skipped:bad-id", changed: false, report: [] };
   }
 
   // Resolve the current value at `path`. Mutation is rejected if any
@@ -156,7 +156,7 @@ function applyJournalEntry(data, entry) {
     const k = path[i];
     if (cur == null || typeof cur !== "object" || !(k in cur)) {
       // Intermediate node missing → user deleted this branch already.
-      return { action: "skipped:missing-parent", changed: false };
+      return { action: "skipped:missing-parent", changed: false, report: [] };
     }
     cur = cur[k];
   }
@@ -215,7 +215,7 @@ function applyJournalEntry(data, entry) {
   ) {
     const current = cur[leafKey];
     if (typeof current !== "object" || current === null || Array.isArray(current)) {
-      return { action: "skipped:current-not-object", changed: false };
+      return { action: "skipped:current-not-object", changed: false, report: [] };
     }
     const isCreate = entry.action === "create";
     // Format expectations differ by entry id:
@@ -235,10 +235,10 @@ function applyJournalEntry(data, entry) {
       rawId.endsWith(":extraKnownMarketplaces");
     if (isPluginDictEntry) {
       if (entry.before === null) {
-        return { action: "skipped:legacy-entry", changed: false };
+        return { action: "skipped:legacy-entry", changed: false, report: [] };
       }
       if (typeof entry.before !== "object" || Array.isArray(entry.before)) {
-        return { action: "skipped:malformed-before", changed: false };
+        return { action: "skipped:malformed-before", changed: false, report: [] };
       }
     }
     const beforeObj = (entry.before && typeof entry.before === "object" && !Array.isArray(entry.before))
@@ -251,6 +251,7 @@ function applyJournalEntry(data, entry) {
     for (const k of Object.keys(entry.after)) keySet.add(k);
     if (beforeObj) for (const k of Object.keys(beforeObj)) keySet.add(k);
 
+    const report = [];
     const next = {};
     let anyReverted = false;
     let anyUserTouched = false;
@@ -263,9 +264,28 @@ function applyJournalEntry(data, entry) {
 
       if (inBefore && inAfter) {
         if (inCurrent && !deepEq(current[k], entry.after[k])) {
-          // User touched an install-modified field — preserve.
-          next[k] = current[k];
-          anyUserTouched = true;
+          // User touched an install-modified field.
+          if (k === "command" && typeof current[k] === "string" && isOurWrapperCommand(current[k])) {
+            // Still our wrapper despite modifications — revert and report.
+            next[k] = beforeObj[k];
+            anyReverted = true;
+            report.push({
+              field: `${path.join(".")}.command`,
+              original: entry.after[k],
+              current: current[k],
+              action: "restored:command-modified",
+            });
+          } else {
+            // Truly foreign — preserve.
+            next[k] = current[k];
+            anyUserTouched = true;
+            report.push({
+              field: `${path.join(".")}.${k}`,
+              original: entry.after[k],
+              current: current[k],
+              action: "preserved",
+            });
+          }
         } else if (inCurrent) {
           // Untouched by user — restore to before.
           next[k] = beforeObj[k];
@@ -284,9 +304,27 @@ function applyJournalEntry(data, entry) {
       } else if (!inBefore && inAfter) {
         // Install CREATED this field.
         if (inCurrent && !deepEq(current[k], entry.after[k])) {
-          // User touched — preserve.
-          next[k] = current[k];
-          anyUserTouched = true;
+          // User touched an install-created field.
+          if (k === "command" && typeof current[k] === "string" && isOurWrapperCommand(current[k])) {
+            // Still our wrapper — delete (revert the create). Don't add to next.
+            anyReverted = true;
+            report.push({
+              field: `${path.join(".")}.command`,
+              original: entry.after[k],
+              current: current[k],
+              action: "restored:command-modified",
+            });
+          } else {
+            // Truly foreign — preserve.
+            next[k] = current[k];
+            anyUserTouched = true;
+            report.push({
+              field: `${path.join(".")}.${k}`,
+              original: entry.after[k],
+              current: current[k],
+              action: "preserved",
+            });
+          }
         } else if (inCurrent) {
           // Untouched — delete the install-added field.
           anyReverted = true;
@@ -300,7 +338,7 @@ function applyJournalEntry(data, entry) {
     }
 
     if (!anyReverted) {
-      return { action: "preserved:all-fields-user-touched", changed: false };
+      return { action: "preserved:all-fields-user-touched", changed: false, report };
     }
 
     // mutate + no user modifications anywhere → restore whole block to before.
@@ -311,10 +349,10 @@ function applyJournalEntry(data, entry) {
       const restored = beforeObj ? { ...beforeObj } : {};
       if (Object.keys(restored).length === 0) {
         delete cur[leafKey];
-        return { action: "reverted:block-deleted", changed: true };
+        return { action: "reverted:block-deleted", changed: true, report };
       }
       cur[leafKey] = restored;
-      return { action: "reverted:block-restored", changed: true };
+      return { action: "reverted:block-restored", changed: true, report };
     }
 
     // create + everything install-added is gone + no user modifications
@@ -322,11 +360,11 @@ function applyJournalEntry(data, entry) {
     // statusLine" path; leaving an empty object behind would be misleading.
     if (isCreate && !anyUserTouched && !anyUserAdded && Object.keys(next).length === 0) {
       delete cur[leafKey];
-      return { action: "reverted:block-deleted", changed: true };
+      return { action: "reverted:block-deleted", changed: true, report };
     }
 
     cur[leafKey] = next;
-    return { action: "reverted:block-fields", changed: true };
+    return { action: "reverted:block-fields", changed: true, report };
   }
 
   // Field-level entry.
@@ -334,34 +372,61 @@ function applyJournalEntry(data, entry) {
     // Field doesn't exist on disk → either install wasn't run, or the
     // user has already removed it (including, for create, the whole
     // parent block). Nothing to revert, mark applied.
-    return { action: "skipped:absent", changed: false };
+    return { action: "skipped:absent", changed: false, report: [] };
   }
   const currentVal = cur[leafKey];
   if (entry.action === "create") {
     if (deepEq(currentVal, entry.after)) {
       delete cur[leafKey];
-      return { action: "reverted:create-delete", changed: true };
+      return { action: "reverted:create-delete", changed: true, report: [] };
     }
-    return { action: "preserved:user-touched", changed: false };
+    return {
+      action: "preserved:user-touched",
+      changed: false,
+      report: [{
+        field: path.join("."),
+        original: entry.after,
+        current: currentVal,
+        action: "preserved",
+      }],
+    };
   }
   if (entry.action === "mutate") {
     if (deepEq(currentVal, entry.after)) {
       cur[leafKey] = entry.before;
-      return { action: "reverted:mutate-restore", changed: true };
+      return { action: "reverted:mutate-restore", changed: true, report: [] };
     }
-    return { action: "preserved:user-touched", changed: false };
+    return {
+      action: "preserved:user-touched",
+      changed: false,
+      report: [{
+        field: path.join("."),
+        original: entry.after,
+        current: currentVal,
+        action: "preserved",
+      }],
+    };
   }
   if (entry.action === "clamp-down") {
     if (deepEq(currentVal, entry.after)) {
       cur[leafKey] = entry.before;
-      return { action: "reverted:clamp-down", changed: true };
+      return { action: "reverted:clamp-down", changed: true, report: [] };
     }
     if (deepEq(currentVal, entry.before)) {
-      return { action: "no-op:already-reverted", changed: false };
+      return { action: "no-op:already-reverted", changed: false, report: [] };
     }
-    return { action: "preserved:user-touched", changed: false };
+    return {
+      action: "preserved:user-touched",
+      changed: false,
+      report: [{
+        field: path.join("."),
+        original: entry.after,
+        current: currentVal,
+        action: "preserved",
+      }],
+    };
   }
-  return { action: "skipped:unknown-action", changed: false };
+  return { action: "skipped:unknown-action", changed: false, report: [] };
 }
 
 
@@ -396,10 +461,8 @@ switch (op) {
   case "status": {
     const data = readJson(target);
     const sl = data.statusLine;
-    if (sl && sl._creditgauge_managed === true && isOurWrapperCommand(sl.command)) {
-      // Both the marker AND the wrapper command are ours → safe to treat as
-      // managed (uninstall can restore from upstream-cmd.txt; re-install is
-      // a no-op).
+    if (sl && isOurWrapperCommand(sl.command)) {
+      // The wrapper command is ours → safe to treat as managed.
       process.stdout.write("managed");
     } else if (sl && typeof sl.command === "string") {
       // Either no marker, or marker is set but the command is foreign
@@ -573,11 +636,15 @@ switch (op) {
     const data = readJson(target);
     const applied = [];
     const skipped = [];
+    const allReports = [];
     for (const entry of targets) {
       const r = applyJournalEntry(data, entry);
       const summary = `${entry.id}|${r.action}`;
       if (r.changed) applied.push(summary);
       else skipped.push(summary);
+      if (r.report && r.report.length > 0) {
+        allReports.push(...r.report);
+      }
     }
     writeJson(target, data);
     if (applied.length > 0) {
@@ -679,6 +746,9 @@ switch (op) {
     // Stdout: one line per entry decision, parseable from bash.
     for (const s of applied) process.stdout.write(`applied: ${s}\n`);
     for (const s of skipped) process.stdout.write(`skipped: ${s}\n`);
+    // Output change report for uninstall.sh to display to the user.
+    process.stdout.write("---REPORT---\n");
+    process.stdout.write(JSON.stringify(allReports) + "\n");
     break;
   }
 

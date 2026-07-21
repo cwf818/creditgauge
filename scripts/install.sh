@@ -382,6 +382,22 @@ SEED_EOF
   echo "install.sh: seeded basic config at ${SEED_FILE}"
 fi
 
+# vX.X.X+ — config.tokenPrices.json seed: when absent, write a
+# minimal file with a global `default` price entry so cost modules
+# (m_tokenCost / m_accTokenCost / m_sumTokenCost) have a fallback
+# value. Existing files are NEVER overwritten — re-running :install
+# is a no-op for this step. Users add provider/model entries on top.
+TP_FILE="${SEED_DIR}/config.tokenPrices.json"
+if [ ! -f "$TP_FILE" ]; then
+  mkdir -p "$SEED_DIR"
+  cat > "$TP_FILE" <<'TP_SEED_EOF'
+{
+  "default": { "currency": "CNY", "in": 2.1, "out": 8.4, "cachedIn": 0.42 }
+}
+TP_SEED_EOF
+  echo "install.sh: seeded config.tokenPrices.json at ${TP_FILE}"
+fi
+
 # ----------------------------------------------------------------------------
 # install-journal: record every modification we are about to make so
 # uninstall can revert field-by-field against the user's stated

@@ -6,18 +6,28 @@ allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/uninstall.sh:*)"]
 
 # creditgauge :uninstall
 
-Restores the original `statusLine.command` from the stable
-`plugins/creditgauge/state/upstream-cmd.txt` (sibling of
-`config.json`) if available, otherwise falls back to the most recent
-pre-managed `settings.json.bak.<ts>`. Strips `creditgauge@creditgauge`
-from `enabledPlugins` and `extraKnownMarketplaces`, wipes
-`cache/creditgauge/`, the marketplace dir, and the plugin's row from
-`installed_plugins.json` and `known_marketplaces.json`. Backs up
-`settings.json` and the two JSON files with `.<name>.bak.<timestamp>`
-before any destructive change. Runs `scripts/clean.sh` as its final step
-to trim old backups (keeps only the most recent per file; user-named
-backups like `settings.json.bak-pre-v0.1.8` are not touched). Idempotent
-— re-running on a clean system prints "nothing to do" and exits 0.
+Restores `settings.json` via the **install-journal** (primary path): each
+field-level change made by `install.sh` is reverted if the current value still
+matches the install snapshot; fields the user modified after install are
+preserved. If no journal is available, falls back to the legacy path (stable
+`plugins/creditgauge/state/upstream-cmd.txt` then most recent pre-managed
+`settings.json.bak.<ts>`).
+
+The ownership check uses the `statusLine.command` string itself
+(`isOurWrapperCommand`) — the `_creditgauge_managed` marker is informational
+only and is NOT required for uninstall to work.
+
+After field-level restore, outputs a change report table showing which fields
+were reverted, preserved, or required special handling.
+
+Also strips `creditgauge@creditgauge` from `enabledPlugins` and
+`extraKnownMarketplaces`, wipes `cache/creditgauge/`, the marketplace dir, and
+the plugin's row from `installed_plugins.json` and `known_marketplaces.json`.
+Backs up `settings.json` and the two JSON files with `.<name>.bak.<timestamp>`
+before any destructive change. Runs `scripts/clean.sh` as its final step to
+trim old backups (keeps only the most recent per file; user-named backups like
+`settings.json.bak-pre-v0.1.8` are not touched). Idempotent — re-running on a
+clean system prints "nothing to do" and exits 0.
 
 **Default behavior (no flags)** is a *partial-preserve* uninstall: the
 `state/` cache noise (`cache.json` / `cache.stat.json` /

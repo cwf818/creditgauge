@@ -17,6 +17,45 @@ export type ProviderType = "QUOTA" | "BALANCE";
 
 export type CompareMethod = "EXACT" | "INCLUDE" | "STARTWITH";
 
+// vX.X.X+ — per-model token price entry. Shared between config.ts
+// (config.tokenPrices.json), provider overrides, and render.ts
+// (cost formatting). Previously a local type in render.ts.
+export type TokenPriceEntry = {
+  in: number;       // price per 1M input tokens
+  out: number;      // price per 1M output tokens
+  cachedIn: number; // price per 1M cache-read tokens
+  currency: string; // e.g. "USD", "CNY"
+};
+
+// vX.X.X+ — per-provider price block in config.tokenPrices.json.
+// A flat model→price dict with an optional `default` fallback.
+// The index value includes `undefined` so `default` is a compatible
+// named property (TypeScript requires named properties to be
+// assignable to the index signature's value type).
+export type TokenPricesProviderBlock = {
+  default?: TokenPriceEntry;
+  [modelId: string]: TokenPriceEntry | undefined;
+};
+
+// vX.X.X+ — config.tokenPrices.json shape. Nested provider→model
+// dict with `default` fallback at each level.
+//   default          → global fallback (any provider, any model)
+//   <provider>.default → provider-level fallback
+//   <provider>.<model> → specific model price
+export type TokenPricesFile = {
+  default?: TokenPriceEntry;
+  [providerId: string]: TokenPricesProviderBlock | TokenPriceEntry | undefined;
+};
+
+// vX.X.X+ — provider-scoped override from config.json
+// providers.<provider>.config.tokenPrices. Flat model→price dict
+// (no provider key needed — already scoped to the active provider).
+// `default` key = provider-level fallback.
+export type TokenPricesOverride = {
+  default?: TokenPriceEntry;
+  [modelId: string]: TokenPriceEntry | undefined;
+} | null;
+
 // ----- v0.4.0+ token-usage module ---------------------------------------
 //
 // One row appended per statusline tick. Source = stdin (per probe schema
@@ -72,6 +111,11 @@ export type TokenSample = {
   out: number;
   cacheIn: number;
   cacheCreation: number;
+  // vX.X.X+ — per-tick token cost computed at processTick time from
+  // stdin deltas × tokenPrices. Stored as a dict so multi-currency
+  // consumers can accumulate without currency-conversion ambiguity.
+  // undefined for legacy rows written before this field existed.
+  cost?: { currency: string; value: string };
   // v6.x — session+cwd are encoded in the path
   // (`state/<projectHash>/<sessionId>.jsonl`), so the row no longer
   // carries them. `model` and `totalApiMs` are stamped when

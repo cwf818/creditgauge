@@ -14,7 +14,8 @@
 // `intervals` dict shape (v0.9.4) so non-reserved terms aren't
 // dropped on the floor.
 
-import { configStore, warn } from "./config.ts";
+import { configStore, resolveTokenPrice, warn } from "./config.ts";
+import { normalizeUrl } from "./utils.ts";
 import { providerTypeFor } from "./providers.ts";
 import * as diagnostics from "./diagnostics.ts";
 import {
@@ -1085,19 +1086,19 @@ function formatBalanceValue(v: number): string {
 }
 
 // Display prefix for one balance entry. The `label` field was retired
-// from the BalanceEntry schema; `currencyLabel(code)` resolves the
+// from the BalanceEntry schema; `currencySymbol(code)` resolves the
 // display prefix from the currency code, with a hard-coded fallback
 // to the uppercased code (e.g. "EUR10.50") for unmapped codes —
 // never blanks, so a new provider currency never silently disappears.
 function formatBalanceChunk(currency: string, v: number): string {
-  return `${currencyLabel(currency)}${formatBalanceValue(v)}`;
+  return `${currencySymbol(currency)}${formatBalanceValue(v)}`;
 }
 
 // Currency-code → display-symbol lookup. Hard-coded default map covers
 // the currencies DeepSeek + the most common USD-denominated providers
 // expose; unmapped codes fall back to the uppercased code so a plugin
 // for a less common currency still renders something readable
-// (e.g. `currencyLabel("EUR") → "EUR"`).
+// (e.g. `currencySymbol("EUR") → "EUR"`).
 //
 // The host deliberately does NOT carry this map in config (per the
 // "全部通过插件进行独立解析" directive): a plugin that wants a custom
@@ -1105,11 +1106,11 @@ function formatBalanceChunk(currency: string, v: number): string {
 // code, or surface its own m_label module. Renaming the mapped
 // symbols (e.g. user prefers `"$"` for CNY too) requires editing this
 // one helper.
-function currencyLabel(code: string): string {
+function currencySymbol(code: string): string {
   switch (code) {
     case "CNY":
     case "RMB":
-      return "￥";
+      return "¥";
     case "USD":
       return "$";
     default:
@@ -1120,7 +1121,7 @@ function currencyLabel(code: string): string {
 type BalanceLike = {
   isAvailable: boolean;
   // vX.X.X+ — entries are now `{ currency, totalBalance }` only; the
-  // display prefix is derived from `currency` via `currencyLabel`.
+  // display prefix is derived from `currency` via `currencySymbol`.
   // Plugin authors emitting pre-built Balance objects must not ship
   // a `label` field — the schema no longer carries it.
   entries: ReadonlyArray<{ currency: string; totalBalance: number }>;
@@ -1286,6 +1287,12 @@ type RenderContext = {
   // never knew about plugin sources) can build a ctx without it;
   // renderProviderLine normalizes missing → null at construction.
   pluginSource?: "user" | "builtin" | "missing" | null;
+  // vX.X.X+ — default provider filter: normalized ANTHROPIC_BASE_URL
+  // at render time, used by m_sum* modules to filter JSONL rows to
+  // the current provider. Computed by renderProviderLine from
+  // process.env.ANTHROPIC_BASE_URL. undefined when no provider is
+  // configured (empty env var), which skips the provider filter.
+  providerBaseUrl?: string;
 };
 
 // v0.4.x — modules may declare a `type` filter so they only render
@@ -2247,30 +2254,21 @@ m_quota: Object.assign(
   // m_tokenIn's "live but stale" pattern: cost is calculated from
   // live stdin values and wrapped in STALE_COLOR.
   m_tokenCost: (c) => {
-    // v0.8.40+ — |valueOnly|true drops the "cost:" prefix from
-    // both the idle-stale branch and the live wrap branch.
+    // vX.X.X+ — reads per-tick cost from the snapshot (computed
+    // at processTick time from stdin deltas × tokenPrices).
+    // No longer resolves tokenPrices at render time.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("cost");
     const t = c.tokens;
     if (!t || !t.sessionId) return placeholderBare("m_tokenCost", c);
-    // v0.9.x — look up the active model's price entry by
-    // stdin.model.id. Null on miss → placeholder.
-    const tp = resolveTokenPrice(t.modelId ?? null);
-    // v0.9.x — miss OR all-zero prices → placeholder (matches
-    // the v0.8.40 "unconfigured → cost:n/a" contract; an entry
-    // with in/out/cachedIn=0 is still treated as unconfigured).
-    if (!tp || tp.in + tp.out + tp.cachedIn <= 0) return placeholderBare("m_tokenCost", c);
     const r = getDeltaForRender();
-    const liveIn = t.current.tokenIn ?? 0;
-    const liveOut = t.current.tokenOut ?? 0;
-    const liveCached = t.current.tokenCachedIn ?? 0;
-    // tokenPrices values are per-million-tokens; divide by 1,000,000.
-    const liveCost = ((tp.in / 1_000_000) * liveIn) + ((tp.out / 1_000_000) * liveOut) + ((tp.cachedIn / 1_000_000) * liveCached);
+    const snapshotCost = r.cost;
+    if (!snapshotCost) return placeholderBare("m_tokenCost", c);
     if (!r.hasMeasurement) {
-      // Idle tick: live stdin values × price, stale-colored
-      return `${STALE_COLOR}${prefix}${formatCostWithCurrency(liveCost, tp.currency)}${RESET}`;
+      // Idle tick: stale-colored snapshot cost.
+      return `${STALE_COLOR}${prefix}${formatCostDict(snapshotCost)}${RESET}`;
     }
-    const cost = ((tp.in / 1_000_000) * r.in) + ((tp.out / 1_000_000) * r.out) + ((tp.cachedIn / 1_000_000) * r.cachedIn);
-    return wrapValueDefault("m_tokenCost", cost, `${prefix}${formatCostWithCurrency(cost, tp.currency)}`, undefined);
+    const cost = parseFloat(snapshotCost.value);
+    return wrapValueDefault("m_tokenCost", cost, `${prefix}${formatCostDict(snapshotCost)}`, undefined);
   },
   // v0.4.0+ — per-API-call input speed. Reads the previous-tick
   // snapshot from cache (keyed by sessionId) and computes
@@ -2423,23 +2421,19 @@ m_quota: Object.assign(
   // When all prices are zero (the default) the module falls back to
   // placeholder "cost:n/a". Scope resolved via passThrough (default session).
   m_accTokenCost: (c) => {
-    // v0.8.40+ — |valueOnly|true drops the "cost:" prefix.
+    // vX.X.X+ — reads accumulated costs from peekAcc. Each
+    // tick's cost was frozen at processTick time, so the
+    // accumulator holds per-currency cost strings.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("cost");
     const scope = passThroughScope(c);
     const useScope = scope ?? "session";
     const v = peekAcc(useScope, c);
     if (!v) return placeholderBare("m_accTokenCost", c);
-    // v0.9.x — active-model price entry. The accumulator is
-    // per-scope (session/project/model); cost is priced off the
-    // CURRENT active model, not the slot's source model. Miss →
-    // placeholder.
-    const tp = resolveTokenPrice(c.tokens?.modelId ?? null);
-    // v0.9.x — miss OR all-zero prices → placeholder (matches
-    // the v0.8.40 "unconfigured → cost:n/a" contract).
-    if (!tp || tp.in + tp.out + tp.cachedIn <= 0) return placeholderBare("m_accTokenCost", c);
-    // tokenPrices values are per-million-tokens; divide by 1,000,000.
-    const cost = ((tp.in / 1_000_000) * v.accTokenIn) + ((tp.out / 1_000_000) * v.accTokenOut) + ((tp.cachedIn / 1_000_000) * v.accTokenCachedIn);
-    return wrapValueDefault("m_accTokenCost", cost, `${prefix}${formatCostWithCurrency(cost, tp.currency)}`, undefined);
+    if (!v.costs || v.costs.length === 0) return placeholderBare("m_accTokenCost", c);
+    // Sum all currencies' float values for wrapValueDefault's
+    // "is this a positive number?" check (color banding).
+    const total = v.costs.reduce((s, e) => s + parseFloat(e.value), 0);
+    return wrapValueDefault("m_accTokenCost", total, `${prefix}${formatCostsArray(v.costs)}`, undefined);
   },
   // v0.8.13+ — m_accTokenInSpeed / m_accTokenOutSpeed — session-
   // cumulative throughput (t/s) computed from the chosen scope's
@@ -2602,19 +2596,13 @@ m_quota: Object.assign(
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumTokenCost", c);
-    // v0.9.x — explicit |model|<literal> wins; otherwise active
-    // model id. |model|all falls back to active (sum-all doesn't
-    // make sense for pricing — the price is per-model). When
-    // modelFilter is set, use it; else use ctx.tokens.modelId.
-    const lookupId = filter.modelFilter !== undefined ? filter.modelFilter : c.tokens?.modelId;
-    const tp = resolveTokenPrice(lookupId ?? null);
-    // v0.9.x — miss OR all-zero prices → placeholder (matches
-    // the v0.8.40 "unconfigured → cost:n/a" contract).
-    if (!tp || tp.in + tp.out + tp.cachedIn <= 0) return placeholderBare("m_sumTokenCost", c);
-    // v0.8.40+ — |valueOnly|true drops the "cost:" prefix.
+    // vX.X.X+ — reads costs from the aggregate (summed at
+    // aggregateSamples time from JSONL samples). No longer
+    // resolves tokenPrices at render time.
+    if (!agg.costs || agg.costs.length === 0) return placeholderBare("m_sumTokenCost", c);
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("cost");
-    const cost = ((tp.in / 1_000_000) * agg.sumIn) + ((tp.out / 1_000_000) * agg.sumOut) + ((tp.cachedIn / 1_000_000) * agg.sumCached);
-    return wrapValueDefault("m_sumTokenCost", cost, `${prefix}${formatCostWithCurrency(cost, tp.currency)}`, undefined);
+    const total = agg.costs.reduce((s, e) => s + parseFloat(e.value), 0);
+    return wrapValueDefault("m_sumTokenCost", total, `${prefix}${formatCostsArray(agg.costs)}`, undefined);
   },
   // vX.X.X+ — periodic quota estimate. Same price math as
   // m_sumTokenCost (sumIn*in + sumOut*out + sumCached*cachedIn) but
@@ -2638,27 +2626,23 @@ m_quota: Object.assign(
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumEstQuota", c);
-    // v0.9.x — explicit |model|<literal> wins; otherwise active
-    // model id. (Same rule as the m_tokenCost family.)
-    const lookupId = filter.modelFilter !== undefined ? filter.modelFilter : c.tokens?.modelId;
-    const tp = resolveTokenPrice(lookupId ?? null);
-    if (!tp || tp.in + tp.out + tp.cachedIn <= 0) return placeholderBare("m_sumEstQuota", c);
-    // vX.X.X+ — the aligned used% is stamped on the aggregate by
-    // getStatAggregate. null on every non-aligned path (window=all
-    // / dhms / no plan window matched). The user contract: null →
-    // "n/a" (no aligned plan to project against).
+    // vX.X.X+ — reads costs from the aggregate. Multi-currency
+    // is converted to the active model's currency before
+    // projection (exchange-rate table TBD; stub picks first match).
+    if (!agg.costs || agg.costs.length === 0) return placeholderBare("m_sumEstQuota", c);
     const pct = agg.alignedUsedPercent;
     if (pct == null) return placeholderBare("m_sumEstQuota", c);
-    // vX.X.X+ — the user contract: alignedUsedPercent===0 →
-    // "--" (no data yet / window just started; dividing by 0
-    // would be infinity). Distinct from null ("n/a") which means
-    // "no aligned plan matched" rather than "data is zero".
     if (pct === 0) return placeholderBare("m_sumEstQuota", c);
-    // vX.X.X+ — |valueOnly|true drops the "est:" prefix.
+    // Determine the target currency for the projection.
+    const lookupId = filter.modelFilter !== undefined ? filter.modelFilter : c.tokens?.modelId;
+    const tp = resolveTokenPriceForCtx(c, lookupId ?? null);
+    const targetCurrency = tp?.currency ?? agg.costs[0].currency;
+    const single = convertCostsToCurrency(agg.costs, targetCurrency);
+    if (!single) return placeholderBare("m_sumEstQuota", c);
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("est");
-    const cost = ((tp.in / 1_000_000) * agg.sumIn) + ((tp.out / 1_000_000) * agg.sumOut) + ((tp.cachedIn / 1_000_000) * agg.sumCached);
+    const cost = parseFloat(single.value);
     const est = cost / (pct / 100);
-    return wrapValueDefault("m_sumEstQuota", est, `${prefix}${formatEstCostWithCurrency(est, tp.currency)}`, undefined);
+    return wrapValueDefault("m_sumEstQuota", est, `${prefix}${formatEstCostWithCurrency(est, single.currency)}`, undefined);
   },
   m_sumApiMs: (c) => {
     // v0.8.7+ — bare m_sum* reads c.passThrough (forwarded by an outer m_template); v0.8.14+ — zero-row renders placeholder (was: drop)
@@ -3263,35 +3247,35 @@ export function formatCost(n: number): string {
   return n.toFixed(precision);
 }
 
-// v0.9.x — per-model token-price resolver. Returns the configured
-// price entry for the given model id (stdin.model.id), or null
-// when there's no entry — the caller falls back to cost:n/a
-// placeholder. Single source of truth for "is there a price for
-// this model?" — sits in render.ts (next to formatCost) because
-// the contract is a renderer-level business decision, not a
-// schema concern. Keeping config.ts purely about schema and
-// validation.
-type TokenPriceEntry = { in: number; out: number; cachedIn: number; currency: string };
-function resolveTokenPrice(modelId: string | null): TokenPriceEntry | null {
-  if (!modelId) return null;
-  const m = cfg().tokenPrices;
-  if (!m) return null;
-  return m[modelId] ?? null;
+// vX.X.X+ — per-model token-price resolver. Delegates to the
+// 5-layer cascade in config.ts (resolveTokenPrice), passing the
+// active provider from the render context so provider-scoped
+// pricing (config.tokenPrices.json <provider>.<model> /
+// <provider>.default) and provider overrides (config.json
+// providers.<p>.config.tokenPrices) take effect. The local
+// lookup was inlined before vX.X.X; now it's a thin wrapper
+// around the canonical resolution in config.ts.
+function resolveTokenPriceForCtx(
+  ctx: RenderContext,
+  modelId: string | null,
+): import("./types.ts").TokenPriceEntry | null {
+  return resolveTokenPrice(cfg(), ctx.currentProvider ?? null, modelId);
 }
 
 // v0.9.x — currency-aware cost formatter. USD (the historical
 // default) renders bare to keep existing renders byte-identical;
 // any other currency is prepended with no separator (e.g.
-// "￥264.12", "CNY 264.12" — the trailing space is a v0.9.x
+// "¥264.12", "CNY 264.12" — the trailing space is a v0.9.x
 // convenience for ASCII codes; v0.9.x drop it for symbol codes
 // where a space breaks the visual). Co-located with formatCost
 // because the two formatters are a matched pair — formatCost
 // produces the digits, this attaches the per-model currency
 // prefix.
+// vX.X.X+ — always uses currencySymbol for display. Previously
+// USD rendered bare (no prefix); now all currencies get their
+// symbol via currencySymbol (e.g. "$0.0012", "¥0.0012").
 function formatCostWithCurrency(cost: number, currency: string): string {
-  const body = formatCost(cost);
-  if (!currency || currency === "USD") return body;
-  return `${currency}${body}`;
+  return `${currencySymbol(currency)}${formatCost(cost)}`;
 }
 
 // vX.X.X+ — fixed-2dp cost formatter for m_sumEstQuota. The
@@ -3310,12 +3294,44 @@ function formatEstCost(n: number): string {
 // vX.X.X+ — currency-aware wrapper for the periodic quota
 // estimate. Mirrors formatCostWithCurrency's "USD → bare body,
 // other currency → ${currency}${body}" rule so a user with
-// "CNY" / "￥" prices sees the same prefix shape for cost and
+// "CNY" / "¥" prices sees the same prefix shape for cost and
 // est. Co-located with formatEstCost.
+// vX.X.X+ — always uses currencySymbol for display. Mirrors
+// formatCostWithCurrency's "always symbol" rule.
 function formatEstCostWithCurrency(cost: number, currency: string): string {
-  const body = formatEstCost(cost);
-  if (!currency || currency === "USD") return body;
-  return `${currency}${body}`;
+  return `${currencySymbol(currency)}${formatEstCost(cost)}`;
+}
+
+// vX.X.X+ — format a single cost dict {currency, value} using
+// currencySymbol for the display prefix.
+function formatCostDict(cost: { currency: string; value: string }): string {
+  return formatCostWithCurrency(parseFloat(cost.value), cost.currency);
+}
+
+// vX.X.X+ — format a costs array as comma+space-separated
+// entries, each with its own currency symbol. Empty array →
+// "n/a" for the caller's placeholder path. Single-currency
+// renders identically to formatCostDict (no trailing comma).
+function formatCostsArray(costs: Array<{ currency: string; value: string }>): string {
+  return costs.map((c) => formatCostDict(c)).join(", ");
+}
+
+// vX.X.X+ — stub: convert a multi-currency costs array into a
+// single target currency. For now picks the first matching entry
+// or falls back to the first entry. Exchange-rate table TBD.
+// Returns { currency, value } or null when costs is empty.
+function convertCostsToCurrency(
+  costs: Array<{ currency: string; value: string }>,
+  targetCurrency: string,
+): { currency: string; value: string } | null {
+  if (costs.length === 0) return null;
+  // Single currency — return as-is (no conversion needed).
+  if (costs.length === 1) return costs[0];
+  // Multi-currency — find an entry matching the target currency.
+  const match = costs.find((c) => c.currency === targetCurrency);
+  if (match) return match;
+  // No match — fall back to the first entry (stub; rates TBD).
+  return costs[0];
 }
 
 // v0.4.0+ — 5-band color picker for the speed scale.
@@ -3497,12 +3513,16 @@ function parseDhms(raw: string | undefined): number | "all" | null {
 //
 //   modelFilter — undefined (all rows), "active" (current model),
 //                 or a literal model name.
+//
+//   providerBaseUrl — default provider filter (always set);
+//                 normalized ANTHROPIC_BASE_URL at render time.
 type SumFilter = {
   windowKey: string;
   sinceMs: number;
   interval: Interval | null;
   alignActive: boolean;
   modelFilter?: string;
+  providerBaseUrl?: string;
 };
 
 // vX.X.X — look up which Interval (if any) declares a given
@@ -3527,8 +3547,15 @@ function parseWindowScope(
   ctx: RenderContext,
   params: Record<string, ResolvedValue | undefined>,
 ): SumFilter | null {
+  // vX.X.X+ — default provider filter: when a provider is configured
+  // (ctx.providerBaseUrl is set), always filter JSONL rows by the
+  // current normalized ANTHROPIC_BASE_URL. No user-facing `provider`
+  // inline arg yet; this is a fixed default.
+  const providerBaseUrl = ctx.providerBaseUrl;
+  const hasProvider = providerBaseUrl !== undefined && providerBaseUrl !== "";
+
   // Resolve model first — shared across every branch below.
-  const modelRaw = (params.model as string | undefined) ?? "active";
+  const modelRaw = (params.model as string | undefined) ?? "all";
   let modelFilter: string | undefined;
   if (modelRaw === "all") {
     modelFilter = undefined;
@@ -3549,39 +3576,17 @@ function parseWindowScope(
   // `getStatAggregate` populates `alignedUsedPercent` and
   // m_sumEstQuota gets a usable estimate).
   //
-  // User contract: `term` is equivalent to writing
-  //   `|window|<intervals[term].windowId>|align|true`
-  // — but `term` ALSO requires `model != "all"` (a per-term
-  // scan without a model filter is ambiguous: per-model
-  // sum-in vs. all-model sum-in over the same window give
-  // very different readings, and the per-term short-circuit
-  // picks the per-model reading). When `model=all` the user
-  // should write the explicit `|window|...|align|true` form
-  // instead, and parseWindowScope silently falls through to
-  // that path (no warn — the user may have legitimately set
-  // both).
-  //
-  // Opt-in: `term` only takes effect when the user EXPLICITLY
-  // sets `|term|<key>`. Unlike m_windowQuota (where the term
-  // axis is the primary selector with a "short" default), the
-  // m_sum* family already has a "no time anchor" default via
-  // `|window|`-omitted → "all" sentinel. Defaulting `term` to
-  // "short" unconditionally would silently change every bare
-  // m_sum* module to a 5h-aligned scan (breaking existing
-  // `|window|<dhms>` users who depend on the wall-clock
-  // default). The opt-in contract is the safer reading of the
-  // user spec — `term` is a NEW axis, not a re-definition of
-  // the existing `window` default.
+  // `term` is a convenience alias for writing
+  // `|window|<intervals[term].windowId>|align|true` — it
+  // alone determines the time window; model is orthogonal.
+  // No model filter is required — the term's window applies
+  // regardless of model scope.
   //
   // Failure modes (interval missing / no usable startAt+endAt)
-  // also fall through to the existing window/align/dhms logic
+  // fall through to the existing window/align/dhms logic
   // below — `term` is a CONVENIENCE, not a hard requirement.
   const termRaw = params.term;
-  if (
-    typeof termRaw === "string" &&
-    termRaw !== "all" &&
-    modelFilter !== undefined
-  ) {
+  if (typeof termRaw === "string" && termRaw !== "all") {
     const iv = intervalForTerm(termRaw, ctx);
     if (iv != null) {
       const w = intervalToWindow(iv);
@@ -3603,6 +3608,7 @@ function parseWindowScope(
             interval: iv,
             alignActive: true,
             modelFilter,
+            ...(hasProvider ? { providerBaseUrl } : {}),
           };
         }
       }
@@ -3639,6 +3645,7 @@ function parseWindowScope(
       interval: null,
       alignActive: false,
       modelFilter,
+      ...(hasProvider ? { providerBaseUrl } : {}),
     };
   }
 
@@ -3664,6 +3671,7 @@ function parseWindowScope(
             interval: matchedIv,
             alignActive: true,
             modelFilter,
+            ...(hasProvider ? { providerBaseUrl } : {}),
           };
         }
       }
@@ -3682,6 +3690,7 @@ function parseWindowScope(
       interval: null,
       alignActive: false,
       modelFilter,
+      ...(hasProvider ? { providerBaseUrl } : {}),
     };
   }
 
@@ -4298,7 +4307,7 @@ const SCOPE_PARAM = {
 //
 // `:model|<active|name|all>` — narrow the jsonl scan to one model
 //   identity, "active" (the model currently displayed in m_model),
-//   or "all" (every row). Default is "active". The literal "all"
+//   or "all" (every row). Default is "all". The literal "all"
 //   skips per-row model filtering entirely.
 //
 // `:window|<dhms|all>` — the time window to scan. Accepts any
@@ -6076,25 +6085,17 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_tokenCost: (params, ctx) => {
     const t = ctx.tokens;
     if (!t || !t.sessionId) return placeholderWithColor("m_tokenCost", params, ctx);
-    // v0.9.x — active-model price entry. Miss OR all-zero prices
-    // → placeholder (matches the v0.8.40 contract).
-    const tp = resolveTokenPrice(t.modelId ?? null);
-    if (!tp || tp.in + tp.out + tp.cachedIn <= 0) return placeholderWithColor("m_tokenCost", params, ctx);
     const r = getDeltaForRender();
-    const liveIn = t.current.tokenIn ?? 0;
-    const liveOut = t.current.tokenOut ?? 0;
-    const liveCached = t.current.tokenCachedIn ?? 0;
-    // tokenPrices values are per-million-tokens; divide by 1,000,000.
-    const liveCost = ((tp.in / 1_000_000) * liveIn) + ((tp.out / 1_000_000) * liveOut) + ((tp.cachedIn / 1_000_000) * liveCached);
+    const snapshotCost = r.cost;
+    if (!snapshotCost) return placeholderWithColor("m_tokenCost", params, ctx);
     const userColor = params.color as string | undefined;
-    // v0.8.40+ — |valueOnly|true drops the "cost:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("cost");
     if (!r.hasMeasurement) {
       const color = userColor ?? STALE_COLOR;
-      return `${color}${prefix}${formatCostWithCurrency(liveCost, tp.currency)}${RESET}`;
+      return `${color}${prefix}${formatCostDict(snapshotCost)}${RESET}`;
     }
-    const cost = ((tp.in / 1_000_000) * r.in) + ((tp.out / 1_000_000) * r.out) + ((tp.cachedIn / 1_000_000) * r.cachedIn);
-    return wrapValueDefault("m_tokenCost", cost, `${prefix}${formatCostWithCurrency(cost, tp.currency)}`, userColor);
+    const cost = parseFloat(snapshotCost.value);
+    return wrapValueDefault("m_tokenCost", cost, `${prefix}${formatCostDict(snapshotCost)}`, userColor);
   },
   // v0.4.0+ — :color|scale (or no :color| at all) → 5-band
   // scale color on the active tick, STALE_COLOR on the
@@ -6191,14 +6192,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const scope = resolveAccScope(params, ctx);
     const v = peekAcc(scope, ctx);
     if (!v) return placeholderWithColor("m_accTokenCost", params, ctx);
-    // v0.9.x — active-model price entry. Miss OR all-zero prices
-    // → placeholder (matches the v0.8.40 contract).
-    const tp = resolveTokenPrice(ctx.tokens?.modelId ?? null);
-    if (!tp || tp.in + tp.out + tp.cachedIn <= 0) return placeholderWithColor("m_accTokenCost", params, ctx);
-    const cost = ((tp.in / 1_000_000) * v.accTokenIn) + ((tp.out / 1_000_000) * v.accTokenOut) + ((tp.cachedIn / 1_000_000) * v.accTokenCachedIn);
-    // v0.8.40+ — |valueOnly|true drops the "cost:" prefix.
+    if (!v.costs || v.costs.length === 0) return placeholderWithColor("m_accTokenCost", params, ctx);
+    const total = v.costs.reduce((s, e) => s + parseFloat(e.value), 0);
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("cost");
-    return wrapValueDefault("m_accTokenCost", cost, `${prefix}${formatCostWithCurrency(cost, tp.currency)}`, passThroughOr<string>(params, ctx, "color"));
+    return wrapValueDefault("m_accTokenCost", total, `${prefix}${formatCostsArray(v.costs)}`, passThroughOr<string>(params, ctx, "color"));
   },
   // v0.8.13+ — inline m_accTokenInSpeed / m_accTokenOutSpeed.
   // Mirrors m_tokenInSpeed / m_tokenOutSpeed contract: `:color|scale`
@@ -6332,17 +6329,11 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (!filter) return INLINE_BADARG;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderWithColor("m_sumTokenCost", params, ctx);
-    // v0.9.x — explicit |model|<literal> wins; otherwise active
-    // model id. (Same rule as the MODULES form.)
-    const lookupId = filter.modelFilter !== undefined ? filter.modelFilter : ctx.tokens?.modelId;
-    const tp = resolveTokenPrice(lookupId ?? null);
-    // v0.9.x — miss OR all-zero prices → placeholder (matches
-    // the v0.8.40 "unconfigured → cost:n/a" contract).
-    if (!tp || tp.in + tp.out + tp.cachedIn <= 0) return placeholderWithColor("m_sumTokenCost", params, ctx);
-    const cost = ((tp.in / 1_000_000) * agg.sumIn) + ((tp.out / 1_000_000) * agg.sumOut) + ((tp.cachedIn / 1_000_000) * agg.sumCached);
-    // v0.8.40+ — |valueOnly|true drops the "cost:" prefix.
+    // vX.X.X+ — reads costs from the aggregate.
+    if (!agg.costs || agg.costs.length === 0) return placeholderWithColor("m_sumTokenCost", params, ctx);
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("cost");
-    return wrapValueDefault("m_sumTokenCost", cost, `${prefix}${formatCostWithCurrency(cost, tp.currency)}`, passThroughOr<string>(params, ctx, "color"));
+    const total = agg.costs.reduce((s, e) => s + parseFloat(e.value), 0);
+    return wrapValueDefault("m_sumTokenCost", total, `${prefix}${formatCostsArray(agg.costs)}`, passThroughOr<string>(params, ctx, "color"));
   },
   // vX.X.X+ — inline form of m_sumEstQuota. Mirrors the bare form
   // verbatim except placeholderWithColor + passThroughOr<color>
@@ -6353,17 +6344,21 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (!filter) return INLINE_BADARG;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
-    const lookupId = filter.modelFilter !== undefined ? filter.modelFilter : ctx.tokens?.modelId;
-    const tp = resolveTokenPrice(lookupId ?? null);
-    if (!tp || tp.in + tp.out + tp.cachedIn <= 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
+    // vX.X.X+ — reads costs from the aggregate. Multi-currency
+    // is converted to the active model's currency.
+    if (!agg.costs || agg.costs.length === 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
     const pct = agg.alignedUsedPercent;
     if (pct == null) return placeholderWithColor("m_sumEstQuota", params, ctx);
     if (pct === 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
-    const cost = ((tp.in / 1_000_000) * agg.sumIn) + ((tp.out / 1_000_000) * agg.sumOut) + ((tp.cachedIn / 1_000_000) * agg.sumCached);
+    const lookupId = filter.modelFilter !== undefined ? filter.modelFilter : ctx.tokens?.modelId;
+    const tp = resolveTokenPriceForCtx(ctx, lookupId ?? null);
+    const targetCurrency = tp?.currency ?? agg.costs[0].currency;
+    const single = convertCostsToCurrency(agg.costs, targetCurrency);
+    if (!single) return placeholderWithColor("m_sumEstQuota", params, ctx);
+    const cost = parseFloat(single.value);
     const est = cost / (pct / 100);
-    // vX.X.X+ — |valueOnly|true drops the "est:" prefix.
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("est");
-    return wrapValueDefault("m_sumEstQuota", est, `${prefix}${formatEstCostWithCurrency(est, tp.currency)}`, passThroughOr<string>(params, ctx, "color"));
+    return wrapValueDefault("m_sumEstQuota", est, `${prefix}${formatEstCostWithCurrency(est, single.currency)}`, passThroughOr<string>(params, ctx, "color"));
   },
   m_sumApiMs: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
@@ -7727,6 +7722,13 @@ export function renderProviderLine(
     // construct ctx inline) don't have to thread the field.
     // m_pluginSource drops to no-op in that case.
     pluginSource: ctx.pluginSource ?? null,
+    // vX.X.X+ — default provider filter for m_sum* modules.
+    // Computed from ANTHROPIC_BASE_URL; empty/unset → undefined
+    // (skip provider filtering). Used by parseWindowScope.
+    providerBaseUrl: (() => {
+      const raw = process.env.ANTHROPIC_BASE_URL ?? "";
+      return raw ? normalizeUrl(raw) : undefined;
+    })(),
   };
   // v0.8.14+ — `statuslineTemplate` is always a `string[]` after
   // loader-side auto-migration. `.slice()` keeps the snapshot-

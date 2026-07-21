@@ -186,11 +186,9 @@ Every key honored by the loader, with its type, default, and validator. Source-o
   //   ["m_template|quota|type:quota", "m_template|balance|type:balance"]
   "statuslineTemplate": ["m_template|quota|type:quota", "m_template|balance|type:balance"],
 
-  // Per-model cost computation for m_tokenCost / m_accTokenCost / m_sumTokenCost.
-  // Missing model → renders as "cost:n/a". Zero rates are valid.
-  "tokenPrices": {
-    "MiniMax-M3": { "in": 0, "out": 0, "cachedIn": 0, "currency": "USD" }
-  },
+  // vX.X.X+ — tokenPrices has moved to config.tokenPrices.json.
+  // See the dedicated section below for the provider-model hierarchy
+  // and 5-layer resolution cascade.
 
   // Pass --insecure / -k to curl for m_quote address-mode fetches.
   "quoteInsecureTls": false,
@@ -210,6 +208,67 @@ Every key honored by the loader, with its type, default, and validator. Source-o
 - `bar.width` — integer in `[3, 64]`.
 - Numeric fields — finite, positive where relevant.
 - `lineTemplates.<key>` — non-empty array of strings. Loader strips nested `m_template*` tokens (no recursive indirection).
+
+### config.tokenPrices.json (vX.X.X+)
+
+Token pricing has moved from `config.json` to a dedicated file at
+`~/.claude/plugins/creditgauge/config.tokenPrices.json` (sibling of `config.json`).
+`install.sh` seeds a minimal file with a global `default` fallback; existing files are never
+overwritten.
+
+**Structure** — nested provider→model dict with `default` fallback at each level:
+
+```jsonc
+{
+  // Global fallback — used when no provider or model-specific price matches.
+  "default": { "currency": "CNY", "in": 2.1, "out": 8.4, "cachedIn": 0.42 },
+
+  // Per-provider block. Key = provider id (matches providers.<id> in config.json).
+  "minimax": {
+    // Provider-level fallback — used when minimax is the active provider but
+    // the specific model has no entry.
+    "default": { "currency": "USD", "in": 1, "out": 5, "cachedIn": 0.5 },
+    // Specific model price. Key = stdin.model.id (e.g. "MiniMax-M3").
+    "MiniMax-M3": { "currency": "USD", "in": 0.5, "out": 5, "cachedIn": 0.75 }
+  },
+  "deepseek": {
+    "default": { "currency": "CNY", "in": 0.2, "out": 2, "cachedIn": 0.05 },
+    "deepseek-chat": { "currency": "CNY", "in": 0.2, "out": 2, "cachedIn": 0.05 }
+  }
+}
+```
+
+Each price entry: `{ "in": number, "out": number, "cachedIn": number, "currency": "USD"|"CNY"|… }`.
+Prices are **per-million tokens** (the formula divides by 1,000,000 at computation time).
+
+**Provider overrides in config.json.** `providers.<p>.config.tokenPrices` can override
+prices for the active provider at the highest priority. The structure is a flat
+model→price dict (no provider key — already scoped):
+
+```jsonc
+"providers": {
+  "minimax": {
+    "config": {
+      "tokenPrices": {
+        "default": { "currency": "CNY", "in": 2.1, "out": 8.4, "cachedIn": 0.42 },
+        "MiniMax-M3": { "currency": "USD", "in": 15, "out": 75, "cachedIn": 1.5 }
+      }
+    }
+  }
+}
+```
+
+**5-layer resolution cascade** (highest to lowest priority):
+
+| Priority | Source | Key path |
+|----------|--------|----------|
+| 1 (highest) | `config.json` → `providers.<p>.config.tokenPrices` | `<modelId>` |
+| 2 | `config.tokenPrices.json` | `<providerId>.<modelId>` |
+| 3 | `config.json` → `providers.<p>.config.tokenPrices` | `default` |
+| 4 | `config.tokenPrices.json` | `<providerId>.default` |
+| 5 (lowest) | `config.tokenPrices.json` | `default` |
+
+No match → `cost:n/a`.
 
 ---
 
@@ -288,7 +347,7 @@ type BalanceEntry = {
   currency:     string,        // ISO 4217 ("USD", "CNY") or free-form
   totalBalance: number,
   // Display prefix is derived from `currency` via the renderer's
-  // `currencyLabel(code)` helper (CNY/RMB → ￥, USD → $, others → bare
+  // `currencyLabel(code)` helper (CNY/RMB → ¥, USD → $, others → bare
   // uppercase code). Plugins no longer carry a label per entry.
 };
 
@@ -715,7 +774,7 @@ Cross-project JSONL scan. Inline args `model` (default `active`), `window` (defa
 
 ### `m_tokenCost` / `m_accTokenCost` / `m_sumTokenCost`
 
-Computed as `tokenIn * price.in + tokenOut * price.out + tokenCachedIn * price.cachedIn`. Price per model lives in `config.tokenPrices.<modelId>` (`{ in, out, cachedIn, currency }`). Missing model → renders as `cost:n/a`. Zero rates are valid.
+Computed as `tokenIn * price.in + tokenOut * price.out + tokenCachedIn * price.cachedIn`. Price is resolved via a 5-layer cascade (see §2 config.tokenPrices.json for the full table): provider override specific model → file specific model → provider override default → file provider default → file global default. No match → renders as `cost:n/a`. Zero rates are valid. Prices are per-million tokens (raw computation divides by 1,000,000).
 
 Tiered precision via `tokenFormat.precision`:
 - `value >= 1`           → `1.2345` (4 dp)

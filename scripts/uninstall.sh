@@ -149,25 +149,27 @@ TS=$(date +%Y%m%dT%H%M%S)
 ACTIONS=()
 DRY_NOTHING=1  # becomes 0 if at least one planned action is meaningful
 
-# Action 1: restore statusLine (only if our marker is set)
+# Action 1: restore statusLine
 SL_PLAN=""
 # Module-scope STATE_DIR + JOURNAL_PATH — referenced by both the
-# SL_PLAN planning block (when MANAGED=1) and the EP/EKM planning
-# block (Action 2 below, which runs regardless of MANAGED). State
+# SL_PLAN planning block (when IS_OURS=1) and the EP/EKM planning
+# block (Action 2 below, which runs regardless of IS_OURS). State
 # lives at the STABLE location (sibling of config.json) so a
 # future uninstall can find the journal even after the cache has
 # been cleaned.
 STATE_DIR="${PLUGINS_DIR}/creditgauge/state"
 JOURNAL_PATH="${STATE_DIR}/install-journal.json"
-# Read the marker in pure bash via node (mirrors the install.sh
-# edit-settings.mjs status op, but inlined so we don't depend on
-# the cache being present). The marker is not enough: another plugin
-# or a human may have overwritten statusLine.command after install.
-# Trust the command shape (cache path + wrapper.sh suffix), not just
-# the marker. See scripts/lib/edit-settings.mjs#isOurWrapperCommand
-# for the matching logic — duplicated here only because we cannot
-# easily `require` an mjs from inside a node -e heredoc.
-MANAGED="0"
+# Cache dir for legacy backup search (pre-journal installs may have
+# upstream-cmd.txt under a per-version cache directory).
+CACHE_DIR="${PLUGINS_DIR}/cache/creditgauge/creditgauge"
+# Check if the current statusLine.command points to our wrapper.
+# We do NOT check _creditgauge_managed — the marker is purely
+# informational. The command string itself is the authoritative
+# signal of whether creditgauge owns the statusLine.
+# See scripts/lib/edit-settings.mjs#isOurWrapperCommand for the
+# matching logic — duplicated here only because we cannot easily
+# `require` an mjs from inside a node -e heredoc.
+IS_OURS="0"
 WIN_TARGET=""
 if [ -f "$TARGET" ]; then
   if command -v cygpath >/dev/null 2>&1; then
@@ -175,7 +177,7 @@ if [ -f "$TARGET" ]; then
   else
     WIN_TARGET="$TARGET"
   fi
-  MANAGED=$(node -e '
+  IS_OURS=$(node -e '
     const fs = require("fs");
     const p = process.argv[1];
     const isOurs = (cmd) => {
@@ -187,14 +189,14 @@ if [ -f "$TARGET" ]; then
     try {
       const d = JSON.parse(fs.readFileSync(p, "utf8"));
       const sl = d && d.statusLine;
-      const m = sl && sl._creditgauge_managed === true && isOurs(sl.command);
+      const m = sl && isOurs(sl.command);
       process.stdout.write(m ? "1" : "0");
     } catch (e) { process.stdout.write("0"); }
   ' "$WIN_TARGET" 2>/dev/null || echo "0")
 fi
 
 # JOURNAL_HAS_ENTRIES — module-scope. Used by both the SL_PLAN branch
-# (when MANAGED=1) and the EP/EKM branch (always). The journal is the
+# (when IS_OURS=1) and the EP/EKM branch (always). The journal is the
 # authoritative record of every field-level change install.sh made;
 # apply-journal-entry drives per-field revert for statusLine AND for
 # the top-level enabledPlugins / extraKnownMarketplaces blocks.
@@ -211,34 +213,25 @@ if [ -f "$JOURNAL_PATH" ]; then
 fi
 
 # APPLY_JOURNAL — set whenever the journal has unapplied entries.
-# This is the gate for whether `apply-journal-entry` runs. It is
-# independent of MANAGED: even when statusLine is foreign/absent
-# (MANAGED=0), the journal can still drive enabledPlugins /
-# extraKnownMarketplaces cleanup. Without this OR, tests with only
-# an enabledPlugins key (no statusLine) would silently skip the
-# apply pass — leaving the block on disk and the user with a stale
-# `{}` residue after uninstall.
+# When set, apply-journal-entry drives ALL cleanup (statusLine +
+# EP + EKM) in one pass. When unset but IS_OURS=1, fall back to
+# legacy restore. The journal handles per-field revert uniformly
+# regardless of whether the command still matches our wrapper;
+# individual fields that the user modified are preserved.
 APPLY_JOURNAL="0"
 [ "$JOURNAL_HAS_ENTRIES" = "1" ] && APPLY_JOURNAL="1"
 
-if [ "$MANAGED" = "1" ]; then
-  # Priority for restoring settings.json.statusLine:
-  #   1. install-journal — drives per-field revert (preserves any
-  #      field the user touched after install).
-  #   2. legacy restore-from-file — pre-journal installs may have
-  #      only upstream-cmd.txt to revert from.
-  #   3. legacy restore-from-bak — most recent pre-managed
-  #      settings.json.bak.<ts>.
-  if [ "$APPLY_JOURNAL" = "1" ]; then
-    SL_PLAN="restore-from-journal:${JOURNAL_PATH}"
-  else
-  # Find the upstream-cmd.txt to restore from. Priority:
-  #   1. The stable state dir (v0.2.19+): sibling of config.json,
-  #      survives cache wipes.
-  #   2. Any installed cache version's state/upstream-cmd.txt
-  #      (legacy v0.2.18 and older). Pick the NEWEST version's file
-  #      that exists — same ordering the statusLine wrapper uses.
-  #   3. Most recent pre-managed settings.json.bak.<ts>.
+if [ "$APPLY_JOURNAL" = "1" ] && [ -n "$HELPER" ]; then
+  # Preferred path: journal drives per-field revert. Covers
+  # statusLine + enabledPlugins + extraKnownMarketplaces in one
+  # pass. Fields that match the install snapshot are reverted;
+  # fields the user touched (including a foreign command) are
+  # preserved.
+  SL_PLAN="restore-from-journal:${JOURNAL_PATH}"
+elif [ "$IS_OURS" = "1" ]; then
+  # Legacy path: no journal available (pre-journal install),
+  # but the command still points to our wrapper. Restore from
+  # upstream-cmd.txt or .bak.<ts>.
   UPSTREAM_TXT=""
   if [ -f "${STATE_DIR}/upstream-cmd.txt" ]; then
     UPSTREAM_TXT="${STATE_DIR}/upstream-cmd.txt"
@@ -254,7 +247,6 @@ if [ "$MANAGED" = "1" ]; then
   if [ -n "$UPSTREAM_TXT" ]; then
     SL_PLAN="restore-from-file:${UPSTREAM_TXT}"
   else
-    # Fall back: most recent .bak.<ts> whose statusLine is NOT managed
     BAK=""
     for f in $(ls -t "${TARGET}.bak."* 2>/dev/null); do
       if [ -z "$f" ]; then continue; fi
@@ -283,7 +275,6 @@ if [ "$MANAGED" = "1" ]; then
       SL_PLAN="warning:no-restore-source"
     fi
   fi
-  fi  # close the legacy fallback else
 fi
 if [ -n "$SL_PLAN" ]; then
   ACTIONS+=("statusLine: ${SL_PLAN}")
@@ -293,13 +284,10 @@ fi
 # Action 2: enabledPlugins + extraKnownMarketplaces are reverted via
 # the install-journal. install.sh writes two top-level block entries
 # (`settings.json:enabledPlugins`, `settings.json:extraKnownMarketplaces`)
-# with `action=create, before=null` so apply-journal-entry removes the
+# with `action=create` so apply-journal-entry removes the
 # Claude-Loader-added keys while preserving any user customisations.
-# The apply pass below (`apply-journal-entry`) processes them in the
-# same loop as the statusLine entry — no separate apply step needed.
-# APPLY_JOURNAL was computed module-scoped above so it covers this
-# block even when MANAGED=0 (statusLine absent — only EP/EKM left to
-# revert).
+# These are applied in the same pass as the statusLine entry above
+# (restore-from-journal processes all entry types in one pass).
 if [ "$APPLY_JOURNAL" = "1" ]; then
   HAS_EP_ENTRY=$(node -e '
     try {
@@ -569,8 +557,67 @@ if [ -n "$SL_PLAN" ]; then
         APPLY_OUT=""
       }
       if [ -n "$APPLY_OUT" ]; then
+        # Split stdout into machine-readable lines and report JSON.
+        # sed is robust even if the JSON spans multiple lines.
+        MACHINE_OUT=$(echo "$APPLY_OUT" | sed -n '/^---REPORT---$/q; p')
+        REPORT_JSON=$(echo "$APPLY_OUT" | sed -n '/^---REPORT---$/,$p' | tail -n +2 | tr -d '\n')
         echo "uninstall.sh: applied install-journal entries"
-        echo "$APPLY_OUT" | sed 's/^/  /'
+        echo "$MACHINE_OUT" | sed 's/^/  /'
+
+        # Display change report if there were preserved/special-handled fields.
+        if [ -n "$REPORT_JSON" ] && [ "$REPORT_JSON" != "[]" ]; then
+          echo ""
+          echo "uninstall.sh: the following fields were preserved or required special handling:"
+          echo ""
+          echo "$REPORT_JSON" | node -e '
+            const { inspect } = require("node:util");
+            const entries = JSON.parse(require("fs").readFileSync(0, "utf8").trim());
+            if (!Array.isArray(entries) || entries.length === 0) process.exit(0);
+
+            // Compute column widths.
+            const cols = ["field", "original", "current", "action"];
+            const widths = { field: 5, original: 8, current: 7, action: 6 };
+            for (const e of entries) {
+              for (const c of cols) {
+                const v = e[c];
+                const s = typeof v === "string" ? v : inspect(v, { breakLength: 40, maxStringLength: 60 });
+                if (s.length > widths[c]) widths[c] = s.length;
+              }
+            }
+            // Cap widths so a single long command does not blow out the table.
+            const MAX = 50;
+            for (const c of cols) { if (widths[c] > MAX) widths[c] = MAX; }
+
+            function cell(s, w, c) {
+              let v = typeof s === "string" ? s : inspect(s, { breakLength: 40, maxStringLength: 60 });
+              if (v.length > w) v = v.slice(0, w - 1) + "…";
+              return v.padEnd(w);
+            }
+
+            // Header.
+            process.stdout.write(
+              "  " + cell("field", widths.field) + "  " +
+              cell("original", widths.original) + "  " +
+              cell("current", widths.current) + "  " +
+              cell("action", widths.action) + "\n"
+            );
+            // Separator.
+            const sep = "─".repeat(widths.field) + "  " +
+                        "─".repeat(widths.original) + "  " +
+                        "─".repeat(widths.current) + "  " +
+                        "─".repeat(widths.action);
+            process.stdout.write("  " + sep + "\n");
+
+            for (const e of entries) {
+              process.stdout.write(
+                "  " + cell(e.field, widths.field) + "  " +
+                cell(e.original, widths.original) + "  " +
+                cell(e.current, widths.current) + "  " +
+                cell(e.action, widths.action) + "\n"
+              );
+            }
+          '
+        fi
       fi
       ;;
     restore-from-bak:*)
@@ -606,29 +653,6 @@ if [ -n "$SL_PLAN" ]; then
       echo "uninstall.sh: manually edit settings.json.statusLine.command to restore your previous statusline." >&2
       ;;
   esac
-fi
-
-# enabledPlugins + extraKnownMarketplaces cleanup runs through the
-# same apply-journal-entry path. When MANAGED=0 the SL_PLAN branch
-# above is skipped, but the EP/EKM entries still need to be applied
-# — fire the journal apply here unconditionally when APPLY_JOURNAL=1
-# AND SL_PLAN didn't already cover it.
-if [ "$APPLY_JOURNAL" = "1" ] && [ -z "$SL_PLAN" ]; then
-  WIN_JOURNAL=""
-  if command -v cygpath >/dev/null 2>&1; then
-    WIN_JOURNAL=$(cygpath -w "$JOURNAL_PATH" 2>/dev/null || echo "$JOURNAL_PATH")
-  else
-    WIN_JOURNAL="$JOURNAL_PATH"
-  fi
-  APPLY_OUT="$(node "$HELPER" "$WIN_TARGET" apply-journal-entry "$WIN_JOURNAL" 2>&1)" || {
-    echo "uninstall.sh: apply-journal-entry failed for top-level blocks" >&2
-    echo "$APPLY_OUT" >&2
-    APPLY_OUT=""
-  }
-  if [ -n "$APPLY_OUT" ]; then
-    echo "uninstall.sh: applied install-journal entries (top-level blocks)"
-    echo "$APPLY_OUT" | sed 's/^/  /'
-  fi
 fi
 
 # --- Apply: wipe dirs --------------------------------------------------------
