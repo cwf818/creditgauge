@@ -580,13 +580,14 @@ describe("cache — v0.8.x TTL flush + legacy key cleanup", () => {
     }
   }
 
-  it("flushToDisk evicts entries whose ttlMs has elapsed", () => {
+  it("flushToDisk keeps expired entries (stale-on-error fallback needs them)", () => {
     setupTmpDir();
     try {
       resetModuleState();
       // Set with a 1s TTL, then backdate to make it already-expired
-      // by the time we trigger the next set() (which is when flush
-      // runs). The expired entry must NOT appear in the flushed file.
+      // by the time we trigger the next set(). flushToDisk must NOT
+      // evict expired entries — the stale-on-error fallback (peek /
+      // peekWithAge) needs to find them on disk even past TTL.
       set("will-expire", { v: 1 }, 1_000);
       (cache as any).store.set("will-expire", {
         at: Date.now() - 10_000,
@@ -597,7 +598,8 @@ describe("cache — v0.8.x TTL flush + legacy key cleanup", () => {
       set("keep", { v: 2 }, 60_000);
 
       const raw = JSON.parse(readFileSync(cacheFile, "utf8"));
-      assert.equal(raw["will-expire"], undefined, "expired entry should be evicted");
+      assert.ok(raw["will-expire"], "expired entry must survive flush (stale-on-error)");
+      assert.deepEqual(raw["will-expire"].value, { v: 1 });
       assert.ok(raw["keep"], "fresh entry should survive");
       assert.deepEqual(raw["keep"].value, { v: 2 });
       assert.equal(raw["keep"].ttlMs, 60_000, "ttlMs should round-trip on disk");

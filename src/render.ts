@@ -1227,8 +1227,8 @@ type RenderContext = {
   // from the `provider` arg; null when ANTHROPIC_BASE_URL didn't
   // match any configured entry. Distinct from `providerType`
   // (which is the category discriminator `quota` / `balance` /
-  // `unknown`). Used by `m_template|<key>|provider:<id>` to gate a
-  // fragment to ONE specific provider (where `type:quota` matches
+  // `unknown`). Used by `m_template|<key>|providers:<id1,id2>` to gate a
+  // fragment to one or more specific providers (where `type:quota` matches
   // every quota-mode provider).
   currentProvider?: import("./types.ts").Provider;
   // v0.9.0+ — current column cursor for `s_move|pos:<n>` column-
@@ -5522,15 +5522,16 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
     },
     named: {
       type: (raw) => (raw === "quota" || raw === "balance" ? raw : null),
-      // v0.9.0+ — `provider:<id>` gates the fragment to ONE specific
-      // provider instance (e.g. `minimax` / `deepseek`).
-      // Resolver accepts any non-empty string; the dispatcher does
-      // strict-match against `ctx.currentProvider`. Absent → no gate
-      // (fragment renders on every provider). Distinct from `type`
-      // which gates by provider CATEGORY (`quota` / `balance`) and
-      // matches every quota-mode provider — `provider` is the
-      // narrower per-instance knob.
-      provider: (raw) => (typeof raw === "string" && raw !== "" ? raw : null),
+      // v0.9.0+ — `providers:<id1,id2,...>` gates the fragment to ONE OR
+      // MORE provider instances (e.g. `minimax` / `deepseek`). Accepts
+      // a comma-separated list; the fragment renders when ANY entry
+      // matches `ctx.currentProvider`. Resolver returns the raw string;
+      // the dispatcher splits and trims. Absent → no gate (fragment
+      // renders on every provider). Distinct from `type` which gates by
+      // provider CATEGORY (`quota` / `balance`) and matches every
+      // quota-mode provider — `providers` is the narrower per-instance
+      // knob.
+      providers: (raw) => (typeof raw === "string" && raw !== "" ? raw : null),
       // v0.8.7+ — passthrough whitelist. Each of these named
       // params is accepted on `m_template` and forwarded to the
       // inner module list as a fallback when the inner module's
@@ -6960,16 +6961,19 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     // at all — only explicit `|type:…` does strict-match.
     const wantExplicit = params.type as "quota" | "balance" | undefined;
     if (wantExplicit != null && ctx.providerType !== wantExplicit) return null;
-    // v0.9.0+ — `provider:<id>` strict-match gate against the
-    // active provider instance id. Absent → no gate (renders on
-    // every provider, same as `type`-less). Present → drop unless
-    // `ctx.currentProvider` (the `provider` arg of
-    // renderProviderLine) equals the configured id verbatim.
+    // v0.9.0+ — `providers:<id1,id2,...>` OR-match gate against
+    // the active provider instance id. Absent → no gate (renders on
+    // every provider, same as `type`-less). Present as a comma-
+    // separated list → drop unless `ctx.currentProvider` (the
+    // `provider` arg of renderProviderLine) is in the list.
     // null ctx.currentProvider means ANTHROPIC_BASE_URL didn't
     // match any configured entry, so the gate returns false (drop).
-    const wantProvider = params.provider as string | undefined;
-    if (wantProvider != null && ctx.currentProvider !== wantProvider) {
-      return null;
+    const wantProvidersRaw = params.providers as string | undefined;
+    if (wantProvidersRaw != null) {
+      const list = wantProvidersRaw.split(",").map(s => s.trim()).filter(s => s !== "");
+      if (!list.includes(ctx.currentProvider ?? "")) {
+        return null;
+      }
     }
     // v0.8.7+ — passthrough: build a passThrough view from every
     // param except the THREE intrinsics (`key` is the lookup target;
@@ -6981,7 +6985,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     // outer context.
     const passThrough: Record<string, ResolvedValue> = {};
     for (const [k, v] of Object.entries(params)) {
-      if (k === "key" || k === "type" || k === "provider") continue;
+      if (k === "key" || k === "type" || k === "providers") continue;
       passThrough[k] = v as ResolvedValue;
     }
     const innerCtx: RenderContext = { ...ctx, passThrough };
@@ -7706,7 +7710,7 @@ export function renderProviderLine(
     contextWindow,
     providerType,
     // v0.9.0+ — active provider instance id (e.g. `"minimax"`).
-    // Drives `m_template|<key>|provider:<id>` strict-match gates;
+    // Drives `m_template|<key>|providers:<id1,id2>` OR-match gates;
     // null when ANTHROPIC_BASE_URL didn't match a configured entry
     // so a `|provider:<id>` gate returns false and the fragment drops.
     currentProvider: provider,

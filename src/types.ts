@@ -86,6 +86,10 @@ export type TokenSample = {
   // the m_sumApiMs aggregate. Older rows without these optional
   // fields read as undefined.
   model?: string;
+  // The ANTHROPIC_BASE_URL at write time — lets off-line consumers
+  // distinguish which provider's data is in this row. undefined for
+  // legacy rows.
+  base_url?: string;
   totalApiMs?: number;
   apiMs?: number;
   // v0.8.x — the cached prev apiMs at write time. Lets off-line
@@ -97,19 +101,6 @@ export type TokenSample = {
   //   prevApiMs > 0       → normal case, apiMs = totalApiMs - prevApiMs.
   // undefined for legacy rows written before this field existed.
   prevApiMs?: number | null;
-  // v0.8.24+ — per-row time anchor. The "first tick of this
-  // session" wall-clock instant. m_sumStartTime aggregates via
-  // min(s.startAt) so the "earliest session start in the
-  // window" reading is one lookup away. Read-once-per-tick
-  // from the JSONL head line at processTick time.
-  // `null` for legacy rows (pre-v0.8.24) — the aggregate's
-  // Number.isFinite gate filters them out.
-  startAt?: number | null;
-  // v0.8.24+ — the "current tick" anchor. Mirrors `at` for the
-  // current row; m_sumEndTime aggregates via max(s.lastAt) so
-  // the field is self-describing without re-deriving from `at`.
-  // `null` for legacy rows.
-  lastAt?: number | null;
 };
 
 // What the renderer needs to know about a single tick. Built once in

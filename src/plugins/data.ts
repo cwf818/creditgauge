@@ -52,6 +52,12 @@ export type PluginContext = {
   providerId: string;
   type: "QUOTA" | "BALANCE";
   signal?: AbortSignal;
+  /** The raw provider entry from config.json, minus the internal
+   *  `config` override block. User-defined fields in
+   *  `config.json:providers.<id>` (beyond the well-known keys) flow
+   *  through here so plugins can read custom parameters without
+   *  hardcoding them in the plugin source. */
+  providerEntry?: Record<string, unknown>;
 };
 
 // v0.8.47+ — single-method ABI. The plugin returns whatever shape

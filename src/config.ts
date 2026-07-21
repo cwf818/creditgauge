@@ -1526,12 +1526,30 @@ function validateProviderEntry(_name: string, v: unknown): ProviderEntry | null 
   // Same treatment for `providers.<id>.currencies` — plugins
   // parse their own BALANCE responses directly. The legacy
   // host-side merge layer is gone.
+  // v0.9.x+ — unknown user-defined fields (e.g. WORKSPACE_URL
+  // for user plugins) are forwarded through providerEntry so
+  // plugins can read custom parameters from config.json without
+  // hardcoding them.
+  const knownKeys = new Set([
+    "TYPE",
+    "BASE_URL_COMPARED_TO",
+    "COMPARE_METHOD",
+    "config",
+    "AUTHENTICATION_KEY",
+  ]);
+  const extra: Record<string, unknown> = {};
+  for (const key of Object.keys(e)) {
+    if (!knownKeys.has(key) && key in e) {
+      extra[key] = e[key];
+    }
+  }
   return {
     TYPE: t as ProviderType,
     BASE_URL_COMPARED_TO: base,
     COMPARE_METHOD: cm as CompareMethod,
     ...(validatedConfig ? { config: validatedConfig } : {}),
     ...(validatedAuthenticationKey ? { AUTHENTICATION_KEY: validatedAuthenticationKey } : {}),
+    ...extra,
   };
 }
 

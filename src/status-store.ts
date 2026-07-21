@@ -39,6 +39,7 @@ import {
   logFsWrite,
 } from "./diagnostics.ts";
 import type { TokenSample, TokenSnapshot } from "./types.ts";
+import { normalizeUrl } from "./utils.ts";
 
 // ----- Persisted value families ------------------------------------------------
 
@@ -224,9 +225,8 @@ export type StatAggregate = {
   rows: number;
   calls: number;
   lastAt: number;
-  // v0.8.24+ — min(s.startAt) across the filtered rows. 0 when
-  // no row carries a valid startAt (legacy / missing). Drives
-  // m_sumStartTime's "earliest session start" rendering.
+  // min(s.at) across the filtered rows. 0 when no row carries a
+  // valid at. Drives m_sumStartTime rendering.
   firstAt: number;
   // vX.X.X — used% of the plan window this aggregate was aligned
   // to, captured at getStatAggregate time. Populated ONLY when the
@@ -731,12 +731,6 @@ function coerceSampleRow(r: Record<string, unknown>, sinceMs: number): TokenSamp
         : typeof r.prevApiMs === "number"
           ? r.prevApiMs
           : undefined,
-    // v0.8.24+ — backfill. Legacy rows (pre-v0.8.24) read as
-    // null; aggregateSamples' Number.isFinite gate filters
-    // them out of the firstAt roll-up so a single legacy
-    // file can't drag the min down to 0.
-    startAt: typeof r.startAt === "number" ? r.startAt : null,
-    lastAt: typeof r.lastAt === "number" ? r.lastAt : null,
   };
 }
 
@@ -1010,13 +1004,9 @@ export function replayAccInit(
     accTokenTotalIn += s.in + s.cacheIn;
     accApiMs += s.apiMs ?? 0;
     if ((s.apiMs ?? 0) > 0) accApiCalls += 1;
-    // startAt precedence: explicit row.startAt > row.at > skip.
-    // The > 0 gate filters legacy "0" sentinels and the
-    // POSITIVE_INFINITY default; the min roll-up matches the
-    // existing aggregateSamples firstAt semantics.
-    const candidate = (s.startAt != null && Number.isFinite(s.startAt) && s.startAt > 0)
-      ? s.startAt
-      : (Number.isFinite(s.at) && s.at > 0 ? s.at : null);
+    // firstAt = min(s.at) across the filtered rows, matching
+    // aggregateSamples' firstAt semantics.
+    const candidate = (Number.isFinite(s.at) && s.at > 0) ? s.at : null;
     if (candidate != null && candidate < firstAt) firstAt = candidate;
   }
   if (!Number.isFinite(firstAt)) firstAt = Date.now();
@@ -1166,17 +1156,8 @@ function aggregateSamples(samples: TokenSample[]): StatAggregate {
   let sumCached = 0;
   let sumApiMs = 0;
   let lastAt = 0;
-  // vX.X.X — `firstAt` now tracks min(s.at) over filtered rows,
-  // symmetric with `lastAt` = max(s.at). The v0.8.24 design
-  // read row.startAt (a separate per-session first-tick stamp
-  // unrelated to the window's data range), so m_sumStartTime
-  // reported the session's first-ever tick — not the earliest
-  // tick inside the filtered window. m_sumEndTime has always
-  // read max(s.at), so the two modules now describe the same
-  // window's empirical bounds. coerceSampleRow still reads
-  // `r.startAt` for legacy back-compat (v0.8.24 rows on disk),
-  // but it's no longer consulted by this aggregate. The m_sumStartTime
-  // renderer treats firstAt <= 0 as placeholder.
+  // tracks min(s.at) over filtered rows, symmetric with
+  // lastAt = max(s.at). firstAt <= 0 triggers the placeholder.
   let firstAt = Number.POSITIVE_INFINITY;
   let calls = 0;
   for (const s of samples) {
@@ -1392,43 +1373,6 @@ const COLD_START_THRESHOLD_MS = 120_000;
 // Why not an in-memory sticky: the statusline runs as a
 // per-tick child process (see diagnostics.ts:148-152), so an
 // in-memory sticky dies between ticks. The first tick of
-// every cc restart would compute a fresh "first tick"
-// (wrong semantic — the session hasn't restarted, only the
-// cc process has). Reading from disk gives the correct
-// per-session persistence with one cheap read per tick.
-function resolveFirstTickAt(cwd: string, sessionId: string): number {
-  const path = sampleFilePath(cwd, sessionId);
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return Date.now();
-  }
-  const nl = raw.indexOf("\n");
-  const firstLine = nl === -1 ? raw : raw.slice(0, nl);
-  if (!firstLine) return Date.now();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(firstLine);
-  } catch {
-    return Date.now();
-  }
-  if (!parsed || typeof parsed !== "object") return Date.now();
-  const row = parsed as Record<string, unknown>;
-  // Prefer the explicit startAt field. Fall back to the row's
-  // own `at` for legacy rows written before this field existed
-  // — the row's own at IS the first-tick instant for that
-  // file, and the same file is read on every subsequent tick
-  // so the roll-up is stable.
-  if (typeof row.startAt === "number" && Number.isFinite(row.startAt) && row.startAt > 0) {
-    return row.startAt;
-  }
-  if (typeof row.at === "number" && Number.isFinite(row.at) && row.at > 0) {
-    return row.at;
-  }
-  return Date.now();
-}
-
 function detectRegression(
   tokens: TokenSnapshot | null,
   prev: PrevTickStatusValue | null,
@@ -2103,19 +2047,10 @@ export function processTick(
           cacheCreation: snapshot.cacheCreation,
           cacheIn: snapshot.cachedIn,
           model: snapshot.modelId ?? undefined,
+          base_url: normalizeUrl(process.env.ANTHROPIC_BASE_URL ?? "") || undefined,
           totalApiMs: snapshot.totalApiMs,
           apiMs: snapshot.apiMs,
           prevApiMs: snapshot.prevTotalApiMs,
-          // v0.8.24+ — per-row time anchors. startAt is the
-          // per-session first-tick instant (read-once-per-tick
-          // from the JSONL head line via resolveFirstTickAt);
-          // lastAt mirrors the current row's at so the
-          // m_sumStartTime / m_sumEndTime aggregations are
-          // self-describing without re-deriving from at.
-          startAt: cwd && tokens.sessionId
-            ? resolveFirstTickAt(cwd, tokens.sessionId)
-            : Date.now(),
-          lastAt: Date.now(),
         }
       : null;
 }

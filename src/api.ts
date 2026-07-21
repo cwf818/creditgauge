@@ -209,10 +209,12 @@ export async function fetchForProviderByIdWithKind(
   signal: AbortSignal | undefined,
 ): Promise<{ data: Quota | Balance | null; pluginSource: PluginResolution }> {
   if (!entry || !providerName) return { data: null, pluginSource: "missing" };
+  const { config: _config, ...entryRest } = entry;
   const context: PluginContext = {
     providerId: providerName,
     type: entry.TYPE,
     ...(signal ? { signal } : {}),
+    providerEntry: entryRest as Record<string, unknown>,
   };
   const { result: partial, kind } = await pluginTransportWithKind(
     providerName,

@@ -2207,23 +2207,21 @@ describe("m_template agnostic — end-to-end on unknown provider (v0.8.47+)", ()
   });
 });
 
-// v0.9.0+ — `m_template|<key>|provider:<id>` gates a fragment to ONE
-// specific provider instance (distinct from `type:quota` / `type:balance`
-// which gate by provider CATEGORY). Absent → renders on every
-// provider (provider-agnostic). Present → strict-match against
-// ctx.currentProvider.
-describe("m_template — provider gate: instance-level filter (v0.9.0+)", () => {
+// v0.9.0+ — `m_template|<key>|providers:<id1,id2>` gates a fragment to
+// one or more specific provider instances (distinct from `type:quota` /
+// `type:balance` which gate by provider CATEGORY). Comma-separated OR
+// match. Absent → renders on every provider (provider-agnostic).
+describe("m_template — providers gate: instance-level filter (v0.9.0+)", () => {
   beforeEach(() => {
     __resetForTest();
   });
   afterEach(() => __resetForTest());
 
-  it("|provider:minimax drops the fragment on a non-minimax provider", () => {
-    // `m_template|gated|provider:minimax` should render the inner
-    // body when ctx.currentProvider === "minimax" and DROP when it
-    // doesn't match.
+  it("|providers:minimax drops the fragment on a non-minimax provider", () => {
+    // `m_template|gated|providers:minimax` should render when
+    // ctx.currentProvider === "minimax" and DROP when it doesn't match.
     __resetForTest({
-      statuslineTemplate: ["m_template|gated|provider:minimax"],
+      statuslineTemplate: ["m_template|gated|providers:minimax"],
       lineTemplates: {
         gated: ["m_modeLabel", "s_space", "m_label|hello"],
       },
@@ -2255,9 +2253,46 @@ describe("m_template — provider gate: instance-level filter (v0.9.0+)", () => 
     }
   });
 
-  it("|provider absent → renders on every provider (provider-agnostic)", () => {
-    // The m_template provider gate must default to "no filter" so a
-    // bare `m_template|info` (no provider arg) keeps rendering on
+  it("|providers:minimax,kimi matches either minimax or kimi", () => {
+    // Comma-separated OR: both providers should render the fragment.
+    __resetForTest({
+      statuslineTemplate: ["m_template|gated|providers:minimax,kimi"],
+      lineTemplates: {
+        gated: ["m_modeLabel", "s_space", "m_label|hello"],
+      },
+    });
+    try {
+      for (const p of ["minimax", "kimi"] as const) {
+        const line = renderProviderLine(p, {
+          mode: "used", nowMs: Date.now(),
+          shortInterval: null, midInterval: null, longInterval: null,
+          balance: null,
+          ageMs: null, stale: false, version: "",
+        });
+        assert.ok(
+          strip(line).includes("hello"),
+          `provider ${p} must render gated fragment, got: ${line}`,
+        );
+      }
+
+      const dropping = renderProviderLine("deepseek", {
+        mode: "used", nowMs: Date.now(),
+        shortInterval: null, midInterval: null, longInterval: null,
+        balance: null,
+        ageMs: null, stale: false, version: "",
+      });
+      assert.ok(
+        !strip(dropping).includes("hello"),
+        `deepseek must NOT render minimax,kimi-gated fragment, got: ${dropping}`,
+      );
+    } finally {
+      __resetForTest();
+    }
+  });
+
+  it("|providers absent → renders on every provider (provider-agnostic)", () => {
+    // The m_template providers gate must default to "no filter" so a
+    // bare `m_template|info` (no providers arg) keeps rendering on
     // every provider — same contract as `type`-less fragments.
     __resetForTest({
       statuslineTemplate: ["m_template|info"],
@@ -2283,12 +2318,12 @@ describe("m_template — provider gate: instance-level filter (v0.9.0+)", () => 
     }
   });
 
-  it("|provider:<id> on a null currentProvider (unknown) drops the fragment", () => {
+  it("|providers:<id> on a null currentProvider (unknown) drops the fragment", () => {
     // When ANTHROPIC_BASE_URL doesn't match any configured entry,
-    // ctx.currentProvider === null. A strict-match provider gate
-    // against a non-null id returns false → drop.
+    // ctx.currentProvider === null. A providers gate against a
+    // non-null id returns false → drop.
     __resetForTest({
-      statuslineTemplate: ["m_template|gated|provider:minimax"],
+      statuslineTemplate: ["m_template|gated|providers:minimax"],
       lineTemplates: {
         gated: ["m_modeLabel", "s_space", "m_label|hello"],
       },
@@ -2302,7 +2337,7 @@ describe("m_template — provider gate: instance-level filter (v0.9.0+)", () => 
       });
       assert.ok(
         !strip(line).includes("hello"),
-        `unknown provider must drop |provider:minimax gated fragment, got: ${line}`,
+        `unknown provider must drop |providers:minimax gated fragment, got: ${line}`,
       );
     } finally {
       __resetForTest();

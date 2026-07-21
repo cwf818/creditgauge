@@ -21,11 +21,16 @@
 //   - The plugin is a regular ESM module.
 //   - Its **default export** must be `{ fetchAccountCredit(authenticationKey, context) }`.
 //   - `authenticationKey` is the configured key or `process.env.ANTHROPIC_AUTH_TOKEN`.
-//   - `fetchAccountCredit` returns the open-ended intervals dict
-//     `{ short, mid, long, <any> }` directly — no `intervals:` wrapper
-//     (v0.9.5 dropped the wrapper per the new-feature hard-cut
-//     convention). For BALANCE providers, return the canonical
+//   - `fetchAccountCredit(authenticationKey, context)` returns the
+//     open-ended intervals dict `{ short, mid, long, <any> }` directly
+//     (v0.9.5 dropped the `intervals:` wrapper per the new-feature
+//     hard-cut convention). For BALANCE providers, return the canonical
 //     Balance shape directly.
+//   - The optional `context` exposes `{ signal?, providerEntry }`.
+//     `providerEntry` carries the full `config.json:providers.<id>`
+//     entry (excluding the internal `config` override block) so
+//     plugins can read custom user-defined parameters without
+//     hardcoding them in the plugin source.
 //
 // The plugin is loaded in-process via dynamic `import()` (same
 // Node runtime, same ESM loader). Throwing inside `fetchAccountCredit` is

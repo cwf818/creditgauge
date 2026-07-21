@@ -2,7 +2,7 @@
 // user-written plugin at ~/.claude/plugins/creditgauge/query_plugins/<id>/.
 //
 // ABI: default export is { fetchAccountCredit(authenticationKey, ctx) },
-// where `ctx` exposes { signal }. The returned object is a
+// where `ctx` exposes { signal, providerEntry }. The returned object is a
 // Partial<Balance> (host will run `ensureBalance` on it to produce the
 // canonical Balance shape). The plugin author never has to know about
 // the canonical Quota / Balance types — only their fill contract + the

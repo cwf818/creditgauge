@@ -186,10 +186,9 @@ function flushToDisk(): void {
   const now = Date.now();
   const obj: Record<string, Entry<unknown>> = {};
   for (const [k, v] of store) {
-    if (v.ttlMs != null && now - v.at > v.ttlMs) {
-      store.delete(k);
-      continue;
-    }
+    // TTL is enforced only at read time (get/getWithAge). Do NOT
+    // evict expired entries here — the stale-on-error fallback
+    // (peek/peekWithAge) needs them on disk even past TTL.
     obj[k] = v;
   }
   const payload = JSON.stringify(obj);

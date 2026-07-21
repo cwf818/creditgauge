@@ -13,6 +13,7 @@ import type {
   ProviderEntry,
 } from "./types.ts";
 import { fetchForProviderByIdWithKind } from "./api.ts";
+import { normalizeUrl } from "./utils.ts";
 
 // ----- URL matching -----
 
@@ -34,17 +35,13 @@ import { fetchForProviderByIdWithKind } from "./api.ts";
 // `https://api.minimaxi.com/anthropic/` against a pattern
 // `https://api.minimaxi.com/anthropic` still has the boundary check
 // land on the trailing `/` (a legal boundary char).
-function stripTrailingSlashes(s: string): string {
-  return s.replace(/\/+$/, "");
-}
-
 export function compareUrl(
   method: CompareMethod,
   baseUrl: string,
   pattern: string,
 ): boolean {
-  const url = stripTrailingSlashes(baseUrl.toLowerCase());
-  const pat = stripTrailingSlashes(pattern.toLowerCase());
+  const url = normalizeUrl(baseUrl);
+  const pat = normalizeUrl(pattern);
   switch (method) {
     case "EXACT":
       return url === pat;

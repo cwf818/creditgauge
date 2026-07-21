@@ -26,6 +26,7 @@ import { join } from "node:path";
 
 import * as diagnostics from "./diagnostics.ts";
 import * as statusStore from "./status-store.ts";
+import { normalizeUrl } from "./utils.ts";
 import type { TokenSample, TokenSnapshot } from "./types.ts";
 
 // Minimal valid TokenSnapshot (mirrors tick-state.test.ts harness).
@@ -94,9 +95,9 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
   // ----- 1. Cold session slot, JSONL has rows -----
   it("cold session slot replays from JSONL: accTokenIn = sum of 3 rows + this tick", () => {
     // Seed JSONL with 3 rows in the matching <sid>.jsonl.
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, startAt: 900_000 }));
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 80, apiMs: 1500, startAt: 900_000 }));
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_003, in: 50, out: 30, apiMs: 500, startAt: 900_000 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 80, apiMs: 1500 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_003, in: 50, out: 30, apiMs: 500 }));
 
     // No state.json exists → beginTick loads {} → all slots cold.
     // The validTokens default is tokenIn=100, tokenOut=50, apiMs=1000.
@@ -118,18 +119,18 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     assert.equal(slot!.accTokenIn, 100 + 200 + 50 + 100, "replayed (350) + this-tick delta (100)");
     assert.equal(slot!.accTokenOut, 50 + 80 + 30 + 50, "replayed (160) + this-tick delta (50)");
     assert.equal(slot!.accApiCalls, 3 + 1, "3 JSONL rows + 1 this-tick call");
-    assert.equal(slot!.startAt, 900_000, "min(row.startAt) preserved across replay");
+    assert.equal(slot!.startAt, 1_000_001, "min(row.at) used as replayed startAt");
   });
 
   // ----- 2. Cold project slot, JSONL across 2 sessions under same projectHash -----
   it("cold project slot aggregates across multiple sessions in the same projectHash", () => {
     // Two sessions under the same cwd (different sids, same
     // projectHash). Project slot should sum both.
-    statusStore.appendSample("D:\\test", "sess-A", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, startAt: 800_000 }));
-    statusStore.appendSample("D:\\test", "sess-A", makeSample({ at: 1_000_002, in: 50, out: 20, apiMs: 500, startAt: 800_000 }));
-    statusStore.appendSample("D:\\test", "sess-B", makeSample({ at: 1_000_003, in: 200, out: 100, apiMs: 2000, startAt: 850_000 }));
-    statusStore.appendSample("D:\\test", "sess-B", makeSample({ at: 1_000_004, in: 75, out: 25, apiMs: 750, startAt: 850_000 }));
-    statusStore.appendSample("D:\\test", "sess-B", makeSample({ at: 1_000_005, in: 25, out: 10, apiMs: 250, startAt: 850_000 }));
+    statusStore.appendSample("D:\\test", "sess-A", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000 }));
+    statusStore.appendSample("D:\\test", "sess-A", makeSample({ at: 1_000_002, in: 50, out: 20, apiMs: 500 }));
+    statusStore.appendSample("D:\\test", "sess-B", makeSample({ at: 1_000_003, in: 200, out: 100, apiMs: 2000 }));
+    statusStore.appendSample("D:\\test", "sess-B", makeSample({ at: 1_000_004, in: 75, out: 25, apiMs: 750 }));
+    statusStore.appendSample("D:\\test", "sess-B", makeSample({ at: 1_000_005, in: 25, out: 10, apiMs: 250 }));
 
     statusStore.processAndSaveTick("D:\\test", validTokens({ sessionId: "sess-A" }));
 
@@ -140,16 +141,16 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     assert.equal(slot!.accTokenIn, 100 + 50 + 200 + 75 + 25 + 100, "5 JSONL rows + this-tick");
     assert.equal(slot!.accTokenOut, 50 + 20 + 100 + 25 + 10 + 50, "5 JSONL rows + this-tick");
     assert.equal(slot!.accApiCalls, 5 + 1, "5 JSONL rows + 1 this-tick call");
-    // min(startAt) = 800_000 (sess-A rows)
-    assert.equal(slot!.startAt, 800_000, "min(startAt) across all project rows");
+    // min(at) = 1_000_001 (sess-A first row)
+    assert.equal(slot!.startAt, 1_000_001, "min(row.at) across all project rows");
   });
 
   // ----- 3. Cold model slot, JSONL has rows for multiple models -----
   it("cold model slot filters by sample.model", () => {
-    statusStore.appendSample("D:\\test", "sess-X", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, model: "model-A", startAt: 700_000 }));
-    statusStore.appendSample("D:\\test", "sess-X", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000, model: "model-A", startAt: 700_000 }));
-    statusStore.appendSample("D:\\test", "sess-X", makeSample({ at: 1_000_003, in: 999, out: 999, apiMs: 9999, model: "model-B", startAt: 750_000 }));
-    statusStore.appendSample("D:\\test", "sess-X", makeSample({ at: 1_000_004, in: 50, out: 25, apiMs: 500, model: "model-A", startAt: 700_000 }));
+    statusStore.appendSample("D:\\test", "sess-X", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, model: "model-A" }));
+    statusStore.appendSample("D:\\test", "sess-X", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000, model: "model-A" }));
+    statusStore.appendSample("D:\\test", "sess-X", makeSample({ at: 1_000_003, in: 999, out: 999, apiMs: 9999, model: "model-B" }));
+    statusStore.appendSample("D:\\test", "sess-X", makeSample({ at: 1_000_004, in: 50, out: 25, apiMs: 500, model: "model-A" }));
 
     statusStore.processAndSaveTick("D:\\test", validTokens({ modelId: "model-A" }));
 
@@ -163,7 +164,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     // (modelDisplayName="model-A", tokenIn=100) = 350 + 100.
     assert.equal(slot!.accTokenIn, 100 + 200 + 50 + 100, "only model-A rows + this-tick");
     assert.equal(slot!.accApiCalls, 3 + 1, "3 model-A rows + 1 this-tick call");
-    assert.equal(slot!.startAt, 700_000, "min(startAt) for model-A rows");
+    assert.equal(slot!.startAt, 1_000_001, "min(row.at) for model-A rows");
   });
 
   // ----- 4. Warm slot present: replay short-circuits, user's value preserved -----
@@ -172,8 +173,8 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     // also seed state.json with a warm slot that has a DIFFERENT
     // value (the user's "confirmed" number). Replay must NOT
     // overwrite the warm value.
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, startAt: 600_000 }));
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000, startAt: 600_000 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000 }));
 
     // Pre-seed state.json with a warm slot using a sentinel value.
     const statePath = join(_tmpDir, "status.json");
@@ -234,7 +235,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
   it("invalid tick (sessionId missing): replay short-circuits, no JSONL read", () => {
     // Seed JSONL so a successful replay would observe 270 rows.
     for (let i = 0; i < 270; i++) {
-      statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001 + i, in: 10, out: 5, apiMs: 100, startAt: 300_000 }));
+      statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001 + i, in: 10, out: 5, apiMs: 100 }));
     }
 
     // sessionId is undefined → the `if (cwd && tokens?.sessionId)` gate
@@ -253,38 +254,11 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
   // (Case 8 — ccsession regression-reset interplay: REMOVED in this
   // revision along with the ccsession scope itself.)
 
-  // ----- 9a. startAt edge case: all rows have startAt=null → Date.now() fallback -----
-  it("startAt: all rows have startAt=null → replayed startAt = Date.now() (Date.now() fallback)", () => {
-    // Rows are pre-v0.8.24 (no startAt field) — coerceSampleRow
-    // backfills startAt=null. The replay loop must fall back to
-    // row.at for these (or Date.now() if at is also bad).
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, startAt: null }));
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 50, out: 25, apiMs: 500, startAt: null }));
-
-    const before = Date.now();
-    statusStore.processAndSaveTick("D:\\test", validTokens());
-    const after = Date.now();
-
-    const slot = statusStore.readAccumulator("session", {
-      sessionId: "sess-test",
-      cwd: "D:\\test",
-    });
-    assert.ok(slot, "slot exists after replay");
-    // min(startAt) is +Infinity when all rows are null → fallback to row.at
-    // (1_000_001 / 1_000_002 are both well below before/after, so the
-    // expected replayed startAt is 1_000_001, not Date.now()).
-    assert.equal(slot!.startAt, 1_000_001, "min(row.at) when startAt is all-null");
-    // And the slot is NOT Date.now() — confirm by checking < before.
-    assert.ok(slot!.startAt! < before, "fallback used row.at, not Date.now()");
-    void after;
-  });
-
-  // ----- 9b. startAt edge case: all rows have startAt=0 → Date.now() fallback -----
-  it("startAt: all rows have startAt=0 → replayed startAt falls back to row.at", () => {
-    // The > 0 gate in replayAccInit's candidate computation
-    // filters 0; falls through to row.at.
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_005, in: 100, out: 50, apiMs: 1000, startAt: 0 }));
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_006, in: 50, out: 25, apiMs: 500, startAt: 0 }));
+  // ----- 9. Replayed firstAt = min(row.at) across all rows -----
+  it("replayed firstAt = min(s.at) across all filtered rows", () => {
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_010, in: 100, out: 50, apiMs: 1000 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_005, in: 50, out: 25, apiMs: 500 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_012, in: 75, out: 35, apiMs: 750 }));
 
     statusStore.processAndSaveTick("D:\\test", validTokens());
 
@@ -293,25 +267,7 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
       cwd: "D:\\test",
     });
     assert.ok(slot, "slot exists after replay");
-    assert.equal(slot!.startAt, 1_000_005, "0 sentinels filtered; row.at used");
-  });
-
-  // ----- 9c. startAt edge case: mixed → min(finite>0) -----
-  it("startAt: mixed (some null, some 0, some valid) → min(finite>0)", () => {
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_010, in: 100, out: 50, apiMs: 1000, startAt: null }));
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_011, in: 50, out: 25, apiMs: 500, startAt: 0 }));
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_012, in: 75, out: 35, apiMs: 750, startAt: 123_456 }));
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_013, in: 25, out: 15, apiMs: 250, startAt: 234_567 }));
-
-    statusStore.processAndSaveTick("D:\\test", validTokens());
-
-    const slot = statusStore.readAccumulator("session", {
-      sessionId: "sess-test",
-      cwd: "D:\\test",
-    });
-    assert.ok(slot, "slot exists after replay");
-    // min(finite>0) over startAt: 123_456 (null and 0 are filtered)
-    assert.equal(slot!.startAt, 123_456, "min(finite>0) startAt over all rows");
+    assert.equal(slot!.startAt, 1_000_005, "min(at) over replayed rows");
   });
 
   // ----- 10. Diagnostics env-gate: replay writes row when enabled, silent when disabled -----
@@ -339,8 +295,8 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     statusStore.__resetStatCacheForTest();
 
     process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "0";
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, startAt: 50_000 }));
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000, startAt: 50_000 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000 }));
     statusStore.processAndSaveTick("D:\\test", validTokens());
 
     const diagA = join(tmpA, "plugins", "creditgauge", "state", statusStore.projectHash("D:\\test"), "diagnostics.jsonl");
@@ -367,8 +323,8 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     process.env.CREDITGAUGE_DIAGNOSTICS_ENABLE = "1";
     diagnostics.__resetDebugFlagsForTest();
     diagnostics.setDebugFlags({ statusStore: true, smokeNormalizeTick: true });
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000, startAt: 50_000 }));
-    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000, startAt: 50_000 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_001, in: 100, out: 50, apiMs: 1000 }));
+    statusStore.appendSample("D:\\test", "sess-test", makeSample({ at: 1_000_002, in: 200, out: 100, apiMs: 2000 }));
     statusStore.processAndSaveTick("D:\\test", validTokens());
     diagnostics.__resetDebugFlagsForTest();
 
@@ -382,5 +338,53 @@ describe("status-store — v0.8.29 cold-slot JSONL replay", () => {
     assert.ok(content.includes("scope=session"), "scope=session row emitted");
     rmSync(tmpB, { recursive: true, force: true });
     rmSync(stateB, { recursive: true, force: true });
+  });
+});
+
+describe("normalizeUrl", () => {
+  it("strips trailing slash", () => {
+    assert.equal(
+      normalizeUrl("https://api.minimaxi.com/anthropic/"),
+      "https://api.minimaxi.com/anthropic",
+    );
+  });
+
+  it("lowercases full URL including path", () => {
+    assert.equal(
+      normalizeUrl("HTTPS://API.MINIMAXI.COM/Anthropic"),
+      "https://api.minimaxi.com/anthropic",
+    );
+  });
+
+  it("strips default https port", () => {
+    assert.equal(
+      normalizeUrl("https://api.minimaxi.com:443/anthropic"),
+      "https://api.minimaxi.com/anthropic",
+    );
+  });
+
+  it("preserves non-default port", () => {
+    assert.equal(
+      normalizeUrl("https://localhost:8080/anthropic"),
+      "https://localhost:8080/anthropic",
+    );
+  });
+
+  it("removes empty search and hash", () => {
+    assert.equal(
+      normalizeUrl("https://api.minimaxi.com/anthropic?foo=bar#ref"),
+      "https://api.minimaxi.com/anthropic",
+    );
+  });
+
+  it("returns empty string unchanged", () => {
+    assert.equal(normalizeUrl(""), "");
+  });
+
+  it("returns raw string on parse failure (no scheme)", () => {
+    assert.equal(
+      normalizeUrl("not-a-url"),
+      "not-a-url",
+    );
   });
 });
