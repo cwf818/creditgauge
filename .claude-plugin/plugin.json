@@ -8,6 +8,7 @@
     "./commands/uninstall.md",
     "./commands/clean.md",
     "./commands/clean-cache.md",
+    "./commands/clean-journal.md",
     "./commands/reset.md"
   ],
   "keywords": [

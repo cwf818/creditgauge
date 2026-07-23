@@ -317,6 +317,10 @@ const DEFAULT_CONFIG: {
     labelTokenOutSpeed: string;
     // v0.8.17+ — system RAM usage label exposed via m_memUsage.
     labelMemUsage: string;
+    // vX.X.X+ — system RAM used-bytes label exposed via m_memUsed.
+    labelMemUsed: string;
+    // vX.X.X+ — system RAM total-bytes label exposed via m_memTotal.
+    labelMemTotal: string;
     // v0.8.22+ — cache hit-rate ratio (lifted out of the v0.8.x
     // R8 hardcoded "hit:" prefix into the labels namespace).
     labelTokenHitRate: string;
@@ -482,6 +486,8 @@ const DEFAULT_CONFIG: {
     labelTokenInSpeed: "in:",
     labelTokenOutSpeed: "out:",
     labelMemUsage: "Mem:",
+    labelMemUsed: "used:",
+    labelMemTotal: "total:",
     labelTokenHitRate: "hit:",
     // v0.8.23+ — context-window prefixes (defaults preserve the
     // v0.8.22 hardcoded literals so existing renders stay
@@ -1122,6 +1128,8 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
         "labelTokenInSpeed",
         "labelTokenOutSpeed",
         "labelMemUsage",
+        "labelMemUsed",
+        "labelMemTotal",
         "labelTokenHitRate",
         "labelContextSize",
         "labelContextWindowSize",

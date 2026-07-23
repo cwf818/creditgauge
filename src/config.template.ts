@@ -180,6 +180,11 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "s_space", "m_age"
   ],
 
+  plugin_info: [
+    "m_label|CreditGauge |color:yellow",
+    "m_version|color:yellow",
+  ],
+
   // ----- User-facing fragment library (vX.X.X+) -----
   // Reference via `m_template|<key>` from statuslineTemplate.
   // Tokens render left-to-right; bare literals like "[", "]",
@@ -257,6 +262,8 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   // body so the rendered segment pads out (cf. s_*|wrap| memo).
   information: [
     "[",
+    "m_provider",
+    "/",
     "m_model",
     "] ",
     "m_label|Context: |color:yellow",
@@ -486,7 +493,8 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   simple: [
     "m_pluginSource",
     "m_template|quota|type:quota",
-    "m_template|balance|type:balance"
+    "m_template|balance|type:balance",
+    "m_template|plugin_info|type:unknown",
   ],
   // multi-line: context-info / tick-eval / stat-eval stacked.
   compact: [
@@ -563,6 +571,8 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   ],
   "standard-slim": [
     "[",
+    "m_provider",
+    "/",
     "m_model",
     "] ",
     "m_label|📜: |color:yellow",

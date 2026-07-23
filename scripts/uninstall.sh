@@ -327,6 +327,7 @@ fi
 #     .jsonl only if --completely is passed).
 WIPE_DIRS=(
   "${PLUGINS_DIR}/cache/creditgauge"
+  "${PLUGINS_DIR}/creditgauge/credentials"
   "${PLUGINS_DIR}/marketplaces/creditgauge"
   "${PLUGINS_DIR}/marketplaces/cwf818-creditgauge"
 )
@@ -355,6 +356,7 @@ if [ -d "$STATE_DIR" ]; then
   ALWAYS_STATE_FILES=(
     "${STATE_DIR}/cache.json"
     "${STATE_DIR}/cache.stat.json"
+    "${STATE_DIR}/diagnostics.jsonl"
     "${STATE_DIR}/upstream-cmd.sh"
     "${STATE_DIR}/upstream-cmd.txt"
     "${STATE_DIR}/install-journal.json"
@@ -387,6 +389,10 @@ if [ "$KEEP_STATE" != 1 ]; then
     ACTIONS+=("rm -f ${PLUGINS_DIR}/creditgauge/config.json")
     DRY_NOTHING=0
   fi
+  if [ -f "${PLUGINS_DIR}/creditgauge/config.tokenPrices.json" ]; then
+    ACTIONS+=("rm -f ${PLUGINS_DIR}/creditgauge/config.tokenPrices.json")
+    DRY_NOTHING=0
+  fi
   if [ -d "${PLUGINS_DIR}/creditgauge/query_plugins" ]; then
     ACTIONS+=("rm -rf ${PLUGINS_DIR}/creditgauge/query_plugins")
     DRY_NOTHING=0
@@ -399,7 +405,7 @@ if [ "$KEEP_STATE" != 1 ]; then
   # in there, rmdir fails with ENOTEMPTY and the dir stays — no
   # data loss.
   if [ -d "${PLUGINS_DIR}/creditgauge" ]; then
-    ACTIONS+=("rmdir ${PLUGINS_DIR}/creditgauge (if empty after wipes)")
+    ACTIONS+=("rm -rf ${PLUGINS_DIR}/creditgauge")
     DRY_NOTHING=0
   fi
 fi
@@ -741,6 +747,13 @@ if [ "$KEEP_STATE" != 1 ]; then
       echo "uninstall.sh: WARNING — failed to remove config.json" >&2
     fi
   fi
+  if [ -f "${PLUGINS_DIR}/creditgauge/config.tokenPrices.json" ]; then
+    if rm -f "${PLUGINS_DIR}/creditgauge/config.tokenPrices.json"; then
+      echo "uninstall.sh: removed ${PLUGINS_DIR}/creditgauge/config.tokenPrices.json"
+    else
+      echo "uninstall.sh: WARNING — failed to remove config.tokenPrices.json" >&2
+    fi
+  fi
   if [ -d "${PLUGINS_DIR}/creditgauge/query_plugins" ]; then
     if rm -rf "${PLUGINS_DIR}/creditgauge/query_plugins"; then
       echo "uninstall.sh: removed ${PLUGINS_DIR}/creditgauge/query_plugins"
@@ -748,21 +761,16 @@ if [ "$KEEP_STATE" != 1 ]; then
       echo "uninstall.sh: WARNING — failed to remove query_plugins" >&2
     fi
   fi
-  # rmdir the now-empty dir tree, depth-first so the parent's
-  # emptiness precondition is met when we get to it. Best-effort:
-  # `rmdir` fails with ENOTEMPTY if the user (or a __legacy__/
-  # migration leftover) put an untracked file under creditgauge/.
-  # That's the correct outcome — we don't want to rm -rf a dir
-  # we don't fully understand. Suppress stderr because "Directory
-  # not empty" is expected, not a warning.
-  for proj_dir in "${STATE_DIR}"/*/; do
-    [ -d "$proj_dir" ] || continue
-    rmdir "$proj_dir" 2>/dev/null || true
-  done
-  rmdir "${STATE_DIR}" 2>/dev/null || true
-  rmdir "${PLUGINS_DIR}/creditgauge" 2>/dev/null || true
+  # --completely: nuke the entire creditgauge/ tree. Every file
+  # (config, state, credentials, built-in plugins) has already
+  # been explicitly removed above — this rm -rf catches the
+  # directory skeleton (state/<hash>/, state/, and the parent)
+  # plus any untracked files the selective wipe might have missed.
+  # Unlike the default branch (which uses rmdir to avoid data
+  # loss), --completely means the user wants a full clean slate.
+  rm -rf "${PLUGINS_DIR}/creditgauge"
   if [ ! -d "${PLUGINS_DIR}/creditgauge" ]; then
-    echo "uninstall.sh: removed empty ${PLUGINS_DIR}/creditgauge/ dir"
+    echo "uninstall.sh: removed ${PLUGINS_DIR}/creditgauge/"
   fi
 fi
 
@@ -931,6 +939,9 @@ HINT_LINES=()
 if [ "$KEEP_STATE" = 1 ]; then
   if [ -f "${PLUGINS_DIR}/creditgauge/config.json" ]; then
     HINT_LINES+=("  ${PLUGINS_DIR}/creditgauge/config.json")
+  fi
+  if [ -f "${PLUGINS_DIR}/creditgauge/config.tokenPrices.json" ]; then
+    HINT_LINES+=("  ${PLUGINS_DIR}/creditgauge/config.tokenPrices.json")
   fi
   if [ -d "${PLUGINS_DIR}/creditgauge/query_plugins" ]; then
     HINT_LINES+=("  ${PLUGINS_DIR}/creditgauge/query_plugins/")

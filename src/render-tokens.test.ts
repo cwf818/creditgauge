@@ -1919,6 +1919,66 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     assert.equal(strip(out), "MiniMax-M3");
   });
 
+  it("m_provider| bare shows provider id when matched", () => {
+    const out = renderTemplate(
+      ["m_provider"],
+      { ...ctxFor(fakeSnapshot()), currentProvider: "minimax" },
+    ).join("\n");
+    assert.equal(strip(out), "minimax");
+  });
+
+  it("m_provider| bare shows 'n/a' when unmatched and no ANTHROPIC_BASE_URL", () => {
+    const prev = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = "";
+    try {
+      const out = renderTemplate(
+        ["m_provider"],
+        { ...ctxFor(fakeSnapshot()), currentProvider: null },
+      ).join("\n");
+      assert.equal(strip(out), "n/a");
+      assert.ok(out.includes(STALE), "expected STALE wrap on placeholder");
+    } finally {
+      process.env.ANTHROPIC_BASE_URL = prev;
+    }
+  });
+
+  it("m_provider|nulldrop:false shows 'n/a' when unmatched and no URL", () => {
+    const prev = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = "";
+    try {
+      const out = renderTemplate(
+        ["m_provider|nulldrop:false"],
+        { ...ctxFor(fakeSnapshot()), currentProvider: null },
+      ).join("\n");
+      assert.equal(strip(out), "n/a");
+    } finally {
+      process.env.ANTHROPIC_BASE_URL = prev;
+    }
+  });
+
+  it("m_provider| extracts hostname from ANTHROPIC_BASE_URL when unmatched", () => {
+    const prev = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = "https://api.minimaxi.com/anthropic/v1";
+    try {
+      const out = renderTemplate(
+        ["m_provider"],
+        { ...ctxFor(fakeSnapshot()), currentProvider: null },
+      ).join("\n");
+      assert.equal(strip(out), "api.minimaxi.com");
+    } finally {
+      process.env.ANTHROPIC_BASE_URL = prev;
+    }
+  });
+
+  it("m_provider|color|brightGreen applies color override", () => {
+    const out = renderTemplate(
+      ["m_provider|color:brightGreen"],
+      { ...ctxFor(fakeSnapshot()), currentProvider: "deepseek" },
+    ).join("\n");
+    assert.ok(out.includes(GREEN), `expected brightGreen SGR in: ${JSON.stringify(out)}`);
+    assert.ok(strip(out).includes("deepseek"), "expected deepseek text");
+  });
+
   it("m_effort| bare 'high'", () => {
     const out = renderTemplate(["m_effort"], ctxFor(fakeSnapshot())).join("\n");
     assert.equal(strip(out), "high");

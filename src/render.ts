@@ -14,7 +14,7 @@
 // `intervals` dict shape (v0.9.4) so non-reserved terms aren't
 // dropped on the floor.
 
-import { configStore, resolveTokenPrice, warn } from "./config.ts";
+import { configStore, warn } from "./config.ts";
 import { normalizeUrl } from "./utils.ts";
 import { providerTypeFor } from "./providers.ts";
 import * as diagnostics from "./diagnostics.ts";
@@ -172,6 +172,7 @@ type LabelAxis =
   | "in" | "out" | "cacheIn" | "totalIn"
   | "inSpeed" | "outSpeed" | "apiMs" | "apiCalls"
   | "memUsage" // v0.8.36+ windowMemUsage axis removed in the bar+percent refactor (parallel of m_windowContext)
+  | "memUsed" | "memTotal" // vX.X.X+ — m_memUsed / m_memTotal label axis
   | "hitRate"   // v0.8.22+ — lifted out of hardcoded literal
   | "contextSize" | "contextWindowSize" | "contextUsedPercent" | "contextRemainingPercent" // v0.8.23+
   | "startTime" | "endTime" // v0.8.24+ — start/end of the tick statistics window
@@ -202,6 +203,8 @@ function labelFor(axis: LabelAxis): string {
     case "apiMs": return labels.labelApiMs;
     case "apiCalls": return labels.labelApiCalls;
     case "memUsage": return labels.labelMemUsage;
+    case "memUsed": return labels.labelMemUsed;
+    case "memTotal": return labels.labelMemTotal;
     case "hitRate": return labels.labelTokenHitRate;
     // v0.8.23+ — context-window prefix knobs (were hardcoded
     // "size:" / "size:" / "used:" / "remain:" in v0.8.22).
@@ -787,6 +790,18 @@ function formatOneChunkColored(
   return `${left}${rightChunk} ${override}${displayedPct}%${RESET}`;
 }
 
+// vX.X.X+ — |valueOnly|true variant: returns just the colored
+// percentage (e.g. "81%") without the bar chunks. The color is either
+// the user-supplied override or the band-based color from splitBar.
+// Used by the three gauge modules (m_windowQuota, m_windowContext,
+// m_windowMemUsage) when |valueOnly|true is set.
+function formatPercentOnly(w: Window, mode: DisplayMode, overrideColor?: string): string {
+  const usedPct = Math.max(0, Math.min(100, Math.round(w.pct)));
+  const displayedPct = mode === "remaining" ? 100 - usedPct : usedPct;
+  const color = overrideColor ?? splitBar(usedPct, mode).color;
+  return `${color}${displayedPct}%${RESET}`;
+}
+
 // Decide whether a window's countdown should be displayed as the
 // `n/a` placeholder — when ctx.stale (fetch failed; serving cached
 // data) AND the cached resetAt is already in the past. AND-only
@@ -836,6 +851,16 @@ function formatOneResetSuffix(
   return w.resetAt
     ? `(${resetSuffix}${arrow} ${windowLabel})`
     : windowLabel;
+}
+
+// vX.X.X+ — |valueOnly|true variant: returns just the countdown +
+// arrow (e.g. "25d20h🕑") without wrapping parentheses and window
+// label. Returns "" when no reset time is available (DeepSeek /
+// legacy — nothing to show in value-only mode).
+function formatCountdownValueOnly(w: Window, nowMs: number): string {
+  const resetSuffix = formatResetSuffix(w.resetAt, nowMs);
+  const arrow = pickResetArrow(nowMs, w.resetStartAt, w.resetDurationMs);
+  return w.resetAt ? `${resetSuffix}${arrow}` : "";
 }
 
 // Compact "remaining time until reset" formatter. Returns the countdown
@@ -1953,6 +1978,8 @@ m_windowQuota: Object.assign(
     if (!iv) return placeholderBare("m_windowQuota", c);
     const w = intervalToWindow(iv);
     if (!w) return placeholderBare("m_windowQuota", c);
+    // vX.X.X+ — |valueOnly|true strips the bar, showing just the colored percent.
+    if (c.passThrough?.valueOnly === "true") return formatPercentOnly(w, c.mode);
     return formatOneChunk(w, c.mode, cfg().bar.width, c.stale);
   }),
   { type: "quota" as const },
@@ -2621,23 +2648,23 @@ m_quota: Object.assign(
   // who want a usable estimate must pass |window|<declared id>|
   // align|true so parseWindowScope returns a filter with
   // alignActive=true and the matched interval.
+  // vX.X.X+ — multi-currency costs are consolidated via exchange
+  // rates from config.tokenPrices.json default block.
   m_sumEstQuota: (c) => {
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumEstQuota", c);
-    // vX.X.X+ — reads costs from the aggregate. Multi-currency
-    // is converted to the active model's currency before
-    // projection (exchange-rate table TBD; stub picks first match).
     if (!agg.costs || agg.costs.length === 0) return placeholderBare("m_sumEstQuota", c);
     const pct = agg.alignedUsedPercent;
     if (pct == null) return placeholderBare("m_sumEstQuota", c);
     if (pct === 0) return placeholderBare("m_sumEstQuota", c);
-    // Determine the target currency for the projection.
-    const lookupId = filter.modelFilter !== undefined ? filter.modelFilter : c.tokens?.modelId;
-    const tp = resolveTokenPriceForCtx(c, lookupId ?? null);
-    const targetCurrency = tp?.currency ?? agg.costs[0].currency;
-    const single = convertCostsToCurrency(agg.costs, targetCurrency);
+    // vX.X.X+ — resolve target currency via exchange rates
+    const rates = cfg().exchangeRates;
+    const baseCurrency = cfg().tokenPrices.default?.currency ?? "CNY";
+    const providerId = c.currentProvider ?? null;
+    const targetCurrency = resolveEstQuotaTargetCurrency(agg.costs, rates, baseCurrency, providerId);
+    const single = convertCostsToCurrency(agg.costs, targetCurrency, rates, baseCurrency);
     if (!single) return placeholderBare("m_sumEstQuota", c);
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("est");
     const cost = parseFloat(single.value);
@@ -2855,6 +2882,20 @@ m_quota: Object.assign(
   // Model display name (stdin.model.display_name). v6.x: bare
   // form emits "n/a" placeholder when missing.
   m_model: (c) => c.tokens?.modelDisplayName ? wrapPlainDefault("m_model", c.tokens.modelDisplayName, undefined) : placeholderBare("m_model", c),
+  // vX.X.X+ — active provider instance id. When matched, displays
+  // the provider name (e.g. "minimax"). When unmatched but
+  // ANTHROPIC_BASE_URL is set, extracts the hostname (protocol,
+  // port, and sub-paths stripped). When both are absent, falls
+  // back to the "n/a" placeholder.
+  m_provider: (c) => {
+    if (c.currentProvider) return wrapPlainDefault("m_provider", c.currentProvider, undefined);
+    const raw = process.env.ANTHROPIC_BASE_URL;
+    if (raw) {
+      try { return wrapPlainDefault("m_provider", new URL(raw).hostname.toLowerCase(), undefined); }
+      catch { /* invalid URL → fall through */ }
+    }
+    return placeholderBare("m_provider", c);
+  },
   // Effort level (stdin.effort, polymorphic — already coerced to
   // string by parseTokenSnapshot). v6.x: bare form emits "n/a"
   // placeholder when missing.
@@ -2880,7 +2921,8 @@ m_quota: Object.assign(
   m_gitStatus: (c) => {
     const info = readGitInfo(c.tokens?.cwd);
     if (info == null) return placeholderBare("m_gitStatus", c);
-    return wrapPlainDefault("m_gitStatus", info.dirty ? "dirty" : "clean", undefined);
+    const color = info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN;
+    return wrapPlainDefault("m_gitStatus", info.dirty ? "dirty" : "clean", color);
   },
   // Deprecated alias — see m_ccVersion above.
   m_ccversion: (c) => c.tokens?.ccversion ? wrapPlainDefault("m_ccversion", c.tokens.ccversion, undefined) : placeholderBare("m_ccversion", c),
@@ -3103,7 +3145,11 @@ m_quota: Object.assign(
   // pct still renders as a 0-value bar (the user's "0 直接显示"
   // rule preserves the natural 0-value render path).
   m_windowContext: (c) =>
-    c.contextWindow ? formatOneChunk(c.contextWindow, c.mode, cfg().bar.width, false) : placeholderBare("m_windowContext", c),
+    c.contextWindow
+      ? (c.passThrough?.valueOnly === "true"
+          ? formatPercentOnly(c.contextWindow, c.mode)
+          : formatOneChunk(c.contextWindow, c.mode, cfg().bar.width, false))
+      : placeholderBare("m_windowContext", c),
   // v0.8.16 — TTL gauge modules. Each picks a TTL-aware entry
   // from its respective cache (response cache for m_cacheTtlStatus,
   // stat cache for m_statTtlStatus), computes remainingFraction =
@@ -3194,7 +3240,35 @@ m_quota: Object.assign(
     const m = getMemUsage();
     if (!m || m.total <= 0) return placeholderBare("m_windowMemUsage", c);
     const pct = (m.used / m.total) * 100;
-    return formatOneChunk({ pct } as Window, c.mode, cfg().bar.width, false);
+    const w = { pct } as Window;
+    // vX.X.X+ — |valueOnly|true strips the bar, showing just the colored percent.
+    if (c.passThrough?.valueOnly === "true") return formatPercentOnly(w, c.mode);
+    return formatOneChunk(w, c.mode, cfg().bar.width, false);
+  },
+  // vX.X.X+ — system RAM used bytes. Reads the same getMemUsage()
+  // helper as m_memUsage. Format: "used:X.XG" (label "used:" by
+  // default, configurable via labels.labelMemUsed).
+  m_memUsed: (c) => {
+    const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("memUsed");
+    const m = getMemUsage();
+    if (!m) return placeholderBare("m_memUsed", c);
+    return wrapPlainDefault(
+      "m_memUsed",
+      `${prefix}${formatMemBytes(m.used)}`,
+      undefined,
+    );
+  },
+  // vX.X.X+ — system RAM total bytes. Same shape as m_memUsed but
+  // reads m.total. Format: "total:X.XG".
+  m_memTotal: (c) => {
+    const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("memTotal");
+    const m = getMemUsage();
+    if (!m) return placeholderBare("m_memTotal", c);
+    return wrapPlainDefault(
+      "m_memTotal",
+      `${prefix}${formatMemBytes(m.total)}`,
+      undefined,
+    );
   },
 };
 
@@ -3255,13 +3329,6 @@ export function formatCost(n: number): string {
 // providers.<p>.config.tokenPrices) take effect. The local
 // lookup was inlined before vX.X.X; now it's a thin wrapper
 // around the canonical resolution in config.ts.
-function resolveTokenPriceForCtx(
-  ctx: RenderContext,
-  modelId: string | null,
-): import("./types.ts").TokenPriceEntry | null {
-  return resolveTokenPrice(cfg(), ctx.currentProvider ?? null, modelId);
-}
-
 // v0.9.x — currency-aware cost formatter. USD (the historical
 // default) renders bare to keep existing renders byte-identical;
 // any other currency is prepended with no separator (e.g.
@@ -3316,22 +3383,91 @@ function formatCostsArray(costs: Array<{ currency: string; value: string }>): st
   return costs.map((c) => formatCostDict(c)).join(", ");
 }
 
-// vX.X.X+ — stub: convert a multi-currency costs array into a
-// single target currency. For now picks the first matching entry
-// or falls back to the first entry. Exchange-rate table TBD.
-// Returns { currency, value } or null when costs is empty.
+// vX.X.X+ — convert a value from one currency to another using
+// exchange rates. Rates map: currency → rate (1 baseCurrency = rate
+// currency). Cross-currency pairs go via the base (typically CNY).
+// Missing rate → 1:1 fallback (no conversion).
+function convertCurrency(
+  value: number,
+  fromCurrency: string,
+  toCurrency: string,
+  rates: Record<string, number>,
+  baseCurrency: string,
+): number {
+  if (fromCurrency === toCurrency) return value;
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  // Step 1: fromCurrency → baseCurrency
+  let inBase: number;
+  if (fromCurrency === baseCurrency) {
+    inBase = value;
+  } else {
+    const rate = rates[fromCurrency];
+    inBase = rate != null && rate > 0 ? value / rate : value;
+  }
+  // Step 2: baseCurrency → toCurrency
+  if (toCurrency === baseCurrency) return inBase;
+  const rate = rates[toCurrency];
+  return rate != null && rate > 0 ? inBase * rate : inBase;
+}
+
+// vX.X.X+ — resolve the target currency for m_sumEstQuota projection.
+// Rules (per user spec 2026-07-22):
+//   1. Provider has CURRENCY field → use CURRENCY[0]
+//   2. No CURRENCY field → convert each cost to baseCurrency (typically
+//      CNY), pick the original currency whose converted value is largest
+// Falls back to costs[0].currency when single-currency or no rates.
+function resolveEstQuotaTargetCurrency(
+  costs: Array<{ currency: string; value: string }>,
+  rates: Record<string, number>,
+  baseCurrency: string,
+  providerId: string | null,
+): string {
+  if (costs.length <= 1) return costs[0]?.currency ?? baseCurrency;
+  // Rule 1: Provider has CURRENCY field — use first entry
+  if (providerId) {
+    const entry = (cfg().providers[providerId] as Record<string, unknown> | undefined);
+    const currencyFilter = entry?.CURRENCY as string[] | undefined;
+    if (currencyFilter && currencyFilter.length > 0) {
+      return currencyFilter[0];
+    }
+  }
+  // Rule 2: No CURRENCY → convert each cost to baseCurrency, pick the
+  // original currency whose baseCurrency-equivalent is largest.
+  let bestCurrency = costs[0].currency;
+  let bestValue = -1;
+  for (const c of costs) {
+    const val = parseFloat(c.value);
+    if (!Number.isFinite(val) || val <= 0) continue;
+    const inBase = convertCurrency(val, c.currency, baseCurrency, rates, baseCurrency);
+    if (inBase > bestValue) {
+      bestValue = inBase;
+      bestCurrency = c.currency;
+    }
+  }
+  return bestCurrency;
+}
+
+// vX.X.X+ — convert a multi-currency costs array into a single target
+// currency using exchange rates. Sums each cost after conversion and
+// returns the total as a decimal string in the target currency.
+// Returns null when costs is empty.
 function convertCostsToCurrency(
   costs: Array<{ currency: string; value: string }>,
   targetCurrency: string,
+  rates: Record<string, number>,
+  baseCurrency: string,
 ): { currency: string; value: string } | null {
   if (costs.length === 0) return null;
-  // Single currency — return as-is (no conversion needed).
-  if (costs.length === 1) return costs[0];
-  // Multi-currency — find an entry matching the target currency.
-  const match = costs.find((c) => c.currency === targetCurrency);
-  if (match) return match;
-  // No match — fall back to the first entry (stub; rates TBD).
-  return costs[0];
+  if (costs.length === 1 && costs[0].currency === targetCurrency) {
+    return costs[0];
+  }
+  let total = 0;
+  for (const c of costs) {
+    const val = parseFloat(c.value);
+    if (!Number.isFinite(val)) continue;
+    total += convertCurrency(val, c.currency, targetCurrency, rates, baseCurrency);
+  }
+  return { currency: targetCurrency, value: total.toFixed(10) };
 }
 
 // v0.4.0+ — 5-band color picker for the speed scale.
@@ -3793,10 +3929,13 @@ const DEFAULT_COLORS: Record<string, string> = {
   // String-class identifiers / metadata
   m_session: NAMED_PALETTE.purple,
   m_model: NAMED_PALETTE.cyan,
+  m_provider: NAMED_PALETTE.blue,
   m_effort: NAMED_PALETTE.magenta,
   m_repo: NAMED_PALETTE.blue,
   m_branch: NAMED_PALETTE.teal,
-  m_gitStatus: NAMED_PALETTE.brown,
+  // m_gitStatus is NOT in DEFAULT_COLORS — its color is value-dependent
+  // (dirty → brown, clean → bright green) and set inline in the render
+  // paths below.
   m_ccVersion: NAMED_PALETTE.gray,
   m_ccversion: NAMED_PALETTE.gray, // deprecated alias — same color
   m_age: NAMED_PALETTE.stale,      // (already STALE_COLOR-shaped)
@@ -3884,7 +4023,9 @@ const DEFAULT_COLORS: Record<string, string> = {
   // "Mem:..." widget hue so users migrating from ccstatusline get
   // a familiar color until they override.
   m_memUsage: NAMED_PALETTE.cyan,
-  // v0.8.36+ — m_windowMemUsage. Moot for the value tint (the
+  m_memUsed: NAMED_PALETTE.cyan,
+m_memTotal: NAMED_PALETTE.cyan,
+// v0.8.36+ — m_windowMemUsage. Moot for the value tint (the
   // renderer uses colorFor(pct, "used") not wrapPlainDefault),
   // but kept so the dispatcher doesn't warn on bare-form paths
   // that defensively index DEFAULT_COLORS. Mirrors m_memUsage
@@ -4582,14 +4723,15 @@ function placeholderGauge(
   ctx: RenderContext,
 ): string {
   const mode = (params.display as DisplayMode | undefined) ?? ctx.mode;
+  const valueOnly = params.valueOnly === "true";
   const empty = cfg().bar.empty;
   const filled = cfg().bar.filled;
   const width = cfg().bar.width;
   if (mode === "used") {
-    return `${empty.repeat(width)} 0%`;
+    return valueOnly ? "0%" : `${empty.repeat(width)} 0%`;
   }
   // mode === "remaining": full filled bar, "100%".
-  return `${filled.repeat(width)} 100%`;
+  return valueOnly ? "100%" : `${filled.repeat(width)} 100%`;
 }
 
 // Module → placeholder dispatcher. Each module opts into ONE of
@@ -4769,6 +4911,7 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   // bare-string (no prefix to recover from; just "n/a")
   m_session: placeholderNA(""),
   m_model: placeholderNA(""),
+  m_provider: placeholderNA(""),
   m_effort: placeholderNA(""),
   m_repo: placeholderNA(""),
   m_branch: placeholderNA("branch:"),
@@ -4797,7 +4940,9 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   // placeholder body stays in lockstep with the user's labels.labelMemUsage
   // override (renaming the label renames the placeholder too).
   m_memUsage: placeholderLabelOr("memUsage"),
-  // v0.8.36+ — m_windowMemUsage placeholder mirrors m_windowContext:
+  m_memUsed: placeholderLabelOr("memUsed"),
+m_memTotal: placeholderLabelOr("memTotal"),
+// v0.8.36+ — m_windowMemUsage placeholder mirrors m_windowContext:
   // a gray gauge (filled-bar "100%" in remaining mode, empty-bar
   // "0%" in used mode). Color is STALE_COLOR.
   m_windowMemUsage: placeholderGauge,
@@ -5364,8 +5509,8 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // v0.3.3+ — every existing module also accepts an optional :color|
   // override. Schema is empty (`{}`) when the module takes no implicit
   // param; the renderer just reads params.color and applies it.
-  m_windowQuota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named } },
-  m_countdown: { named: { ...COLOR_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named } },
+  m_windowQuota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_countdown: { named: { ...COLOR_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_quota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named } },
   m_balance: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_age: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
@@ -5448,6 +5593,7 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // optional :color| override (mirror the m_token* pattern).
   m_session: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_model: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
+  m_provider: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_effort: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_repo: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_branch: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
@@ -5469,7 +5615,7 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_contextWindowSize: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_contextUsedPercent: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_contextRemainingPercent: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_windowContext: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...NULDROP_PARAM.named } },
+  m_windowContext: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   // v0.8.16 — TTL gauge inline-args. Same shape as the rest of
   // the named-args family (color + nulldrop). `:color|<c>` REPLACES
   // the 5-band scale color; there is no `:scale|` opt-back-in
@@ -5482,13 +5628,17 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // color for the value itself: the body is a string ("X.XG/Y.YG")
   // and the per-module DEFAULT_COLORS tint applies by default.
   m_memUsage: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // v0.8.36+ — m_windowMemUsage inline-args. Same shape as
+  // vX.X.X+ — m_memUsed / m_memTotal inline-args. Same shape as
+// m_memUsage: color + nulldrop + valueOnly.
+m_memUsed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
+m_memTotal: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
+// v0.8.36+ — m_windowMemUsage inline-args. Same shape as
   // m_windowContext: color + display + nulldrop. |color|<c>
   // overrides the 5-band percentBands color; |display|<used|
   // remaining> selects which side of the bar is colored and
   // which percentage is shown (parallel to m_windowContext);
   // |nulldrop|<bool> drops the chunk on null.
-  m_windowMemUsage: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...NULDROP_PARAM.named } },
+  m_windowMemUsage: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   // vX.X.X+ — per-turn token cost inline-args. Same shape as the
   // per-turn m_token* family (color + nulldrop).
   m_tokenCost: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
@@ -5520,7 +5670,7 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // the inner modules inside their lineTemplates entry.
   //
   // m_template's `type` named arg is the providerType filter.
-  // Accepts `quota` or `balance` — matches ctx.providerType
+  // Accepts `quota`, `balance`, or `unknown` — matches ctx.providerType
   // values verbatim. NOT forwarded via passThrough (m_template-
   // local concern, not an arg value to push to inner modules).
   m_template: {
@@ -5530,7 +5680,7 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
         typeof raw === "string" && raw !== "" ? raw : null,
     },
     named: {
-      type: (raw) => (raw === "quota" || raw === "balance" ? raw : null),
+      type: (raw) => (raw === "quota" || raw === "balance" || raw === "unknown" ? raw : null),
       // v0.9.0+ — `providers:<id1,id2,...>` gates the fragment to ONE OR
       // MORE provider instances (e.g. `minimax` / `deepseek`). Accepts
       // a comma-separated list; the fragment renders when ANY entry
@@ -5870,7 +6020,9 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const w = intervalToWindow(iv);
     if (!w) return placeholderWithColor("m_windowQuota", params, ctx);
     const mode = (params.display as DisplayMode | undefined) ?? ctx.mode;
+    const valueOnly = params.valueOnly === "true";
     const color = params.color as string | undefined;
+    if (valueOnly) return formatPercentOnly(w, mode, color);
     if (color) return formatOneChunkColored(w, mode, color);
     return formatOneChunk(w, mode, cfg().bar.width, ctx.stale);
   },
@@ -5880,18 +6032,27 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     // dict in v0.9.4+). The label printed in `(n/a<arrow> <label>)`
     // and `(4h47m🕔 <label>)` is read from the live `Interval.label`
     // (no more hard-coded "5h" / "7d" strings).
+    // vX.X.X+ — |valueOnly|true strips the parens and window label,
+    // showing just the countdown + arrow (e.g. "25d20h🕑").
     const term = (params.term as string | undefined) ?? "short";
     const iv = intervalForTerm(term, ctx);
     if (!iv) return placeholderWithColor("m_countdown", params, ctx);
     const w = intervalToWindow(iv);
     if (!w) return placeholderWithColor("m_countdown", params, ctx);
+    const valueOnly = params.valueOnly === "true";
     if (isStaleAndPastDue(w, ctx.stale, ctx.nowMs)) {
       const userColor = params.color as string | undefined;
       const color = userColor ?? STALE_COLOR;
+      if (valueOnly) {
+        const arrow = pickResetArrow(ctx.nowMs, w.resetStartAt, w.resetDurationMs);
+        return `${color}n/a${arrow}${RESET}`;
+      }
       const body = formatStalePastDueResetSuffix(iv.label, w, ctx.nowMs);
       return `${color}${body}${RESET}`;
     }
-    const body = formatOneResetSuffix(iv.label, w, ctx.nowMs);
+    const body = valueOnly
+      ? formatCountdownValueOnly(w, ctx.nowMs)
+      : formatOneResetSuffix(iv.label, w, ctx.nowMs);
     if (body === "") return null;
     return wrapPlainDefault("m_countdown", body, params.color as string | undefined);
   },
@@ -6338,22 +6499,24 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   // vX.X.X+ — inline form of m_sumEstQuota. Mirrors the bare form
   // verbatim except placeholderWithColor + passThroughOr<color>
   // (matches the m_sumTokenCost / m_sumApiMs family contract).
+  // vX.X.X+ — multi-currency costs consolidated via exchange rates
+  // from config.tokenPrices.json default block (aligned with bare path).
   m_sumEstQuota: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
     const filter = parseWindowScope(ctx, merged);
     if (!filter) return INLINE_BADARG;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
-    // vX.X.X+ — reads costs from the aggregate. Multi-currency
-    // is converted to the active model's currency.
     if (!agg.costs || agg.costs.length === 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
     const pct = agg.alignedUsedPercent;
     if (pct == null) return placeholderWithColor("m_sumEstQuota", params, ctx);
     if (pct === 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
-    const lookupId = filter.modelFilter !== undefined ? filter.modelFilter : ctx.tokens?.modelId;
-    const tp = resolveTokenPriceForCtx(ctx, lookupId ?? null);
-    const targetCurrency = tp?.currency ?? agg.costs[0].currency;
-    const single = convertCostsToCurrency(agg.costs, targetCurrency);
+    // vX.X.X+ — resolve target currency via exchange rates
+    const rates = cfg().exchangeRates;
+    const baseCurrency = cfg().tokenPrices.default?.currency ?? "CNY";
+    const providerId = ctx.currentProvider ?? null;
+    const targetCurrency = resolveEstQuotaTargetCurrency(agg.costs, rates, baseCurrency, providerId);
+    const single = convertCostsToCurrency(agg.costs, targetCurrency, rates, baseCurrency);
     if (!single) return placeholderWithColor("m_sumEstQuota", params, ctx);
     const cost = parseFloat(single.value);
     const est = cost / (pct / 100);
@@ -6620,6 +6783,15 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (s == null) return placeholderWithColor("m_model", params, ctx);
     return wrapPlainDefault("m_model", s, params.color as string | undefined);
   },
+  m_provider: (params, ctx) => {
+    if (ctx.currentProvider) return wrapPlainDefault("m_provider", ctx.currentProvider, params.color as string | undefined);
+    const raw = process.env.ANTHROPIC_BASE_URL;
+    if (raw) {
+      try { return wrapPlainDefault("m_provider", new URL(raw).hostname.toLowerCase(), params.color as string | undefined); }
+      catch { /* invalid URL → fall through */ }
+    }
+    return placeholderWithColor("m_provider", params, ctx);
+  },
   m_effort: (params, ctx) => {
     const s = ctx.tokens?.effort;
     if (s == null) return placeholderWithColor("m_effort", params, ctx);
@@ -6642,7 +6814,8 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_gitStatus: (params, ctx) => {
     const info = readGitInfo(ctx.tokens?.cwd);
     if (info == null) return placeholderWithColor("m_gitStatus", params, ctx);
-    return wrapPlainDefault("m_gitStatus", info.dirty ? "dirty" : "clean", params.color as string | undefined);
+    const color = params.color ?? (info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN);
+    return wrapPlainDefault("m_gitStatus", info.dirty ? "dirty" : "clean", color);
   },
   m_ccVersion: (params, ctx) => {
     const v = ctx.tokens?.ccversion;
@@ -6820,7 +6993,9 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_windowContext: (params, ctx) => {
     if (!ctx.contextWindow) return placeholderWithColor("m_windowContext", params, ctx);
     const mode = (params.display as DisplayMode | undefined) ?? ctx.mode;
+    const valueOnly = params.valueOnly === "true";
     const color = params.color as string | undefined;
+    if (valueOnly) return formatPercentOnly(ctx.contextWindow, mode, color);
     if (color) return formatOneChunkColored(ctx.contextWindow, mode, color);
     // v0.6.0+: stale-aware — see m_window5h/7d path. :color| above
     // always wins, so explicit user color stays sticky even on stale.
@@ -6886,6 +7061,24 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const body = `${prefix}${formatMemBytes(m.used)}/${formatMemBytes(m.total)}`;
     return wrapPlainDefault("m_memUsage", body, params.color as string | undefined);
   },
+  // vX.X.X+ — system RAM used bytes inline form. Mirrors the bare
+  // MODULES entry but with the user's |color|<c> override.
+  m_memUsed: (params, ctx) => {
+    const m = getMemUsage();
+    if (!m) return placeholderWithColor("m_memUsed", params, ctx);
+    const prefix = params.valueOnly === "true" ? "" : labelFor("memUsed");
+    const body = `${prefix}${formatMemBytes(m.used)}`;
+    return wrapPlainDefault("m_memUsed", body, params.color as string | undefined);
+  },
+  // vX.X.X+ — system RAM total bytes inline form. Same shape as
+  // m_memUsed but reads m.total.
+  m_memTotal: (params, ctx) => {
+    const m = getMemUsage();
+    if (!m) return placeholderWithColor("m_memTotal", params, ctx);
+    const prefix = params.valueOnly === "true" ? "" : labelFor("memTotal");
+    const body = `${prefix}${formatMemBytes(m.total)}`;
+    return wrapPlainDefault("m_memTotal", body, params.color as string | undefined);
+  },
   // v0.8.36+ — inline form of m_windowMemUsage. Mirror of the
   // m_windowContext inline path: |color|<c> override → use the
   // fixed-color chunk; no |color| → use formatOneChunk so the
@@ -6896,8 +7089,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (!m || m.total <= 0) return placeholderWithColor("m_windowMemUsage", params, ctx);
     const pct = (m.used / m.total) * 100;
     const mode = (params.display as DisplayMode | undefined) ?? ctx.mode;
+    const valueOnly = params.valueOnly === "true";
     const color = params.color as string | undefined;
     const window: Window = { pct } as Window;
+    if (valueOnly) return formatPercentOnly(window, mode, color);
     if (color) return formatOneChunkColored(window, mode, color);
     return formatOneChunk(window, mode, cfg().bar.width, false);
   },
@@ -6919,14 +7114,16 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
       return null;
     }
     // v0.8.15+ — `type` is the only intrinsic name; matches
-    // ctx.providerType values verbatim (`quota` / `balance`).
-    // Explicit `|type:quota` / `|type:balance` is strict-match
-    // against ctx.providerType — an unknown provider (matchProvider
-    // returned null) does NOT match either, so an explicit-type
-    // fragment is silently dropped when ANTHROPIC_BASE_URL doesn't
-    // match a configured provider. That's intentional: a fragment
-    // gated on `type:quota` is asking for quota-only data, which
-    // doesn't exist on an unknown provider.
+    // ctx.providerType values verbatim (`quota` / `balance` /
+    // `unknown`). Explicit `|type:quota` / `|type:balance` /
+    // `|type:unknown` is strict-match against ctx.providerType
+    // — an unknown provider (matchProvider returned null) does NOT
+    // match `quota` or `balance`, so an explicit-type fragment is
+    // silently dropped when ANTHROPIC_BASE_URL doesn't match a
+    // configured provider. That's intentional: a fragment gated on
+    // `type:quota` is asking for quota-only data, which doesn't
+    // exist on an unknown provider. Conversely, `type:unknown`
+    // renders ONLY when no configured provider matches.
     //
     // v0.8.37 — when the user does NOT pass `type`, the
     // fragment is provider-agnostic and renders under "quota" /
@@ -7416,6 +7613,8 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
         inline = expandInlineToken(tok, "m_session", 10, ctx);
       } else if (tok.startsWith("m_model|")) {
         inline = expandInlineToken(tok, "m_model", 8, ctx);
+      } else if (tok.startsWith("m_provider|")) {
+        inline = expandInlineToken(tok, "m_provider", 11, ctx);
       } else if (tok.startsWith("m_effort|")) {
         inline = expandInlineToken(tok, "m_effort", 9, ctx);
       } else if (tok.startsWith("m_repo|")) {
@@ -7489,6 +7688,12 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       } else if (tok.startsWith("m_windowMemUsage|")) {
         // m_windowMemUsage → 16 chars + "|" = 17 skipLen.
         inline = expandInlineToken(tok, "m_windowMemUsage", 17, ctx);
+      } else if (tok.startsWith("m_memUsed|")) {
+        // m_memUsed → 9 chars + "|" = 10 skipLen.
+        inline = expandInlineToken(tok, "m_memUsed", 10, ctx);
+      } else if (tok.startsWith("m_memTotal|")) {
+        // m_memTotal → 10 chars + "|" = 11 skipLen.
+        inline = expandInlineToken(tok, "m_memTotal", 12, ctx);
       }
       // Parse failure (bad |color|, unknown param, odd segment count)
 // → warn + drop. Renderer returning null for valid args (e.g.
