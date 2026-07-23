@@ -288,10 +288,13 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "                    enter the journal; pre-existing siblings are preserved)"
   fi
   SEED_TARGET="${CLAUDE_ROOT}/plugins/creditgauge/config.json"
-  if [ ! -f "$SEED_TARGET" ]; then
-    echo "  would seed:    ${SEED_TARGET} (cacheTtlMs=60000, statuslineTemplate=standard, providers={}, labels glyph overrides)"
-  else
+  SEED_SOURCE="${SCRIPT_DIR}/../config.min.json"
+  if [ ! -f "$SEED_TARGET" ] && [ -f "$SEED_SOURCE" ]; then
+    echo "  would seed:    ${SEED_TARGET} (from repo config.min.json)"
+  elif [ -f "$SEED_TARGET" ]; then
     echo "  would keep:    ${SEED_TARGET} (already present)"
+  else
+    echo "  would skip:    ${SEED_TARGET} (config.min.json not found; DEFAULT_CONFIG used)"
   fi
   echo "  new statusLine command will set CREDITGAUGE_UPSTREAM_CMD to:"
   if [ "$INSTALL_MODE" = "replace" ]; then
@@ -341,45 +344,19 @@ if [ ! -d "$STATE_DIR" ]; then
   mkdir -p "$STATE_DIR"
 fi
 
-# config.json seed: when the user has no config.json on disk, write a
-# basic one so the runtime has a starting point (otherwise
-# src/config.ts:loadConfig falls back to DEFAULT_CONFIG and only the
-# two-module DEFAULT_STATUSLINE_TEMPLATE renders). Triggered on every
-# install mode (fresh / replace / managed) — gated only on the file
-# being absent — so a user who re-installs over a foreign statusLine
-# still gets a config.json. Existing config.json files are NEVER
-# overwritten: re-running :install is a strict no-op for the seed step.
-#
-# The body uses the `standard` preset (information / git / tick_eval /
-# acc_eval / stat_eval / quota / balance / age / version — see
-# DEFAULT_STATUSLINE_PRESETS in src/config.template.ts), pins
-# `cacheTtlMs` to the runtime default, and carries the 8 label glyph
-# overrides that match the standard preset's per-turn / acc / sum
-# token modules. The remaining 14 label axes inherit DEFAULT_CONFIG
-# defaults — callers who add `m_memUsage` / `m_quota` etc. get the
-# canonical `Mem:` / `quota:` prefixes for free.
+# config.min.json seed: when the user has no config.json on disk, copy
+# from the bundled config.min.json (sibling of the repo root) so the
+# runtime has a starting point. Existing config.json files are NEVER
+# overwritten — re-running :install is a strict no-op for the seed step.
+# To change the default config, edit config.min.json in the repo root;
+# the install script picks it up automatically.
 SEED_DIR="${CLAUDE_ROOT}/plugins/creditgauge"
 SEED_FILE="${SEED_DIR}/config.json"
-if [ ! -f "$SEED_FILE" ]; then
+SEED_SOURCE="${SCRIPT_DIR}/../config.min.json"
+if [ ! -f "$SEED_FILE" ] && [ -f "$SEED_SOURCE" ]; then
   mkdir -p "$SEED_DIR"
-  cat > "$SEED_FILE" <<'SEED_EOF'
-{
-  "cacheTtlMs": 60000,
-  "statuslineTemplate": "standard",
-  "providers": {},
-  "labels": {
-    "labelTokenIn":        "↓",
-    "labelTokenOut":       "↑",
-    "labelTokenInSpeed":   "↓",
-    "labelTokenOutSpeed":  "↑",
-    "labelTokenCachedIn":  "⧉ ",
-    "labelTokenHitRate":   "⦿ ",
-    "labelApiCalls":       "⎌ ",
-    "labelTokenTotalIn":   "⌬ "
-  }
-}
-SEED_EOF
-  echo "install.sh: seeded basic config at ${SEED_FILE}"
+  cp "$SEED_SOURCE" "$SEED_FILE"
+  echo "install.sh: seeded basic config at ${SEED_FILE} (from config.min.json)"
 fi
 
 # vX.X.X+ — config.tokenPrices.json seed: when absent, write a
@@ -387,6 +364,7 @@ fi
 # (m_tokenCost / m_accTokenCost / m_sumTokenCost) have a fallback
 # value. Existing files are NEVER overwritten — re-running :install
 # is a no-op for this step. Users add provider/model entries on top.
+SEED_DIR="${CLAUDE_ROOT}/plugins/creditgauge"
 TP_FILE="${SEED_DIR}/config.tokenPrices.json"
 if [ ! -f "$TP_FILE" ]; then
   mkdir -p "$SEED_DIR"

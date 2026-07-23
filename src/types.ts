@@ -307,4 +307,9 @@ export type ProviderEntry = {
   // process.env.ANTHROPIC_AUTH_TOKEN and is passed to the plugin's
   // fetchAccountCredit method.
   AUTHENTICATION_KEY?: string;
+  // vX.X.X+ — accepted currency codes for cost calculation. When set,
+  // resolveTokenPrice skips price entries whose currency is not in
+  // this list, preventing accidental fallback to a different-currency
+  // global default. Absent/unset means no filter (accept any currency).
+  CURRENCY?: string[];
 };

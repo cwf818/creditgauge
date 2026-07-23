@@ -11,15 +11,20 @@ import {
 } from "./config.ts";
 
 let dir: string;
+let tpDir: string;
 beforeEach(() => {
   __resetForTest();
   dir = mkdtempSync(join(tmpdir(), "creditgauge-config-"));
+  tpDir = mkdtempSync(join(tmpdir(), "creditgauge-tp-"));
   __testing.setPathResolver(() => join(dir, "config.json"));
+  __testing.setTokenPricesPathResolver(() => join(tpDir, "config.tokenPrices.json"));
 });
 afterEach(() => {
   __testing.resetPathResolver();
+  __testing.resetTokenPricesPathResolver();
   __resetForTest();
   rmSync(dir, { recursive: true, force: true });
+  rmSync(tpDir, { recursive: true, force: true });
 });
 
 describe("provider defaults", () => {
@@ -221,5 +226,55 @@ describe("Config.debug parser", () => {
     );
     const cfg = await loadConfig();
     assert.deepEqual(cfg.debug, {});
+  });
+});
+
+// vX.X.X+ — config.json is optional; tokenPrices.json resolves
+// independently so cost modules work without config.json.
+describe("no config.json", () => {
+  it("returns DEFAULT_CONFIG when config.json is missing", async () => {
+    // dir has no config.json — path resolver points at a non-existent file.
+    const cfg = await loadConfig();
+    // DEFAULT_CONFIG has "remaining" display mode on default.
+    assert.equal(cfg.cacheTtlMs, 60_000);
+    assert.equal(cfg.fetchTimeoutMs, 5_000);
+    assert.equal(cfg.display, "remaining");
+  });
+
+  it("loads tokenPrices.json even when config.json is missing", async () => {
+    writeFileSync(
+      join(tpDir, "config.tokenPrices.json"),
+      JSON.stringify({ default: { currency: "CNY", in: 1.5, out: 3.0, cachedIn: 0.3 } }),
+    );
+    const cfg = await loadConfig();
+    assert.ok(cfg.tokenPrices.default !== undefined);
+    assert.equal(cfg.tokenPrices.default!.currency, "CNY");
+    assert.equal(cfg.tokenPrices.default!.in, 1.5);
+    assert.equal(cfg.tokenPrices.default!.out, 3.0);
+  });
+
+  it("returns empty tokenPrices when both config.json and tokenPrices.json are missing", async () => {
+    // Neither dir nor tpDir has any file.
+    const cfg = await loadConfig();
+    assert.deepEqual(cfg.tokenPrices, {});
+  });
+
+  it("still loads tokenPrices from independent path when config.json exists but tokenPrices.json is in a different dir", async () => {
+    // Write config.json in dir, tokenPrices.json in tpDir (different paths).
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ display: "used" }));
+    writeFileSync(
+      join(tpDir, "config.tokenPrices.json"),
+      JSON.stringify({ default: { currency: "USD", in: 2.0, out: 8.0, cachedIn: 0.5 } }),
+    );
+    const cfg = await loadConfig();
+    assert.equal(cfg.display, "used");
+    assert.equal(cfg.tokenPrices.default!.currency, "USD");
+    assert.equal(cfg.tokenPrices.default!.in, 2.0);
+  });
+
+  it("falls back to empty tokenPrices on malformed tokenPrices.json", async () => {
+    writeFileSync(join(tpDir, "config.tokenPrices.json"), "not json");
+    const cfg = await loadConfig();
+    assert.deepEqual(cfg.tokenPrices, {});
   });
 });

@@ -1,8 +1,10 @@
 // User-tunable configuration for creditgauge (CreditGauge).
 //
 // Loaded once at startup from
-//   ~/.claude/plugins/creditgauge/config.json
-// (Windows: %USERPROFILE%\.claude\plugins\creditgauge\config.json).
+//   $CLAUDE_CONFIG_DIR/plugins/creditgauge/config.json
+// (fallback: ~/.claude/plugins/creditgauge/config.json).
+// When the file is absent the plugin runs with hardcoded defaults
+// (DEFAULT_CONFIG) — config.json is entirely optional.
 //
 // Missing file → DEFAULT_CONFIG silently. Malformed JSON or a single
 // bad field → one stderr line + DEFAULT_CONFIG. Never crashes.
@@ -418,6 +420,10 @@ const DEFAULT_CONFIG: {
   // matches or no override exists. Priority 1 (specific) and 3
   // (default) in the resolution cascade.
   tokenPricesOverride: TokenPricesOverride;
+  // vX.X.X+ — exchange rates from config.tokenPrices.json default block.
+  // Maps currency code → rate (1 baseCurrency = rate targetCurrency).
+  // Empty when no exchange rates are configured.
+  exchangeRates: Record<string, number>;
   // Plugin version, populated at startup by index.ts from
   // .claude-plugin/plugin.json. The m_version display module reads
   // this field; tests inject values via __resetForTest.
@@ -539,6 +545,13 @@ const DEFAULT_CONFIG: {
   // applyProviderOverrides when the active provider's config has
   // a `tokenPrices` block.
   tokenPricesOverride: null,
+  // vX.X.X+ — exchange rates read from config.tokenPrices.json default
+  // block. Extra fields (not in/out/cachedIn/currency) on the `default`
+  // entry are interpreted as currency exchange rates from the base
+  // currency (default.currency) to the named currency.
+  // E.g. default.USD = 0.15 means 1 CNY = 0.15 USD when
+  // default.currency = "CNY". Empty when no rates are configured.
+  exchangeRates: {} as Record<string, number>,
   version: "",
   providers: DEFAULT_PROVIDERS,
   quoteInsecureTls: false,
@@ -585,6 +598,10 @@ export const configStore = {
 // Accepts a Config object (from configStore.get() or cfg()) so the
 // caller controls which snapshot is used, and a providerId (from
 // matchProvider or ctx.currentProvider) + modelId (from stdin.model.id).
+// vX.X.X+ — bracket-suffix fallback: when the model name ends with
+// `[...]` (e.g. `deepseek-v4-flash[1m]`) and no price entry matches,
+// retry with the bracket suffix stripped. Some CLI environments
+// append ANSI-style bracket artifacts to model identifiers.
 export function resolveTokenPrice(
   config: Config,
   providerId: string | null,
@@ -595,8 +612,22 @@ export function resolveTokenPrice(
   const override = config.tokenPricesOverride;
   const file = config.tokenPrices;
 
+  // vX.X.X+ — CURRENCY filter from the provider entry. When set,
+  // only price entries whose currency is in this array are accepted
+  // (otherwise a fallback to a different-currency global default
+  // would silently produce wrong cost numbers). Absent/unset means
+  // no filter — accept any currency.
+  const currencyFilter: string[] | undefined =
+    providerId
+      ? (config.providers[providerId] as Record<string, unknown> | undefined)
+          ?.CURRENCY as string[] | undefined
+      : undefined;
+
   // 1. Provider override — specific model
-  if (override?.[modelId]) return override[modelId];
+  if (override?.[modelId]) {
+    const c = override[modelId];
+    if (!currencyFilter || currencyFilter.includes(c.currency)) return c;
+  }
 
   // 2. File — specific model
   if (providerId) {
@@ -607,14 +638,19 @@ export function resolveTokenPrice(
         const e = modelEntry as Record<string, unknown>;
         if (typeof e.in === "number" && typeof e.out === "number" &&
             typeof e.cachedIn === "number" && typeof e.currency === "string") {
-          return { in: e.in, out: e.out, cachedIn: e.cachedIn, currency: e.currency };
+          if (!currencyFilter || currencyFilter.includes(e.currency)) {
+            return { in: e.in, out: e.out, cachedIn: e.cachedIn, currency: e.currency };
+          }
         }
       }
     }
   }
 
   // 3. Provider override — default
-  if (override?.default) return override.default;
+  if (override?.default) {
+    const c = override.default;
+    if (!currencyFilter || currencyFilter.includes(c.currency)) return c;
+  }
 
   // 4. File — provider default
   if (providerId) {
@@ -625,14 +661,28 @@ export function resolveTokenPrice(
         const e = def as Record<string, unknown>;
         if (typeof e.in === "number" && typeof e.out === "number" &&
             typeof e.cachedIn === "number" && typeof e.currency === "string") {
-          return { in: e.in, out: e.out, cachedIn: e.cachedIn, currency: e.currency };
+          if (!currencyFilter || currencyFilter.includes(e.currency)) {
+            return { in: e.in, out: e.out, cachedIn: e.cachedIn, currency: e.currency };
+          }
         }
       }
     }
   }
 
   // 5. File — global default
-  if (file.default) return file.default;
+  if (file.default) {
+    const c = file.default;
+    if (!currencyFilter || currencyFilter.includes(c.currency)) return c;
+  }
+
+  // vX.X.X+ — bracket-suffix fallback: strip trailing `[...]` (e.g.
+  // `deepseek-v4-flash[1m]`) and retry. Some CLI environments append
+  // ANSI-style bracket artifacts to model identifiers. The recursive
+  // call handles multiple trailing bracket groups (e.g. `foo[1m][2m]`).
+  const bracketMatch = modelId.match(/^(.+)\[[^\]]*\]$/);
+  if (bracketMatch) {
+    return resolveTokenPrice(config, providerId, bracketMatch[1]);
+  }
 
   return null;
 }
@@ -640,9 +690,10 @@ export function resolveTokenPrice(
 // ----- Loader -----
 
 function defaultConfigPath(): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+  const claudeRoot = process.env.CLAUDE_CONFIG_DIR ?? join(home, ".claude");
   return join(
-    homedir(),
-    ".claude",
+    claudeRoot,
     "plugins",
     "creditgauge",
     "config.json",
@@ -653,6 +704,17 @@ function defaultConfigPath(): string {
 // file without monkey-patching node:os. Production code never sets it.
 let _pathResolver: () => string = defaultConfigPath;
 
+// vX.X.X+ — standalone path for config.tokenPrices.json (independent of
+// config.json's location). Uses the same CLAUDE_CONFIG_DIR fallback as
+// defaultConfigPath / cache.ts / diagnostics.ts.
+function defaultTokenPricesPath(): string {
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+  const claudeRoot = process.env.CLAUDE_CONFIG_DIR ?? join(home, ".claude");
+  return join(claudeRoot, "plugins", "creditgauge", "config.tokenPrices.json");
+}
+
+let _tokenPricesPathResolver: () => string = defaultTokenPricesPath;
+
 export async function loadConfig(): Promise<Config> {
   const path = _pathResolver();
 
@@ -660,7 +722,25 @@ export async function loadConfig(): Promise<Config> {
   // to even open the file descriptor.
   diagnostics.logFsRead(path, "config.loadConfig", undefined, undefined, "config");
   if (!existsSync(path)) {
-    _current = DEFAULT_CONFIG;
+    // vX.X.X+ — use standard-slim as the default template, so even
+    // without a matching provider the user sees provider-agnostic
+    // modules (token, context, memory, version, …). The minimal
+    // DEFAULT_STATUSLINE_TEMPLATE (quota/balance only) is retained for
+    // error fallback paths (bad JSON, read error).
+    _current = {
+      ...DEFAULT_CONFIG,
+      // Use DEFAULT_STATUSLINE_PRESETS instead of DEFAULT_LINE_TEMPLATES:
+      // esbuild tree-shakes unused properties from DEFAULT_LINE_TEMPLATES
+      // because computed string access (`obj["key"]`) is not tracked, but
+      // DEFAULT_STATUSLINE_PRESETS is safe because mergeConfig accesses it
+      // via Object.keys() + runtime computed key, which preserves ALL keys.
+      statuslineTemplate: DEFAULT_STATUSLINE_PRESETS["standard-slim"] ?? DEFAULT_STATUSLINE_TEMPLATE,
+    };
+    // vX.X.X+ — always load token prices even without config.json.
+    // loadTokenPricesFile resolves via its own independent path
+    // (defaultTokenPricesPath), not from config.json's directory.
+    _current.tokenPrices = loadTokenPricesFile();
+  _current.exchangeRates = loadExchangeRates();
     return _current;
   }
 
@@ -670,6 +750,8 @@ export async function loadConfig(): Promise<Config> {
   } catch (e) {
     warn(`read failed (${(e as Error).message}); using defaults`);
     _current = DEFAULT_CONFIG;
+    _current.tokenPrices = loadTokenPricesFile();
+  _current.exchangeRates = loadExchangeRates();
     return _current;
   }
 
@@ -679,12 +761,16 @@ export async function loadConfig(): Promise<Config> {
   } catch (e) {
     warn(`invalid JSON (${(e as Error).message}); using defaults`);
     _current = DEFAULT_CONFIG;
+    _current.tokenPrices = loadTokenPricesFile();
+  _current.exchangeRates = loadExchangeRates();
     return _current;
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     warn("root must be a JSON object; using defaults");
     _current = DEFAULT_CONFIG;
+    _current.tokenPrices = loadTokenPricesFile();
+  _current.exchangeRates = loadExchangeRates();
     return _current;
   }
 
@@ -693,26 +779,29 @@ export async function loadConfig(): Promise<Config> {
   _current = mergeConfig(parsed as Record<string, unknown>);
   _current.debug = parseDebugFlags((parsed as Record<string, unknown>).debug);
 
-  // vX.X.X+ — load config.tokenPrices.json (sibling of config.json).
+  // vX.X.X+ — load config.tokenPrices.json (independent path).
   // On missing file / parse failure, keep the default {} (cost:n/a).
-  _current.tokenPrices = loadTokenPricesFile(path);
+  _current.tokenPrices = loadTokenPricesFile();
+  _current.exchangeRates = loadExchangeRates();
 
   return _current;
 }
 
-// vX.X.X+ — read and parse config.tokenPrices.json from the same
-// directory as config.json. Returns the parsed TokenPricesFile on
-// success, or {} on any failure (missing, bad JSON, wrong shape).
-function loadTokenPricesFile(configPath: string): TokenPricesFile {
-  const dir = configPath.replace(/[/\\][^/\\]*$/, "");
-  const tpPath = join(dir, "config.tokenPrices.json");
+// vX.X.X+ — read and parse config.tokenPrices.json from the standard
+// creditgauge state directory (CLAUDE_CONFIG_DIR / homedir()/.claude),
+// NOT from config.json's sibling — the two files are independently
+// resolved so token prices work even when config.json is absent.
+// Returns the parsed TokenPricesFile on success, or {} on any failure
+// (missing, bad JSON, wrong shape).
+function loadTokenPricesFile(): TokenPricesFile {
+  const path = _tokenPricesPathResolver();
 
-  diagnostics.logFsRead(tpPath, "config.loadTokenPricesFile", undefined, undefined, "config");
-  if (!existsSync(tpPath)) return {};
+  diagnostics.logFsRead(path, "config.loadTokenPricesFile", undefined, undefined, "config");
+  if (!existsSync(path)) return {};
 
   let raw: string;
   try {
-    raw = readFileSync(tpPath, "utf8");
+    raw = readFileSync(path, "utf8");
   } catch (e) {
     warn(`config.tokenPrices.json read failed (${(e as Error).message}); using default {}`);
     return {};
@@ -767,6 +856,40 @@ function loadTokenPricesFile(configPath: string): TokenPricesFile {
   }
 
   return out;
+}
+
+// vX.X.X+ — read exchange rates from config.tokenPrices.json default block.
+// Extra fields (not in/out/cachedIn/currency) on the `default` entry are
+// interpreted as exchange rates from the base currency to the named
+// currency. E.g. default.USD = 0.15 means 1 baseCurrency = 0.15 USD when
+// default.currency = "CNY" is the base. Returns {} when no rates exist.
+function loadExchangeRates(): Record<string, number> {
+  const path = _tokenPricesPathResolver();
+  if (!existsSync(path)) return {};
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const obj = parsed as Record<string, unknown>;
+  const defBlock = obj.default;
+  if (!defBlock || typeof defBlock !== "object" || Array.isArray(defBlock)) return {};
+  const rates: Record<string, number> = {};
+  const knownKeys = new Set(["in", "out", "cachedIn", "currency"]);
+  for (const [key, val] of Object.entries(defBlock)) {
+    if (!knownKeys.has(key) && typeof val === "number" && Number.isFinite(val) && val > 0) {
+      rates[key.toUpperCase()] = val;
+    }
+  }
+  return rates;
 }
 
 // vX.X.X+ — validate a single token price entry from config.tokenPrices.json.
@@ -1802,5 +1925,12 @@ export const __testing = {
   },
   resetPathResolver(): void {
     _pathResolver = defaultConfigPath;
+  },
+  // vX.X.X+ — independent tokenPrices path hooks for no-config testing.
+  setTokenPricesPathResolver(fn: () => string): void {
+    _tokenPricesPathResolver = fn;
+  },
+  resetTokenPricesPathResolver(): void {
+    _tokenPricesPathResolver = defaultTokenPricesPath;
   },
 };

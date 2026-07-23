@@ -7,8 +7,8 @@
 //     upstream output passes through.
 //   - Composes with upstream claude-hud output (passed via CREDITGAUGE_UPSTREAM
 //     by the bash wrapper in scripts/wrapper.sh).
-//   - Loads ~/.claude/plugins/creditgauge/config.json once at
-//     startup; every tunable (cache TTL, fetch timeout, colors, display
+//   - Loads config.json (optional — falls back to DEFAULT_CONFIG if absent)
+//     once at startup; every tunable (cache TTL, fetch timeout, colors, display
 //     mode, …) reads from there via the configStore singleton.
 //
 // v0.4.0+: three-layer config precedence

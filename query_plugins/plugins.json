@@ -40,7 +40,8 @@
       "TYPE": "QUOTA",
       "BASE_URL_COMPARED_TO": "http://127.0.0.1:3456",
       "COMPARE_METHOD": "EXACT",
-      "AUTHENTICATION_KEY": ""
+      "AUTHENTICATION_KEY": "",
+      "CURRENCY": ["USD"]
     },
     "hasAuth": true,
     "authScript": "auth.cjs",

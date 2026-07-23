@@ -54,6 +54,9 @@ async function editTemplate(providerMeta) {
         : "(empty)";
       console.log("  AUTHENTICATION_KEY = " + masked);
     }
+    if ("CURRENCY" in tpl && Array.isArray(tpl.CURRENCY)) {
+      console.log("  CURRENCY          = " + tpl.CURRENCY.join(", "));
+    }
     console.log("");
 
     console.log("Actions:");
@@ -62,6 +65,9 @@ async function editTemplate(providerMeta) {
     console.log("  m  Edit COMPARE_METHOD");
     if ("AUTHENTICATION_KEY" in tpl) {
       console.log("  k  Edit AUTHENTICATION_KEY");
+    }
+    if ("CURRENCY" in tpl) {
+      console.log("  c  Edit CURRENCY");
     }
     console.log("  Enter  Confirm and continue");
     console.log("");
@@ -98,6 +104,18 @@ async function editTemplate(providerMeta) {
           const keyVal = await prompt("AUTHENTICATION_KEY", tpl.AUTHENTICATION_KEY);
           if (keyVal) tpl.AUTHENTICATION_KEY = keyVal;
           else console.log("  (kept original value)");
+        }
+        break;
+      }
+      case "c": {
+        if ("CURRENCY" in tpl && Array.isArray(tpl.CURRENCY)) {
+          const current = tpl.CURRENCY.join(", ");
+          const raw = await prompt("CURRENCY (comma-separated)", current);
+          if (raw) {
+            tpl.CURRENCY = raw.split(",").map(s => s.trim()).filter(Boolean);
+          } else {
+            console.log("  (kept original value)");
+          }
         }
         break;
       }
