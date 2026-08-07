@@ -15,7 +15,7 @@ import * as statusStore from "./status-store.ts";
 import type { TokenSnapshot } from "./types.ts";
 
 // Minimal valid TokenSnapshot for the validation-gate tests.
-// totalIn > 0 AND totalOut > 0 AND totalApiDurationMs > 0 ⇒ valid.
+// totalOut > 0 AND totalApiDurationMs > 0 ⇒ valid (totalIn dropped from the gate).
 //
 // v0.8.23+ — `totalDurationMs` defaults to 500_000 (well above the
 // 120_000 cold-start threshold in detectRegression) so the default
@@ -80,27 +80,30 @@ describe("data-processor — pipeline basics", () => {
 });
 
 describe("data-processor — validation gate", () => {
-  it("totalIn=0 → invalid (sample skipped, but staged mark flushes through commit)", () => {
+  it("totalIn=0 → valid (totalIn dropped from the validation gate)", () => {
+    // vX.X.X+ — totalIn no longer gates validity: a tick with no
+    // fresh input tokens (e.g. a cache-read-only tick) is still a
+    // real measurement as long as totalOut + apiMs are present.
+    statusStore.beginTick("D:\\test", validTokens({
+      totals: { tokenTotalIn: 0, tokenTotalOut: 50 },
+    }));
+    assert.equal(statusStore.getState().valid, true);
+  });
+
+  it("totalOut=0 → invalid (sample skipped, but staged mark flushes through commit)", () => {
     // v0.8.10-alpha.2 snapshot contract: commit() no longer
     // gates on `valid`. Staged marks (regression-reset, prev
     // baseline update) flush even when the validation gate
     // rejects the tick. Sample append (the JSONL row) is the
     // *only* thing skipped on invalid ticks.
     statusStore.beginTick("D:\\test", validTokens({
-      totals: { tokenTotalIn: 0, tokenTotalOut: 50 },
+      totals: { tokenTotalIn: 100, tokenTotalOut: 0 },
     }));
     assert.equal(statusStore.getState().valid, false);
     statusStore.mark("tickStatus:sess-test", statusStore.emptyTickStatus());
     statusStore.commit();
     assert.equal(existsSync(join(_tmpDir, "status.json")), true,
       "v0.8.10-alpha.2 — invalid tick still flushes staged marks through commit");
-  });
-
-  it("totalOut=0 → invalid", () => {
-    statusStore.beginTick("D:\\test", validTokens({
-      totals: { tokenTotalIn: 100, tokenTotalOut: 0 },
-    }));
-    assert.equal(statusStore.getState().valid, false);
   });
 
   it("totalApiDurationMs=0 on first tick → apiMs back-derives from tokenOut → valid (v0.8.10-alpha.2 contract)", () => {

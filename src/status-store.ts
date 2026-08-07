@@ -1524,7 +1524,10 @@ function normalizeTick(
   // v0.8.10-alpha.2 — validation gate uses session-cumulative totals
   // (user contract pinned to the totals.* fields). The per-turn
   // current.tokenIn / tokenOut are snapshot fields, not gates.
-  const valid = totalIn > 0 && totalOut > 0 && apiMs > 0;
+  // vX.X.X+ — totalIn dropped from the gate: totalOut + apiMs alone
+  // decide validity (a cache-read-only tick can legitimately have
+  // totalIn == 0 and still be a real measurement).
+  const valid = totalOut > 0 && apiMs > 0;
   const tokenHitRate =
     totalIn > 0 ? (cachedIn / totalIn) * 100 : null;
   const tokenInSpeed = apiMs > 0 ? (in_ / apiMs) * 1000 : null;
@@ -1611,13 +1614,16 @@ function normalizeTick(
 function validateNormalizedTick(tick: CurrentTick | null): boolean {
   if (!tick) return false;
   // v0.8.10-alpha.2 — session-cumulative totals (per user contract).
+  // vX.X.X+ — totalIn dropped from the gate: totalOut + apiMs alone
+  // decide validity (a cache-read-only tick can legitimately have
+  // totalIn == 0 and still be a real measurement).
   // v0.8.24 — MAX_SAMPLE_API_MS sanity ceiling (inclusive: a tick
   // with apiMs <= 5min is accepted; anything above is rejected so
   // a clock-skew / provider-bug reading cannot pollute the JSONL
   // sample stream or the per-session accApiMs sum). The 5min cap
   // is well above any realistic per-tick API call (typically <60s)
   // but below the "10min pathological" marker.
-  return (tick.totalIn ?? 0) > 0 && (tick.totalOut ?? 0) > 0 && tick.apiMs > 0 && tick.apiMs <= MAX_SAMPLE_API_MS;
+  return (tick.totalOut ?? 0) > 0 && tick.apiMs > 0 && tick.apiMs <= MAX_SAMPLE_API_MS;
 }
 
 export function beginTick(cwd: string | null, tokens: TokenSnapshot | null): TickState {
