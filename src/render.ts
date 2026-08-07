@@ -6814,7 +6814,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_gitStatus: (params, ctx) => {
     const info = readGitInfo(ctx.tokens?.cwd);
     if (info == null) return placeholderWithColor("m_gitStatus", params, ctx);
-    const color = params.color ?? (info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN);
+    const color = (params.color as string | undefined) ?? (info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN);
     return wrapPlainDefault("m_gitStatus", info.dirty ? "dirty" : "clean", color);
   },
   m_ccVersion: (params, ctx) => {

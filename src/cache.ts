@@ -183,7 +183,6 @@ function flushToDisk(): void {
   // own ttlMs has elapsed. Entries written before this change (no
   // ttlMs on disk) are kept verbatim — their TTL is still enforced
   // by get()/peek(), we just don't proactively reclaim them here.
-  const now = Date.now();
   const obj: Record<string, Entry<unknown>> = {};
   for (const [k, v] of store) {
     // TTL is enforced only at read time (get/getWithAge). Do NOT
