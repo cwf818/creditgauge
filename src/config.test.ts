@@ -120,8 +120,8 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
   });
 
   it('"compact" resolves to the compact preset body', async () => {
-    // Lock the current compact body shape: 6 lines — inline header
-    // (provider/model + 📜 context + ▦ memory), tickline-slim (⚡),
+    // Lock the current compact body shape: 6 lines — 📜 header (context
+    // + ▦ memory + version), ⚡ tickline-slim + provider/model suffix,
     // session acc + ⏱️/🪙 (🗪), project acc + git_info (📦), quota/
     // balance dispatch (⚖️), quote (~). No information / tick_eval /
     // combline* / per-window stat fragments (those belong to `standard`
@@ -130,12 +130,15 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     // swap a 1-line `simple` body into a 6-line slot or vice-versa.
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "compact" }));
     const cfg = await loadConfig();
-    // Line 0 opens the inline header (provider/model bracket).
-    assert.equal(cfg.statuslineTemplate[0], "[");
+    // L1 opens the 📜 context header (no provider/model bracket).
+    assert.equal(cfg.statuslineTemplate[0], "m_label|📜: |color:yellow");
+    assert.ok(cfg.statuslineTemplate.includes("m_contextWindowSize|valueOnly:true"));
+    assert.ok(cfg.statuslineTemplate.includes("m_memUsage|valueOnly:true"));
+    assert.ok(cfg.statuslineTemplate.includes("m_version"));
+    // L2 tick diagnostics via the slim fragment + provider/model suffix.
+    assert.ok(cfg.statuslineTemplate.includes("m_template|tickline-slim"));
     assert.ok(cfg.statuslineTemplate.includes("m_provider"));
     assert.ok(cfg.statuslineTemplate.includes("m_model"));
-    // L2 tick diagnostics via the slim fragment.
-    assert.ok(cfg.statuslineTemplate.includes("m_template|tickline-slim"));
     // L3 session acc (scope:session) + api/cost tail.
     assert.ok(cfg.statuslineTemplate.includes("m_accTokenOutSpeed|scope:session"));
     assert.ok(cfg.statuslineTemplate.includes("m_accTokenTotalIn|scope:session"));

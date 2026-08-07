@@ -514,11 +514,6 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   ],
   // multi-line: context-info / tick-eval / stat-eval stacked.
   compact: [
-    "[",
-    "m_provider",
-    "/",
-    "m_model",
-    "] ",
     "m_label|📜: |color:yellow",
     "m_windowContext|display:used",
     "s_space",
@@ -528,9 +523,15 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_windowMemUsage|display:used",
     "s_space",
     "m_memUsage|valueOnly:true",
+    "s_pipe|wrap:true",
+    "m_version",
     "s_newline",
 
     "m_template|tickline-slim",
+    "s_pipe|wrap:true",
+    "m_provider",
+    "/",
+    "m_model",
     "s_newline",
 
     "m_label|🗪 : |color:orange",
