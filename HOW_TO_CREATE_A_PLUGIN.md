@@ -288,8 +288,8 @@ and drops it under every other provider (and under an unmatched
     ]
   },
   "statuslineTemplate": [
-    "m_template|quota|type:quota|provider:copilot-api",
-    "m_template|copilot|provider:copilot-api"
+    "m_template|quota|type:quota|providers:copilot-api",
+    "m_template|copilot|providers:copilot-api"
   ]
 }
 ```

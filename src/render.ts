@@ -7912,7 +7912,7 @@ export function renderProviderLine(
     // v0.9.0+ — active provider instance id (e.g. `"minimax"`).
     // Drives `m_template|<key>|providers:<id1,id2>` OR-match gates;
     // null when ANTHROPIC_BASE_URL didn't match a configured entry
-    // so a `|provider:<id>` gate returns false and the fragment drops.
+    // so a `|providers:<id1,id2,...>` gate returns false and the fragment drops.
     currentProvider: provider,
     // v0.6.0+ — single-owner dedup ref. Propagated by reference
     // through any nested m_template: expansions; each m_age instance

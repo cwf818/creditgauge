@@ -423,10 +423,10 @@ Default: `["m_template|quota|type:quota", "m_template|balance|type:balance"]` �
 ```ts
 m_template|<key>                            // looks up lineTemplates.<key>; missing → warn + drop
 m_template|<key>|type:quota|balance         // gates to a specific provider TYPE; absent = provider-agnostic
-m_template|<key>|provider:<id>              // gates to a specific provider instance (e.g. "minimax")
+m_template|<key>|providers:<id1,id2,...>    // gates to specific provider instance(s); absent = provider-agnostic
 ```
 
-Every other inline arg (`scope`, `model`, `window`, `align`, `color`, `nulldrop`, `valueOnly`) is **forwarded** to the inner modules as passthrough. Inner-explicit-wins: if the inner token uses the same arg explicitly, the inner value beats the passthrough.
+Every other inline arg (`scope`, `model`, `window`, `align`, `term`, `color`, `nulldrop`, `valueOnly`) is **forwarded** to the inner modules as passthrough. Inner-explicit-wins: if the inner token uses the same arg explicitly, the inner value beats the passthrough.
 
 Nesting protection: `lineTemplates` entries cannot themselves contain `m_template*` tokens (stripped at load time).
 
@@ -493,7 +493,7 @@ Every module the renderer recognizes. **Type filter** tells you which provider T
 | `m_statTtlStatus` | TTL-gauge glyph + fixed-second remaining suffix, e.g. `▆ 23s`. Bypasses `timeFormat.minUnit` so the suffix is always seconds. | `statusStore.peekFreshestStatAgeMs()` | agnostic | `color`, `nulldrop` |
 | `m_sumTtlStatus` | Per-filter TTL gauge, sibling of `m_statTtlStatus` (which shows the freshest across ALL stat-cache keys). Renders the TTL of the EXACT `stat:<model>:<windowKey>:<align>` row that `parseWindowScope` resolves for the active filter (model + window + align + term), so the user inspects freshness for a SPECIFIC `m_sum*` aggregate rather than the newest write to the cache. Same TTL-bar glyph + 5-band color + fixed-second suffix as `m_statTtlStatus`. Cache miss → `▆` placeholder in STALE_COLOR. | `statusStore.peekStatAgeMs(statKeyForFilter(filter))` | agnostic | `color`, `nulldrop`, `model`, `window`, `align`, `term` |
 | `m_label\|<text>` | Literal `<text>`. | inline | agnostic | `color`, `nulldrop` |
-| `m_template\|<key>[\|type:quota\|balance\|provider:<id>]` | Inserts `lineTemplates.<key>` in place. | inline key | filtered by `type` / `provider` | `type`, `provider`, plus passthrough (§10) |
+| `m_template\|<key>[\|type:quota\|balance\|providers:<id1,id2,...>]` | Inserts `lineTemplates.<key>` in place. | inline key | filtered by `type` / `providers` | `type`, `providers`, plus passthrough (§10) |
 
 ### 8.2 Per-turn / Acc / Sum family
 
