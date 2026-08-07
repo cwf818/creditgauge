@@ -277,20 +277,21 @@ assert_file_missing "[completely] state/<hash>/state.json wiped" \
 assert_match_str "[completely] full-uninstall message" \
   "--completely" "$OUT"
 
-# --completely also rmdir's the now-empty creditgauge/ parent dir
+# --completely also rm -rf's the entire creditgauge/ parent tree
 assert_dir_missing "[completely] creditgauge/ parent dir removed" \
   "${ROOT}/plugins/creditgauge"
 
 rm -rf "$ROOT"
 
 echo ""
-echo "== v0.9.x --completely + untracked file: creditgauge/ stays, exit 0 =="
+echo "== v0.9.x+ --completely + untracked file: everything wiped, exit 0 =="
 
 ROOT=$(build_fixture)
 # Plant an untracked file the script doesn't know about (simulates
-# a __legacy__/ migration leftover or a user-saved note). rmdir
-# must fail with ENOTEMPTY — we want the dir to stay, NOT to
-# silently nuke the untracked file.
+# a __legacy__/ migration leftover or a user-saved note). v0.9.x+
+# --completely is a FULL clean slate — the whole creditgauge/ tree
+# is rm -rf'd, so this file is nuked too (unlike default mode,
+# which preserves user-owned artifacts).
 mkdir -p "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/__legacy__"
 echo "user-saved-stuff" \
   > "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/__legacy__/readme.txt"
@@ -305,12 +306,11 @@ OUT=$( (
 RC=${OUT##*RC=}
 OUT=${OUT%RC=*}
 
-# The untracked file MUST survive (rmdir failure is non-fatal).
-assert_file_exists "[untracked] __legacy__/readme.txt preserved" \
+# The untracked file IS nuked (--completely = full clean slate).
+assert_file_missing "[untracked] __legacy__/readme.txt wiped" \
   "${ROOT}/plugins/creditgauge/state/d--workspace-creditgauge/__legacy__/readme.txt"
-# The creditgauge/ parent dir MUST stay (it's non-empty thanks to
-# the untracked file).
-assert_dir_exists "[untracked] creditgauge/ parent dir stays (rmdir ENOTEMPTY)" \
+# The creditgauge/ parent dir is removed (the whole tree is nuked).
+assert_dir_missing "[untracked] creditgauge/ parent dir removed" \
   "${ROOT}/plugins/creditgauge"
 # The script MUST still exit 0.
 assert_eq "[untracked] script still exits 0" "0" "$RC"
@@ -373,10 +373,10 @@ assert_match_str "[dry-run + --completely] plan wipes config.json" \
   "creditgauge/config.json" "$OUT_C"
 assert_match_str "[dry-run + --completely] plan wipes query_plugins" \
   "creditgauge/query_plugins" "$OUT_C"
-assert_match_str "[dry-run + --completely] plan rmdirs creditgauge/ (if empty)" \
-  "rmdir" "$OUT_C"
-assert_match_str "[dry-run + --completely] plan rmdirs the right path" \
-  "creditgauge (if empty after wipes)" "$OUT_C"
+assert_match_str "[dry-run + --completely] plan rm -rf the creditgauge/ tree" \
+  "rm -rf" "$OUT_C"
+assert_match_str "[dry-run + --completely] plan targets plugins/creditgauge" \
+  "${ROOT}/plugins/creditgauge" "$OUT_C"
 
 # Dry-run + --dry-run message
 assert_match_str "[dry-run] explicit no-change message" \

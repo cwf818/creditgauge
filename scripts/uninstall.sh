@@ -767,8 +767,9 @@ if [ "$KEEP_STATE" != 1 ]; then
   # been explicitly removed above — this rm -rf catches the
   # directory skeleton (state/<hash>/, state/, and the parent)
   # plus any untracked files the selective wipe might have missed.
-  # Unlike the default branch (which uses rmdir to avoid data
-  # loss), --completely means the user wants a full clean slate.
+  # Unlike default mode (which preserves user-owned artifacts like
+  # config.json / query_plugins/ and leaves the parent dir in
+  # place), --completely means the user wants a full clean slate.
   rm -rf "${PLUGINS_DIR}/creditgauge"
   if [ ! -d "${PLUGINS_DIR}/creditgauge" ]; then
     echo "uninstall.sh: removed ${PLUGINS_DIR}/creditgauge/"
