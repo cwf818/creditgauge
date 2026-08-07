@@ -434,12 +434,12 @@ Nesting protection: `lineTemplates` entries cannot themselves contain `m_templat
 
 ## 6. Built-in presets
 
-Four presets ship in `DEFAULT_STATUSLINE_PRESETS` (`src/config.template.ts:419-516`). Set `"statuslineTemplate": "<name>"` in `config.json` to use one. To customize, copy the body into `lineTemplates.<your_key>` and reference it via `m_template|<your_key>`.
+Five presets ship in `DEFAULT_STATUSLINE_PRESETS` (`src/config.template.ts:490-663`). Set `"statuslineTemplate": "<name>"` in `config.json` to use one. To customize, copy the body into `lineTemplates.<your_key>` and reference it via `m_template|<your_key>`.
 
 | Key             | Lines | Use it when                                                                                       |
 |-----------------|-------|---------------------------------------------------------------------------------------------------|
 | `simple`        | 1     | One-line minimal: provider-type dispatch + `m_age`. Default for users chaining another statusline. |
-| `compact`       | 4     | Multi-line eval stack (`tick_eval` / `acc_eval` / `stat_eval`) + a single-line dispatch footer + mem-info + version. Mid-density. |
+| `compact`      | 6     | Condensed stack: inline header (`[provider/model]` + 📜 context + ▦ memory) / ⚡ tickline-slim / 🗪 session acc + ⏱️ + 🪙 / 📦 project acc + git / ⚖️ inline 3-window quota · 💰 balance / ~ quote. Uses the slim eval + git_info + quote fragments; the quota half is inlined (self-contained, ignores the `quota_all` override). |
 | `standard`      | 5     | Adds an `information` + `git_info` header row above the `compact` eval stack.                      |
 | `standard-slim` | 5     | Narrower sibling of `standard`: compresses the header row into context + memory + cost + version, uses `tickline-slim` / `combline1-slim` / `combline2-slim` fragments with reduced labels and spacing while keeping the same eval and quota rows. Best when vertical space is tight but you still want the full eval + quota stack. |
 | `abundant`      | 9     | Per-scope `tokens_acc` (session/model/project) + per-window `tokens_stat` (5h-align / 7d-align) + `m_quote`. Kitchen-sink; verbose. |

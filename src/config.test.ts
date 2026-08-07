@@ -9,6 +9,7 @@ import {
   configStore,
   loadConfig,
 } from "./config.ts";
+import { DEFAULT_LINE_TEMPLATES } from "./config.template.ts";
 
 let dir: string;
 let tpDir: string;
@@ -119,37 +120,55 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
   });
 
   it('"compact" resolves to the compact preset body', async () => {
-    // Lock the v0.9.0+ compact body shape: 4 lines, no information /
-    // git_info header (that's `standard`), no quote / per-scope tokens
-    // (that's `abundant`). If a future refactor re-points `compact`
-    // at a different fragment, this test breaks loudly so we don't
-    // silently swap a 1-line `simple` body into a 4-line slot or
-    // vice-versa.
+    // Lock the current compact body shape: 6 lines — inline header
+    // (provider/model + 📜 context + ▦ memory), tickline-slim (⚡),
+    // session acc + ⏱️/🪙 (🗪), project acc + git_info (📦), quota/
+    // balance dispatch (⚖️), quote (~). No information / tick_eval /
+    // combline* / per-window stat fragments (those belong to `standard`
+    // / `abundant`). If a future refactor re-points `compact` at a
+    // different layout, this test breaks loudly so we don't silently
+    // swap a 1-line `simple` body into a 6-line slot or vice-versa.
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "compact" }));
     const cfg = await loadConfig();
-    // Line 0: tick_eval; line 1: combline1 (session acc + 5h-align
-    // stat merged); line 2: combline2 (project acc + 7d-align stat
-    // merged). v0.9.7+ replaced acc_eval/stat_eval with these.
-    assert.equal(cfg.statuslineTemplate[0], "m_template|tick_eval");
-    assert.ok(cfg.statuslineTemplate.includes("m_template|combline1"));
-    assert.ok(cfg.statuslineTemplate.includes("m_template|combline2"));
-    // Final line: provider-type dispatch + mem_info (v0.4.x — m_age +
-    // m_version were trimmed; m_pluginSource glyph carries the version
-    // semantic now).
-    assert.ok(cfg.statuslineTemplate.includes("m_pluginSource"));
-    assert.ok(cfg.statuslineTemplate.includes("m_template|quota|type:quota"));
+    // Line 0 opens the inline header (provider/model bracket).
+    assert.equal(cfg.statuslineTemplate[0], "[");
+    assert.ok(cfg.statuslineTemplate.includes("m_provider"));
+    assert.ok(cfg.statuslineTemplate.includes("m_model"));
+    // L2 tick diagnostics via the slim fragment.
+    assert.ok(cfg.statuslineTemplate.includes("m_template|tickline-slim"));
+    // L3 session acc (scope:session) + api/cost tail.
+    assert.ok(cfg.statuslineTemplate.includes("m_accTokenOutSpeed|scope:session"));
+    assert.ok(cfg.statuslineTemplate.includes("m_accTokenTotalIn|scope:session"));
+    assert.ok(cfg.statuslineTemplate.includes("m_accApiCalls|scope:session"));
+    assert.ok(cfg.statuslineTemplate.includes("m_accApiMs|scope:session|valueOnly:true"));
+    assert.ok(cfg.statuslineTemplate.includes("m_accTokenCost|scope:session|valueOnly:true"));
+    // L4 project acc (scope:project) + git footer.
+    assert.ok(cfg.statuslineTemplate.includes("m_accTokenOutSpeed|scope:project"));
+    assert.ok(cfg.statuslineTemplate.includes("m_template|git_info"));
+    // L5 quota/balance dispatch — the quota half is the dedicated
+    // `quota_all_compact` fragment (3 windows + bare countdowns,
+    // self-contained, ignores the config's `quota_all` override).
+    assert.ok(cfg.statuslineTemplate.includes("m_template|quota_all_compact|type:quota"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|balance|type:balance"));
-    assert.ok(cfg.statuslineTemplate.includes("m_template|mem_info"));
-    // 4 logical lines = 3 newlines in the array.
+    // L6 quote.
+    assert.ok(cfg.statuslineTemplate.includes("m_template|quote"));
+    // The quota_all_compact fragment itself is the 3-window line.
+    const qac = DEFAULT_LINE_TEMPLATES.quota_all_compact;
+    assert.ok(qac.includes("m_modeLabel|color:yellow"));
+    assert.ok(qac.includes("m_windowQuota|term:short"));
+    assert.ok(qac.includes("m_windowQuota|term:long"));
+    assert.ok(qac.includes("m_countdown|term:mid|valueOnly:true"));
+    assert.ok(!qac.includes("m_sumEstQuota"), "quota_all_compact has no est-quota extras");
+    assert.ok(!qac.includes("m_age"), "quota_all_compact has no age tail");
+    // 6 logical lines = 5 newlines in the array.
     const newlines = cfg.statuslineTemplate.filter((t) => t === "s_newline").length;
-    assert.equal(newlines, 3, `expected 3 s_newline (4-line layout), got ${newlines}`);
-    // No header fragments (those belong to `standard` / `abundant`).
-    assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_template|information")));
-    assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_template|git_info")));
-    // No quote / per-scope / per-window stat tokens (those belong to `abundant`).
-    assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_quote")));
-    assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_template|tokens_acc|scope:")));
+    assert.equal(newlines, 5, `expected 5 s_newline (6-line layout), got ${newlines}`);
+    // No legacy eval-stack fragments (those belong to the pre-rebuild compact).
+    assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_template|tick_eval")));
+    assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_template|combline")));
+    // No per-window stat / plugin-source fragments (those belong to `abundant` / `simple`).
     assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_template|tokens_stat|")));
+    assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_pluginSource")));
   });
 
   it("unknown string falls back to DEFAULT_STATUSLINE_TEMPLATE with one warn", async () => {
