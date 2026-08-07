@@ -36,7 +36,7 @@
 #        - cache/creditgauge/
 #        - marketplaces/creditgauge/
 #        - marketplaces/cwf818-creditgauge/   (alias)
-#        - state/{cache.json, cache.stat.json, upstream-cmd.{sh,txt}}
+#        - state/{cache.json, cache.stat.json, upstream-cmd.{sh,sh.disabled,txt}}
 #        - state/install-journal.json      (install.sh's private per-field journal;
 #                                           emptied after the apply pass, so it has
 #                                           zero value once settings are reverted —
@@ -76,8 +76,8 @@
 #     slate (re-install is then equivalent to a fresh install).
 #   - ALWAYS wipe: cache/creditgauge/, marketplaces/creditgauge/,
 #     marketplaces/cwf818-creditgauge/, state/{cache.json,
-#     cache.stat.json, upstream-cmd.{sh,txt}, install-journal.json},
-#     state/<projectHash>/state.json.
+#     cache.stat.json, upstream-cmd.{sh,sh.disabled,txt},
+#     install-journal.json}, state/<projectHash>/state.json.
 #
 # Usage:
 #   uninstall.sh                  # user-level; partial-preserve (default)
@@ -358,6 +358,7 @@ if [ -d "$STATE_DIR" ]; then
     "${STATE_DIR}/cache.stat.json"
     "${STATE_DIR}/diagnostics.jsonl"
     "${STATE_DIR}/upstream-cmd.sh"
+    "${STATE_DIR}/upstream-cmd.sh.disabled"
     "${STATE_DIR}/upstream-cmd.txt"
     "${STATE_DIR}/install-journal.json"
   )

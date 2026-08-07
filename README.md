@@ -128,7 +128,7 @@ Replaces the active `settings.json` with the most recent `settings.json.bak.<ts>
 
 ## Commands
 
-Four slash commands ship with the plugin:
+Seven slash commands ship with the plugin:
 
 | Command                       | What it does                                                              |
 | ----------------------------- | ------------------------------------------------------------------------- |
@@ -136,6 +136,9 @@ Four slash commands ship with the plugin:
 | `/creditgauge:uninstall`         | Restore `settings.json`, wipe cache + marketplace + loader rows.         |
 | `/creditgauge:clean`             | Trim old `.bak.<ts>` files (keeps the most recent per file).             |
 | `/creditgauge:clean-cache`       | Remove stale version dirs from the plugin cache, keeping only the newest. |
+| `/creditgauge:clean-journal`     | Remove old .jsonl journal files under state/<projectHash>/ by age or --all.                                                                  |
+| `/creditgauge:reset`             | Wipe the 3 cache files for the current project only (cache.json, state.json, cache.stat.json); preserves diagnostics + token-sample history. |
+| `/creditgauge:config`            | Read config state; switch statuslineTemplate preset; disable/enable upstream. |
 
 Each is a Pattern B2 slash command — the body is a `!`-fenced shell block that loads `scripts/<name>.sh` directly via `${CLAUDE_PLUGIN_ROOT}`, with `allowed-tools` scoped to that script. See [Project layout](#project-layout) for the file map.
 
@@ -481,6 +484,7 @@ commands/
   uninstall.md        # /creditgauge:uninstall slash command
   clean.md            # /creditgauge:clean slash command
   clean-cache.md      # /creditgauge:clean-cache slash command
+  config.md            # /creditgauge:config slash command
 scripts/
   wrapper.sh          # bash wrapper: CREDITGAUGE_UPSTREAM_CMD → CREDITGAUGE_UPSTREAM → us
   install.sh          # settings.json patcher (install only)

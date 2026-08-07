@@ -17,7 +17,7 @@ The plugin is shipped as a **single-plugin marketplace**: the repo root IS the m
 ```bash
 npm install          # install dev deps (esbuild, typescript, tsx, @types/node)
 npm run typecheck    # tsc --noEmit
-npm test             # node:test via tsx (64 tests across api/render/cache/composition)
+npm test             # node:test via tsx (1099 tests across api/render/cache/composition)
 npm run build        # esbuild → dist/index.js (single self-contained ESM bundle, target=node18)
 npm run dev          # esbuild --watch
 ```
@@ -64,6 +64,7 @@ commands/
   uninstall.md        # /creditgauge:uninstall slash command (Pattern B2)
   clean.md            # /creditgauge:clean slash command (Pattern B2)
   clean-cache.md      # /creditgauge:clean-cache slash command (Pattern B2)
+  config.md           # /creditgauge:config slash command (Pattern B2)
 scripts/
   wrapper.sh          # bash wrapper: CREDITGAUGE_UPSTREAM_CMD → CREDITGAUGE_UPSTREAM → us
   install.sh          # settings.json patcher (install/restore/dry-run; uninstall is its own command in v0.9.x+)
@@ -212,7 +213,7 @@ After install, run `/creditgauge:install` to wire the wrapper into `settings.jso
 
 ## Testing notes
 
-- `npm test` runs all 64 tests in ~250ms. No network calls in tests — they exercise pure functions and fixtures.
+- `npm test` runs all 1099 tests in ~250ms. No network calls in tests — they exercise pure functions and fixtures.
 - The captured real response lives at `src/__fixtures__/remains.real.json` and is the source of truth for the parser's shape assumptions. If MiniMax changes the API, capture a fresh response and update both the fixture and `src/api.plan.ts`.
 - Live smoke test (no Claude Code needed): `echo '{}' | ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic ANTHROPIC_AUTH_TOKEN=<token> node dist/index.js`.
 - Live install smoke test: `bash scripts/install.sh --dry-run` then `bash scripts/install.sh` then `bash scripts/uninstall.sh` (or `bash scripts/uninstall.sh --dry-run` first).

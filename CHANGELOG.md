@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.2.0 (2026-08-08)
+
+### Feat
+
+- **`/creditgauge:config` slash command** (Pattern B2) — read or modify the
+  plugin's runtime config without hand-editing `config.json`:
+  - No-arg read-only status view: current `statuslineTemplate` preset
+    (or custom-array / unknown-preset classification) + upstream on/off/none.
+  - `--preset-<name>` — writes `statuslineTemplate: "<name>"` (string form)
+    into `~/.claude/plugins/creditgauge/config.json`, preserving all other
+    keys and the file's line ending (CRLF/LF), creating the file if absent.
+    Valid presets: `simple`, `compact`, `standard`, `abundant`,
+    `standard-slim`. A custom `string[]` template is replaced (with a notice).
+  - `--disable-upstream` / `--enable-upstream` — toggle the upstream
+    statusline chain by renaming `state/upstream-cmd.sh` ↔
+    `state/upstream-cmd.sh.disabled`. The wrapper's `[ -f ... ]` existence
+    check is the switch; the original command is preserved and re-enablable.
+  - `--dry-run` prints actions with zero changes; multiple action flags may
+    be combined; `--help`; unknown flag → exit 2, unknown preset → exit 1.
+  - `scripts/uninstall.sh` now wipes `upstream-cmd.sh.disabled` alongside
+    the rest of the state cache. New files: `scripts/config.sh`,
+    `scripts/lib/edit-config.mjs`, `scripts/test-config.sh` (42-assert
+    isolated regression suite).
+
+### Docs
+
+- README/CLAUDE.md slash-command + test-count figures synced (`npm test`
+  now runs 1099 tests, not 64).
+
 ## v1.1.9 (2026-07-21)
 
 ### Feat
