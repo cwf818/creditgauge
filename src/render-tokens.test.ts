@@ -2151,24 +2151,24 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     assert.equal(strip(out), "--");
   });
 
-  it("m_linesAdded| '+ 3965'", () => {
+  it("m_linesAdded| '+3965'", () => {
     const out = renderTemplate(["m_linesAdded"], ctxFor(fakeSnapshot())).join("\n");
-    assert.equal(strip(out), "+ 3965");
+    assert.equal(strip(out), "+3965");
   });
 
-  it("m_linesRemoved| '- 967'", () => {
+  it("m_linesRemoved| '-967'", () => {
     const out = renderTemplate(["m_linesRemoved"], ctxFor(fakeSnapshot())).join("\n");
-    assert.equal(strip(out), "- 967");
+    assert.equal(strip(out), "-967");
   });
 
-  it("m_linesAdded| 0 renders as '+ 0' (zero is information, not absence)", () => {
+  it("m_linesAdded| 0 renders as '+0' (zero is information, not absence)", () => {
     const out = renderTemplate(
       ["m_linesAdded"],
       ctxFor(
         fakeSnapshot({ cost: { totalDurationMs: 600_000, totalApiDurationMs: null, totalLinesAdded: 0, totalLinesRemoved: 0 } }),
       ),
     ).join("\n");
-    assert.equal(strip(out), "+ 0");
+    assert.equal(strip(out), "+0");
   });
 
   it("m_tokenInTotal| 'in|163.5k' (cumulative, the old m_tokenIn behavior)", () => {
@@ -2556,8 +2556,8 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
       ["m_ccVersion", "n/a"],
       ["m_sessionDuration", "--"],
       ["m_sessionApiDuration", "--"],
-      ["m_linesAdded", "+ --"],
-      ["m_linesRemoved", "- --"],
+      ["m_linesAdded", "+--"],
+      ["m_linesRemoved", "---"],
       ["m_tokenInTotal", "in:n/a"],
       ["m_tokenTotalOut", "out:n/a"],
       ["m_contextWindowSize", "size:n/a"],
@@ -2793,24 +2793,24 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
     assert.equal(strip(out), "--");
   });
 
-  it("m_linesAdded|nulldrop|false renders '+ --' (signed placeholder)", () => {
+  it("m_linesAdded|nulldrop|false renders '+--' (signed placeholder)", () => {
     const out = renderTemplate(
       ["m_linesAdded|nulldrop:false"],
       ctxFor(
         fakeSnapshot({ cost: { totalDurationMs: 600_000, totalApiDurationMs: null, totalLinesAdded: null, totalLinesRemoved: null } }),
       ),
     ).join("\n");
-    assert.equal(strip(out), "+ --");
+    assert.equal(strip(out), "+--");
   });
 
-  it("m_linesRemoved|nulldrop|false renders '- --' (signed placeholder)", () => {
+  it("m_linesRemoved|nulldrop|false renders '---' (signed placeholder)", () => {
     const out = renderTemplate(
       ["m_linesRemoved|nulldrop:false"],
       ctxFor(
         fakeSnapshot({ cost: { totalDurationMs: 600_000, totalApiDurationMs: null, totalLinesAdded: null, totalLinesRemoved: null } }),
       ),
     ).join("\n");
-    assert.equal(strip(out), "- --");
+    assert.equal(strip(out), "---");
   });
 
 
@@ -3045,14 +3045,14 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
     assert.deepEqual(out, []);
   });
 
-  it("inline m_linesAdded: defaults to placeholder '+ --'", () => {
+  it("inline m_linesAdded: defaults to placeholder '+--'", () => {
     const out = renderTemplate(
       ["m_linesAdded|"],
       ctxFor(
         fakeSnapshot({ cost: { totalDurationMs: 600_000, totalApiDurationMs: null, totalLinesAdded: null, totalLinesRemoved: null } }),
       ),
     ).join("\n");
-    assert.equal(strip(out), "+ --");
+    assert.equal(strip(out), "+--");
   });
 
   it("m_linesAdded|nulldrop|true drops on null totalLinesAdded", () => {

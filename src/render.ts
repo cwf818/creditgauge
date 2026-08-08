@@ -3062,16 +3062,16 @@ m_quota: Object.assign(
     return wrapValueDefault("m_apiMs", r.apiMs, `${prefix}${formatRemainingMs(r.apiMs)}`, undefined);
   },
   // Session-cumulative lines added (stdin.cost.total_lines_added).
-  // v6.x: missing field → "+ --" placeholder (was: drop). Zero is
-  // a real value and renders as "+ 0".
+  // v6.x: missing field → "+--" placeholder (was: drop). Zero is
+  // a real value and renders as "+0".
   m_linesAdded: (c) => {
     const n = c.tokens?.cost.totalLinesAdded;
-    return n != null ? wrapPlainDefault("m_linesAdded", `+ ${n}`, undefined) : placeholderBare("m_linesAdded", c);
+    return n != null ? wrapPlainDefault("m_linesAdded", `+${n}`, undefined) : placeholderBare("m_linesAdded", c);
   },
-  // Session-cumulative lines removed. v6.x: missing → "- --".
+  // Session-cumulative lines removed. v6.x: missing → "---".
   m_linesRemoved: (c) => {
     const n = c.tokens?.cost.totalLinesRemoved;
-    return n != null ? wrapPlainDefault("m_linesRemoved", `- ${n}`, undefined) : placeholderBare("m_linesRemoved", c);
+    return n != null ? wrapPlainDefault("m_linesRemoved", `-${n}`, undefined) : placeholderBare("m_linesRemoved", c);
   },
   // Session-cumulative input tokens (stdin.context_window.total_input_tokens).
   // v6.x: totals.tokenTotalIn=null → "in:n/a" placeholder (was: drop).
@@ -4929,8 +4929,8 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   // users composing api-ms alongside sum-api see the same body
   // for "no reading yet".
   m_apiMs: placeholderLabelOr("apiMs"),
-  m_linesAdded: placeholderDashesUnit("+ --"),
-  m_linesRemoved: placeholderDashesUnit("- --"),
+  m_linesAdded: placeholderDashesUnit("+--"),
+  m_linesRemoved: placeholderDashesUnit("---"),
   // v0.8.0+ — sum/avg advanced statistics placeholders. Same shape
   // as the rendered output: "in:n/a" / "out:n/a" / "cache:n/a" /
   // "api:n/a" for the 5 plain modules; "hit:n/a%" for the ratio.
@@ -6969,12 +6969,12 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_linesAdded: (params, ctx) => {
     const n = ctx.tokens?.cost.totalLinesAdded;
     if (n == null) return placeholderWithColor("m_linesAdded", params, ctx);
-    return wrapPlainDefault("m_linesAdded", `+ ${n}`, params.color as string | undefined);
+    return wrapPlainDefault("m_linesAdded", `+${n}`, params.color as string | undefined);
   },
   m_linesRemoved: (params, ctx) => {
     const n = ctx.tokens?.cost.totalLinesRemoved;
     if (n == null) return placeholderWithColor("m_linesRemoved", params, ctx);
-    return wrapPlainDefault("m_linesRemoved", `- ${n}`, params.color as string | undefined);
+    return wrapPlainDefault("m_linesRemoved", `-${n}`, params.color as string | undefined);
   },
   m_tokenInTotal: (params, ctx) => {
     const t = ctx.tokens;
