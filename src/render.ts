@@ -5714,6 +5714,7 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_balance: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_age: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_version: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
+  m_pluginSource: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_tokenIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_tokenOut: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_contextSize: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
@@ -6307,6 +6308,21 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     // v6.x: missing version → "v:n/a" placeholder (was: drop).
     if (!ctx.version) return placeholderWithColor("m_version", params, ctx);
     return wrapPlainDefault("m_version", `v${ctx.version}`, params.color as string | undefined);
+  },
+  m_pluginSource: (params, ctx) => {
+    // vX.X.X+ — inline args for m_pluginSource (color / prefix / suffix /
+    // nulldrop). Mirrors the MODULES path: glyph per resolution kind, and
+    // NO default tint (the symbol carries the meaning on its own) — only an
+    // explicit |color| applies one. No cache row → null (no-op, matches the
+    // bare path's drop).
+    const glyph =
+      ctx.pluginSource === "builtin" ? labelFor("pluginSystem") :
+      ctx.pluginSource === "user" ? labelFor("pluginUserDefined") :
+      ctx.pluginSource === "missing" ? labelFor("pluginMissing") :
+      null;
+    if (glyph == null) return null;
+    const color = params.color as string | undefined;
+    return color ? `${color}${glyph}${RESET}` : glyph;
   },
   m_tokenIn: (params, ctx) => {
     const r = computeTickDelta(ctx, "in");
@@ -7751,6 +7767,10 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
         inline = expandInlineToken(tok, "m_age", 6, ctx);
       } else if (tok.startsWith("m_version|")) {
         inline = expandInlineToken(tok, "m_version", 10, ctx);
+      } else if (tok.startsWith("m_pluginSource|")) {
+        // m_pluginSource → skip "m_pluginSource|" (length 15). Unique
+        // stem, no prefix-shadowing concern.
+        inline = expandInlineToken(tok, "m_pluginSource", 15, ctx);
       } else if (tok.startsWith("m_tokenIn|")) {
         inline = expandInlineToken(tok, "m_tokenIn", 10, ctx);
       } else if (tok.startsWith("m_tokenOut|")) {

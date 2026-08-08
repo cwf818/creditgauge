@@ -2714,6 +2714,31 @@ describe("m_pluginSource (v0.9.x)", () => {
     assert.equal(strip(builtinLine), "📌",
       `labelPluginUserDefined override should not affect labelPluginSystem default, got: ${strip(builtinLine)}`);
   });
+
+  // vX.X.X+ — inline args (color / prefix / suffix / nulldrop) are wired
+  // for m_pluginSource. Before this, any `m_pluginSource|...` token fell
+  // through the dispatcher's missing-branch and emitted the token VERBATIM.
+  it("inline |color| tints the glyph (no default tint otherwise)", () => {
+    const line = lineFor("builtin", "m_pluginSource|color:red");
+    assert.equal(strip(line), "📌", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes(`${RED}📌`), `expected red-tinted glyph, got: ${JSON.stringify(line)}`);
+  });
+
+  it("inline |prefix| / |suffix| wrap the glyph", () => {
+    const line = lineFor("user", "m_pluginSource|prefix:>> |suffix: <<");
+    assert.equal(strip(line), ">> 🎨 <<", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("inline color + prefix + suffix combine", () => {
+    const line = lineFor("builtin", "m_pluginSource|color:red|prefix:>> |suffix: <<");
+    assert.equal(strip(line), ">> 📌 <<", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes(`${RED}📌`), `got: ${JSON.stringify(line)}`);
+  });
+
+  it("inline args with no cache row still drop (no verbatim leak)", () => {
+    const line = lineFor(undefined, "m_pluginSource|color:red|prefix:x|suffix:y");
+    assert.equal(strip(line), "", `m_pluginSource with no row must drop, got: ${JSON.stringify(line)}`);
+  });
 });
 
 // v0.9.x — cache.json row `<provider>:pluginSource` round-trip:
