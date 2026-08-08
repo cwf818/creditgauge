@@ -297,9 +297,7 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   ],
   git_info: [
     "m_label|⎇ Git: |color:yellow",
-    "m_branch",
-    "s_space",
-    "m_gitStatus",
+    "m_branch|withStatus:true",
     "s_space",
     "m_linesAdded",
     "s_space",
