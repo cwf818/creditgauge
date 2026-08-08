@@ -25,14 +25,14 @@
 
 `info = readGitInfo(cwd)`：
 - `info == null` → placeholder `branch:n/a`（不变）。
-- 颜色 = `info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN`（与 `m_gitStatus` 完全一致）。
-- body = `info.branch + (info.dirty ? "*" : "")` —— 星号在同一颜色 span 内。
-- `|color|<c>` 覆盖 → 整段用户色（override 永远赢）。
+- **主体** = `info.branch`，颜色按 m_branch 原逻辑：teal 默认色（`DEFAULT_COLORS.m_branch`），`|color|<c>` 覆盖主体色。
+- **suffix** = `info.dirty ? "*" : "✓"`，颜色 = `info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN`（与 `m_gitStatus` 颜色一致）—— clean/dirty 色只作用在 suffix 上。
+- `|color|<c>` 只作用于主体，suffix 保持其 clean/dirty 色。
 
 ### withStatus:false
 
-- `wrapPlainDefault("m_branch", branch, undefined)` → teal 默认色、无星号、无状态色，与今天渲染 byte-identical。
-- `|color|<c>` 覆盖仍然赢。
+- `wrapPlainDefault("m_branch", branch, undefined)` → teal 默认色、无 suffix，与今天渲染 byte-identical。
+- `|color|<c>` 覆盖主体色仍然赢。
 
 ## 注册位
 
@@ -49,15 +49,15 @@
 ## 行为变化提示
 
 默认 `git_info` fragment（`config.template.ts:298-307`）含 `m_branch` + `m_gitStatus`。默认 `withStatus:true` 后该行变为：
-- clean：`⎇ Git: <green>main</green> clean`
-- dirty：`⎇ Git: <brown>main*</brown> dirty`
+- clean：`⎇ Git: <teal>main</teal><green>✓</green> clean`
+- dirty：`⎇ Git: <teal>main</teal><brown>*</brown> dirty`
 
 分支上现在有双份状态提示（星号+颜色，加上 `m_gitStatus` 的 clean/dirty 词）。用户知晓并接受；是否后续从模板去掉 `m_gitStatus` 由用户自行决定，不在本设计范围。
 
 ## 测试
 
 在 `render-tokens.test.ts` 的 m_branch describe 块新增/更新：
-1. 裸 `m_branch`（默认 withStatus:true）：dirty 仓库 → `branch*` 且 ANSI = brown（`38;5;?`，以 `NAMED_PALETTE.brown` 实际 SGR 为准）；clean 仓库 → `branch` 且 ANSI = `BRIGHT_GREEN`。
+1. 裸 `m_branch`（默认 withStatus:true）：dirty 仓库 → `branch*` 且 ANSI = brown（`38;5;130`）；clean 仓库 → `branch✓` 且 ANSI = `BRIGHT_GREEN`（`38;5;41`）。
 2. `m_branch|withStatus:false`：teal 分支名无星号（现有测试行为保持）。
 3. `|color:red` 在 withStatus:true 和 false 下都覆盖整段。
 4. 非 git repo → `branch:n/a` placeholder（不变）。

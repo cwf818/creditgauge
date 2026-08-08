@@ -2978,7 +2978,20 @@ m_quota: Object.assign(
   m_ccVersion: (c) => c.tokens?.ccversion ? wrapPlainDefault("m_ccVersion", c.tokens.ccversion, undefined) : placeholderBare("m_ccVersion", c),
   // Current git branch. v6.x: cwd missing / not a git repo /
   // detached HEAD now emit "branch:n/a" placeholder (was: drop).
-  m_branch: (c) => readGitInfo(c.tokens?.cwd)?.branch ? wrapPlainDefault("m_branch", readGitInfo(c.tokens!.cwd)!.branch!, undefined) : placeholderBare("m_branch", c),
+  // vX.X.X+ — |withStatus|<true|false> (default true): withStatus
+  // controls ONLY the status suffix and its color — clean → "✓"
+  // brightGreen, dirty → "*" brown (same colors as m_gitStatus). The
+  // branch body itself keeps its original color (teal default). With
+  // withStatus:false there is no suffix (pre-vX.X.X body). readGitInfo
+  // is called once per render (the pre-vX.X.X form called it twice).
+  m_branch: (c) => {
+    const info = readGitInfo(c.tokens?.cwd);
+    if (info?.branch == null) return placeholderBare("m_branch", c);
+    const body = wrapPlainDefault("m_branch", info.branch, undefined);
+    if (c.passThrough?.withStatus === "false") return body;
+    const suffixColor = info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN;
+    return `${body}${suffixColor}${info.dirty ? "*" : "✓"}${RESET}`;
+  },
   // Git working-tree cleanliness indicator. v6.x: missing git
   // info → "git:n/a" placeholder (was: drop).
   m_gitStatus: (c) => {
@@ -4657,6 +4670,17 @@ const VALUEONLY_PARAM = {
   },
 } as const;
 
+// vX.X.X+ — per-module status-marker override. Accepts "true" or
+// "false"; drives m_branch's clean/dirty color + "*" dirty suffix
+// (default true). Invalid values → badarg at the inline-args
+// resolver (mirrors NULDROP_PARAM / VALUEONLY_PARAM discipline).
+const WITHSTATUS_PARAM = {
+  named: {
+    withStatus: (raw: string): ResolvedValue | null =>
+      raw === "true" || raw === "false" ? raw : null,
+  },
+} as const;
+
 // ----- v0.4.0+ placeholder shapes for nulldrop:false -----------------------
 //
 // Each constant is a closure over the inline-args params + ctx so the
@@ -5678,7 +5702,7 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_provider: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_effort: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_repo: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_branch: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
+  m_branch: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WITHSTATUS_PARAM.named } },
   m_gitStatus: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_ccVersion: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_ccversion: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
@@ -5812,6 +5836,10 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
       // label-using inner module (per-turn / m_acc* / m_sum* /
       // m_memUsage). Default false.
       ...VALUEONLY_PARAM.named,
+      // vX.X.X+ — |withStatus|<true|false> forwarded so an outer
+      // m_template|<key>|withStatus:false cascades to every inner
+      // m_branch (e.g. a fragment-level opt-out). Default true.
+      ...WITHSTATUS_PARAM.named,
     },
   },
 };
@@ -6893,9 +6921,12 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return wrapPlainDefault("m_repo", parts.join("/"), params.color as string | undefined);
   },
   m_branch: (params, ctx) => {
-    const branch = readGitInfo(ctx.tokens?.cwd)?.branch;
-    if (branch == null) return placeholderWithColor("m_branch", params, ctx);
-    return wrapPlainDefault("m_branch", branch, params.color as string | undefined);
+    const info = readGitInfo(ctx.tokens?.cwd);
+    if (info?.branch == null) return placeholderWithColor("m_branch", params, ctx);
+    const body = wrapPlainDefault("m_branch", info.branch, params.color as string | undefined);
+    if (params.withStatus === "false") return body;
+    const suffixColor = info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN;
+    return `${body}${suffixColor}${info.dirty ? "*" : "✓"}${RESET}`;
   },
   m_gitStatus: (params, ctx) => {
     const info = readGitInfo(ctx.tokens?.cwd);
