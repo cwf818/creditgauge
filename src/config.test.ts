@@ -312,3 +312,48 @@ describe("no config.json", () => {
     assert.deepEqual(cfg.tokenPrices, {});
   });
 });
+
+describe("m_* auto-space affix toggles (vX.X.X+)", () => {
+  it("defaults: prefixSpace=true, suffixSpace=false", async () => {
+    const cfg = await loadConfig();
+    assert.equal(cfg.prefixSpace, true);
+    assert.equal(cfg.suffixSpace, false);
+  });
+
+  it("config.json overrides are applied", async () => {
+    writeFileSync(
+      join(dir, "config.json"),
+      JSON.stringify({ prefixSpace: false, suffixSpace: true }),
+    );
+    const cfg = await loadConfig();
+    assert.equal(cfg.prefixSpace, false);
+    assert.equal(cfg.suffixSpace, true);
+  });
+
+  it("non-boolean prefixSpace warns and falls back to default", async () => {
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ prefixSpace: "yes" }));
+    const cfg = await loadConfig();
+    assert.equal(cfg.prefixSpace, true);
+  });
+
+  it("non-boolean suffixSpace warns and falls back to default", async () => {
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ suffixSpace: "yes" }));
+    // Capture stderr — the loader warns, then falls back to the default.
+    const origWrite = process.stderr.write.bind(process.stderr);
+    const writes: string[] = [];
+    (process.stderr.write as unknown) = (chunk: string | Uint8Array): boolean => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      const cfg = await loadConfig();
+      assert.equal(cfg.suffixSpace, false);
+      assert.ok(
+        writes.some((w) => /suffixSpace must be a boolean/.test(w)),
+        `expected stderr warn; got ${JSON.stringify(writes)}`,
+      );
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  });
+});

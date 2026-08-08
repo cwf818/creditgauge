@@ -7384,6 +7384,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
 function parseInlineArgs(
   remainder: string,
   schema: InlineSchema,
+  key?: string,
 ): Record<string, ResolvedValue> | null {
   if (remainder === "") {
     // Empty remainder with an implicit param means "missing required
@@ -7403,6 +7404,13 @@ function parseInlineArgs(
     i = 1;
   }
 
+  // vX.X.X+ — `prefix` / `suffix` accepted on every m_* module
+  // (EXCEPT m_label / m_template) via a global allowlist instead of
+  // being spread into ~50 schemas. Separators (s_ / s_move) and the
+  // two excluded modules reject them → badarg.
+  const allowAffix =
+    key != null && key.startsWith("m_") && key !== "m_label" && key !== "m_template";
+
   // Each remaining segment must be a `<name>[:=]<value>` pair.
   for (; i < parts.length; i++) {
     const pair = parts[i]!;
@@ -7411,10 +7419,19 @@ function parseInlineArgs(
     if (sepIdx <= 0) return null;
     const name = pair.slice(0, sepIdx);
     const raw = pair.slice(sepIdx + 1);
-    if (!(name in schema.named)) return null;
-    const r = schema.named[name]!(raw);
-    if (r === null) return null;
-    out[name] = r;
+    if (name in schema.named) {
+      const r = schema.named[name]!(raw);
+      if (r === null) return null;
+      out[name] = r;
+    } else if (allowAffix && (name === "prefix" || name === "suffix")) {
+      // Any string value including empty (empty = explicit "off").
+      // Affix values are verbatim — no quote stripping. Use a
+      // trailing space in the token (or an s_ separator) to express
+      // leading/trailing whitespace.
+      out[name] = raw;
+    } else {
+      return null;
+    }
   }
   return out;
 }
@@ -7437,7 +7454,7 @@ function parseInlineArgs(
 // null when stdin lacks total_output_tokens) wrongly warn on the
 // "unknown lineTemplate module" path.
 type InlineResult =
-  | { kind: "ok"; value: string | null }
+  | { kind: "ok"; value: string | null; affix?: { prefix?: string; suffix?: string } }
   | { kind: "badarg" };
 
 function expandInlineToken(
@@ -7448,11 +7465,69 @@ function expandInlineToken(
 ): InlineResult | undefined {
   const schema = INLINE_SCHEMAS[key];
   if (schema === undefined) return undefined;
-  const params = parseInlineArgs(tok.slice(skipLen), schema);
+  const params = parseInlineArgs(tok.slice(skipLen), schema, key);
   if (params === null) return { kind: "badarg" };
   const rendered = INLINE_RENDERERS[key]!(params, ctx);
   if (rendered === INLINE_BADARG) return { kind: "badarg" };
-  return { kind: "ok", value: rendered };
+  // vX.X.X+ — thread explicit prefix/suffix out to renderTemplate,
+  // which applies them per the R1/R2/R3 rules.
+  const affix: { prefix?: string; suffix?: string } = {};
+  if (params.prefix !== undefined) affix.prefix = params.prefix as string;
+  if (params.suffix !== undefined) affix.suffix = params.suffix as string;
+  return {
+    kind: "ok",
+    value: rendered,
+    ...(affix.prefix !== undefined || affix.suffix !== undefined ? { affix } : {}),
+  };
+}
+
+// vX.X.X+ — strip SGR color codes so the auto-space rules can inspect
+// the VISIBLE trailing character of the in-progress line.
+function stripSgrCodes(s: string): string {
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+// vX.X.X+ — auto-space affix application for m_* module chunks.
+//   explicit (|prefix:| / |suffix:|) always wins over the global
+//   defaults (cfg.prefixSpace / cfg.suffixSpace). Auto prefix fires
+//   only when the immediately preceding token was an m_* module (R3),
+//   the line is non-empty (R1), and the visible line doesn't already
+//   end in whitespace (R2). Auto suffix fires only when the NEXT
+//   token is an m_* module (symmetric lookahead).
+function applyAffix(
+  piece: string,
+  explicit: { prefix?: string; suffix?: string } | undefined,
+  state: {
+    prevIsModule: boolean;
+    prevEndsWs: boolean;
+    lineStart: boolean;
+    nextIsModule: boolean;
+  },
+): string {
+  const c = cfg();
+  let prefix: string;
+  if (explicit?.prefix !== undefined) {
+    prefix = explicit.prefix;
+  } else if (
+    c.prefixSpace &&
+    state.prevIsModule &&
+    !state.lineStart &&
+    !state.prevEndsWs
+  ) {
+    prefix = " ";
+  } else {
+    prefix = "";
+  }
+  let suffix: string;
+  if (explicit?.suffix !== undefined) {
+    suffix = explicit.suffix;
+  } else if (c.suffixSpace && state.nextIsModule) {
+    suffix = " ";
+  } else {
+    suffix = "";
+  }
+  if (prefix === "" && suffix === "") return piece;
+  return prefix + piece + suffix;
 }
 
 export function renderTemplate(template: readonly string[], ctx: RenderContext): string[] {
@@ -7492,6 +7567,11 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
   // mid-flight (e.g. nested m_template) can't see a half-baked
   // cursor value. Mutated on every chunk; reset to 0 on `\n`.
   let lineCursor = 0;
+  // vX.X.X+ — auto-space tracking. prevIsModule = was the previous
+  // token an m_* module (incl. dropped ones / m_template); prevEndsWs
+  // = does the current line's visible text end in whitespace.
+  let prevIsModule = false;
+  let prevEndsWs = false;
   for (let i = 0; i < template.length; i++) {
     const tok = template[i];
     if (tok == null) continue;
@@ -7503,6 +7583,13 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
     // landing the cursor on `pos` for the next chunk to consume.
     ctx.lineCursor = lineCursor;
     let piece: string | null = null;
+    // vX.X.X+ — per-token affix flags. isModule = this token is an
+    // m_* module that receives an auto/explicit affix (m_template is
+    // excluded: the fragment's first inner module is at its own line-
+    // start, so an outer auto-prefix would double-space); explicitAffix
+    // = the |prefix:| / |suffix:| parsed out of this token (if any).
+    let isModule = false;
+    let explicitAffix: { prefix?: string; suffix?: string } | undefined;
     // v0.3.3+ — inline-args tokens (s_<n>|…, m_label|…, m_modeLabel|…,
     // and every other m_<name>|…). Only fire when the token contains
     // "|" so the bare forms (s_0, m_modeLabel, m_window5h, …) keep
@@ -7539,6 +7626,9 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       if (inlinePrefix) {
         const need = INLINE_TYPE_FILTERS[inlinePrefix];
         if (need && need !== ctx.providerType) {
+          // vX.X.X+ — known m_ module dropped by provider type → still
+          // counts as a module for the next token's auto-space.
+          prevIsModule = true;
           continue;
         }
       }
@@ -7548,7 +7638,6 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       // match the literal pipe-bearing string) and falls through
       // to the unknown-module warn.
       let inline: InlineResult | undefined;
-      let sLiteralPiece: string | null = null;
       if (tok.startsWith("s_")) {
         // s_<name>|… → skip "s_" (length 2), remainder starts at
         // the alias name. vX.X.X+: unknown aliases (numeric
@@ -7573,7 +7662,6 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
         } else if (NAMED_SEPARATORS.has(aliasPart)) {
           inline = expandInlineToken(tok, "s_", 2, ctx);
         } else {
-          sLiteralPiece = tok;
           inline = undefined;
         }
       } else if (tok.startsWith("m_label|")) {
@@ -7866,20 +7954,28 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
 // MODULES path. (v0.3.4+: previously we conflated the two
 // and wrongly warned "unknown module" on missing data.)
 //
-// vX.X.X+ — `s_*|…` tokens with an unknown alias fall through
-// here too, but instead of warn + drop they emit the WHOLE token
-// as a literal (set by `sLiteralPiece` above). This preserves the
-// new "unrecognized token → verbatim" contract for inline-args
-// forms too.
+// vX.X.X+ — `s_*|…` tokens with an unknown alias leave `inline`
+// undefined, so they skip the badarg path below and fall through to
+// the `else` branch, which emits the WHOLE token verbatim. This
+// preserves the new "unrecognized token → verbatim" contract for
+// inline-args forms too.
       if (inline?.kind === "badarg") {
-        if (sLiteralPiece !== null) {
-          piece = sLiteralPiece;
-        } else {
-          warnUnknownModuleOnce(tok);
-          continue;
-        }
+        warnUnknownModuleOnce(tok);
+        // vX.X.X+ — a badarg-dropped m_ module still counts as a
+        // module for the next token's auto-space (same preserve-
+        // spacing-on-drop contract as the provider-type drop).
+        prevIsModule = true;
+        continue;
       } else {
         piece = inline?.kind === "ok" ? inline.value : tok;
+        if (inline?.kind === "ok") {
+          // vX.X.X+ — inline m_* modules carry the affix. m_template
+          // is excluded from the affix path (the fragment's first
+          // inner module is at its own line-start), but it still
+          // counts as a module predecessor via prevIsModule below.
+          isModule = tok.startsWith("m_") && !tok.startsWith("m_template|");
+          if (inline.affix) explicitAffix = inline.affix;
+        }
       }
     } else if (tok.startsWith("s_")) {
       // Bare s_<…> fast path. Only named aliases (s_space, s_dot,
@@ -7915,9 +8011,14 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
         // s_<name> separators are skipped too via the same null-
         // fall-through the MODULES renderer already implements.
         if (mod.type != null && mod.type !== ctx.providerType) {
+          // vX.X.X+ — type-dropped module still counts as a module for
+          // the next token's auto-space (spacing survives the drop).
+          prevIsModule = true;
           continue;
         }
         piece = mod(ctx);
+        // vX.X.X+ — a rendered bare m_ module gets the auto affix.
+        isModule = true;
       }
     } else {
       // Anything that didn't start with `m_` or `s_` (or didn't
@@ -7928,6 +8029,17 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       // the template without escaping.
       piece = tok;
     }
+    // vX.X.X+ — apply prefix/suffix to m_* module chunks, then update
+    // the adjacency state for the next token.
+    if (isModule && piece != null && piece !== "") {
+      piece = applyAffix(piece, explicitAffix, {
+        prevIsModule,
+        prevEndsWs,
+        lineStart: current === "",
+        nextIsModule: template[i + 1]?.startsWith("m_") ?? false,
+      });
+    }
+    prevIsModule = isModule || tok.startsWith("m_");
     if (piece == null || piece === "") continue;
     // Split the piece on '\n' so a "\n" separator or a future module
     // that embeds newlines naturally produces multi-line output. The
@@ -7958,6 +8070,11 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
         lineCursor += visibleCellLength(seg);
       }
     }
+    // vX.X.X+ — after the whole piece lands, record whether the line's
+    // VISIBLE text now ends in whitespace (R2 check for the next
+    // token's auto-prefix). ANSI-stripped so colored chunks don't
+    // hide a trailing space.
+    prevEndsWs = /\s$/.test(stripSgrCodes(current));
   }
   // Flush whatever's left in the in-progress line.
   if (current.length > 0) lines.push(current);

@@ -399,6 +399,13 @@ const DEFAULT_CONFIG: {
   bar: typeof DEFAULT_BAR;
   countdown: Countdown;
   timeFormat: TimeFormat;
+  // vX.X.X+ — m_* auto-space affix toggles. prefixSpace (default
+  // true) auto-prepends a space before each module per R1/R2/R3;
+  // suffixSpace (default false) auto-appends a space before a
+  // following module. Explicit |prefix:| / |suffix:| overrides the
+  // global default per module.
+  prefixSpace: boolean;
+  suffixSpace: boolean;
   // v0.4.0+ — registry of reusable template fragments consumed by
   // the m_template module's first argument.
   lineTemplates: typeof DEFAULT_LINE_TEMPLATES;
@@ -543,6 +550,8 @@ const DEFAULT_CONFIG: {
   bar: DEFAULT_BAR,
   countdown: DEFAULT_COUNTDOWN,
   timeFormat: DEFAULT_TIME_FORMAT,
+  prefixSpace: true,
+  suffixSpace: false,
   lineTemplates: DEFAULT_LINE_TEMPLATES,
   statuslineTemplate: DEFAULT_STATUSLINE_TEMPLATE,
   tokenFormat: DEFAULT_TOKEN_FORMAT,
@@ -1392,6 +1401,16 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     } else {
       warn("timeFormat must be an object; using default");
     }
+  }
+
+  // vX.X.X+ — auto-space affix toggles. Non-boolean → warn + default.
+  if ("prefixSpace" in raw) {
+    if (typeof raw.prefixSpace === "boolean") out.prefixSpace = raw.prefixSpace;
+    else warn("prefixSpace must be a boolean; using default");
+  }
+  if ("suffixSpace" in raw) {
+    if (typeof raw.suffixSpace === "boolean") out.suffixSpace = raw.suffixSpace;
+    else warn("suffixSpace must be a boolean; using default");
   }
 
   // v0.4.0+ — tokenFormat (compact number formatting for m_token* modules).

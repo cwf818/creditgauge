@@ -13,6 +13,8 @@
 - No version bump; `vX.X.X+` markers in comments.
 - `prefixSpace` default `true`, `suffixSpace` default `false`.
 - Explicit `|prefix:|` / `|suffix:|` always wins over the global default (empty value = explicit "off").
+- **Affix values are verbatim — NO quote stripping.** `|prefix: · |` expresses a leading/trailing space; `|prefix:" · "|` keeps the literal quote characters.
+- **Explicit `|suffix:|` does NOT suppress the following module's auto-prefix** (user decision 2026-08-08: keep the rule set minimal — R1/R2/R3 + suffix lookahead only). To glue after an explicit suffix, set the following module's `|prefix:` (empty).
 - Affix params accepted on ALL `m_*` modules EXCEPT `m_label` and `m_template` (those reject → badarg + warn + drop).
 - Affix renders OUTSIDE the color span (prefix precedes the first SGR, suffix follows the reset).
 - Auto-prefix fires only when R3 (prev token is an `m_*` module) AND R1 (line non-empty) AND R2 (visible line doesn't already end in whitespace).
@@ -293,20 +295,24 @@ describe("m_* auto-space (prefixSpace=true default)", () => {
     assert.equal(strip(line(["m_modeLabel", "m_version|prefix:"])), "Usage:v0.0.0");
   });
 
-  it("explicit |prefix:\" · \"| renders the dot idiom in one token", () => {
+  it("explicit |prefix: · | renders the dot idiom in one token", () => {
     assert.equal(
-      strip(line(["m_version", "m_version|prefix:\" · \""])),
+      strip(line(["m_version", "m_version|prefix: · "])),
       "v0.0.0 · v0.0.0",
     );
   });
 
-  it("explicit |suffix:| appends after the module", () => {
-    assert.equal(strip(line(["m_version|suffix:/", "m_model"])), "v0.0.0/MiniMax-M3");
+  it("explicit |suffix:| appends; does NOT suppress the next module's auto-prefix", () => {
+    // Simple rules (user decision 2026-08-08): an explicit suffix owns
+    // only its own append. The next module still auto-spaces; glue it
+    // with an explicit empty |prefix:| instead.
+    assert.equal(strip(line(["m_version|suffix:/", "m_model"])), "v0.0.0/ MiniMax-M3");
+    assert.equal(strip(line(["m_version|suffix:/", "m_model|prefix:"])), "v0.0.0/MiniMax-M3");
   });
 
   it("prefix/suffix render OUTSIDE the color span", () => {
-    const raw = line(["m_version|color:red|prefix:\" · \""]);
-    assert.ok(raw.includes(" · \x1b[31m"), `prefix must precede color: ${JSON.stringify(raw)}`);
+    const raw = line(["m_version|color:red|prefix: · "]);
+    assert.ok(raw.startsWith(" · \x1b["), `prefix must precede color SGR: ${JSON.stringify(raw)}`);
   });
 
   it("m_label rejects prefix/suffix (badarg → warn + drop)", () => {
@@ -552,21 +558,22 @@ In `src/render.ts` `renderTemplate`:
 
 ```ts
       if (inline?.kind === "badarg") {
-        if (sLiteralPiece !== null) {
-          piece = sLiteralPiece;
-          prevIsModule = false;
-        } else {
-          warnUnknownModuleOnce(tok);
-          prevIsModule = true;
-          continue;
-        }
+        warnUnknownModuleOnce(tok);
+        prevIsModule = true;
+        continue;
       } else {
         piece = inline?.kind === "ok" ? inline.value : tok;
         if (inline?.kind === "ok") {
-          isModule = tok.startsWith("m_");
+          // m_template is excluded from affix (no auto-prefix on the
+          // fragment itself) but still counts as a module predecessor
+          // via prevIsModule below — see the uniform tail.
+          isModule = tok.startsWith("m_") && !tok.startsWith("m_template|");
           if (inline.affix) explicitAffix = inline.affix;
         }
       }
+      // NOTE: no sLiteralPiece branch here — unknown `s_*|…` aliases
+      // leave `inline` undefined, skip the badarg path, and fall into
+      // the `else` above (piece = tok → the WHOLE token verbatim).
 ```
 
 5. Bare `m_` path (~7917): type-drop counts as a module; a real render sets isModule:
@@ -593,7 +600,10 @@ In `src/render.ts` `renderTemplate`:
         nextIsModule: template[i + 1]?.startsWith("m_") ?? false,
       });
     }
-    prevIsModule = isModule;
+    // prevIsModule for the NEXT token: any m_* token counts as a module
+    // predecessor (m_label / m_template / dropped / unknown all included),
+    // even though only isModule (excl. m_template) gets an affix itself.
+    prevIsModule = isModule || tok.startsWith("m_");
 ```
 
 7. After the inner `\n`-split append loop closes (after the `for (let j = 0; j < segments.length; j++)` loop, ~7960), update prevEndsWs:
@@ -650,13 +660,36 @@ describe("built-in templates stay byte-identical under prefixSpace=true", () => 
   });
 
   it("renders identically with prefixSpace off vs on (default)", () => {
-    // m_quote is excluded from the sweep: it selects its quote from a
-    // time-derived index which can differ between the two renders and
-    // flake the equality. Everything else is deterministic.
+    // Expand one level of m_template|<key> refs (fragments can't nest).
+    const tokensOf = (tpl: readonly string[]): string[] => {
+      const out: string[] = [];
+      for (const t of tpl) {
+        const m = /^m_template\|([^|]+)/.exec(t);
+        if (m) {
+          const inner = DEFAULT_LINE_TEMPLATES[m[1]!];
+          if (inner) out.push(...inner);
+        } else {
+          out.push(t);
+        }
+      }
+      return out;
+    };
+    const TTL_GAUGES = ["m_statTtlStatus", "m_sumTtlStatus", "m_cacheTtlStatus"];
+    const isFlaky = (tokens: readonly string[]): boolean =>
+      tokens.some(
+        (t) =>
+          t.startsWith("m_quote") ||
+          TTL_GAUGES.some((g) => t === g || t.startsWith(`${g}|`)),
+      );
+    // TTL-gauge modules (m_statTtlStatus / m_sumTtlStatus / m_cacheTtlStatus)
+    // read wall-clock Date.now() for their age and must be excluded from
+    // the equality sweep — the off-pass and on-pass can see different ages
+    // and flake the byte-identity. m_quote is also excluded conservatively
+    // (time-bucketed selection — keep the swept set stable).
     const all = [
       ...Object.values(DEFAULT_LINE_TEMPLATES),
       ...Object.values(DEFAULT_STATUSLINE_PRESETS),
-    ].filter((tpl) => !tpl.some((t) => t.startsWith("m_quote") || t === "m_template|quote"));
+    ].filter((tpl) => !isFlaky(tokensOf(tpl)));
 
     assert.ok(all.length >= 15, `sweep should cover most built-ins, got ${all.length}`);
     for (const tpl of all) {
