@@ -11,33 +11,26 @@
 //    beginTickForTest live in status-store.ts, not tick-state.ts).
 //  - the "color span" assertion checks the prefix precedes the actual
 //    red SGR this codebase emits (`\x1b[38;5;196m`), not `\x1b[31m`.
-//  - `renderTemplate` / DEFAULT_LINE_TEMPLATES /
-//    DEFAULT_STATUSLINE_PRESETS power Task 3's byte-identity sweep
-//    (appended at the bottom of this file).
 //
-// vX.X.X+ — the sweep at the bottom is now a CLEANUP byte-identity
-// guard: the redundant `s_space` tokens were dropped from the
-// built-in templates (auto-space under prefixSpace=true reproduces
-// the spacing), so the "prefixSpace off vs on" premise is INVERTED.
-// The guard renders each built-in BOTH from its pre-cleanup snapshot
-// (src/__fixtures__/pre-affix-templates.ts — captured verbatim from
-// HEAD `0aa054e`) AND from the cleaned DEFAULT_LINE_TEMPLATES /
-// DEFAULT_STATUSLINE_PRESETS, both under prefixSpace=true, and
-// asserts the outputs are identical. I.e. "the s_space cleanup is
-// byte-identical — pre-cleanup templates render identically to the
-// cleaned ones under prefixSpace=true".
+// vX.X.X+ — the s_space cleanup byte-identity sweep (which rendered
+// every built-in from its pre-cleanup snapshot in
+// src/__fixtures__/pre-affix-templates.ts and compared to the
+// cleaned registries) is GONE. The user redesigned the fragment
+// library + presets on top of the cleanup — the key sets now differ
+// (fragments removed/renamed), so the sweep's key-set + content
+// assertions are obsolete. In its place is a lightweight preset
+// render guard (see the bottom of this file): render each remaining
+// preset (simple / compact / standard) under prefixSpace=true with a
+// deterministic ctx and assert the output is non-empty and free of
+// double spaces.
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderProviderLine, renderTemplate } from "./render.ts";
-import { DEFAULT_LINE_TEMPLATES, DEFAULT_STATUSLINE_PRESETS } from "./config.template.ts";
-import {
-  PRE_CLEANUP_LINE_TEMPLATES,
-  PRE_CLEANUP_STATUSLINE_PRESETS,
-} from "./__fixtures__/pre-affix-templates.ts";
+import { renderProviderLine } from "./render.ts";
+import { DEFAULT_STATUSLINE_PRESETS } from "./config.template.ts";
 import { __resetForTest } from "./config.ts";
 import {
   __resetForTest as resetCacheForTest,
@@ -224,7 +217,9 @@ describe("m_* auto-space (prefixSpace=true default)", () => {
   });
 
   it("m_template rejects prefix/suffix (badarg → warn + drop)", () => {
-    assert.equal(strip(line(["m_template|information|suffix:x"])), "");
+    // tickline is a live fragment key; m_template's schema still rejects
+    // the suffix arg → badarg → drop regardless of which key is used.
+    assert.equal(strip(line(["m_template|tickline|suffix:x"])), "");
   });
 
   it("separator rejects prefix/suffix (badarg → warn + drop)", () => {
@@ -283,130 +278,37 @@ describe("both toggles on", () => {
   });
 });
 
-describe("built-in templates stay byte-identical under the s_space cleanup (prefixSpace=true)", () => {
-  // Realistic ctx: the intervals carry a reset time (nowMs = 1_000_000,
-  // endAt = 30min-after-epoch, so the countdowns render as e.g. "13m").
-  // A resetAt-less interval would make the m_countdown|valueOnly modules
-  // (quota_all_compact) DROP, and a dropped module cannot reproduce the
-  // removed s_space via auto-prefix — a degenerate render that never
-  // happens in production (MiniMax always ships a reset time). Under this
-  // realistic ctx every built-in module renders, so the sweep verifies the
-  // production path.
-  const ctxFor = (providerType: "quota" | "balance" | "unknown") => ({
-    mode: "used" as const,
-    nowMs: 1_000_000,
-    intervals: {
-      short: { windowId: "5h", label: "5h", startAt: 400_000, endAt: 1_800_000, intervalMs: 1_400_000, usedPercent: 30, remainingPercent: 70, remainingQuota: null, usedQuota: null, limitQuota: null },
-      mid: { windowId: "7d", label: "7d", startAt: 400_000, endAt: 2_200_000, intervalMs: 1_800_000, usedPercent: 50, remainingPercent: 50, remainingQuota: null, usedQuota: null, limitQuota: null },
-      long: null,
-    },
-    balance: null,
-    ageMs: null,
-    stale: false,
-    version: "0.0.0",
-    tokens: SNAP,
-    contextWindow: { pct: 40 },
-    providerType,
-    currentProvider: "minimax",
-  });
+// vX.X.X+ — lightweight preset render guard. Replaces the obsolete
+// s_space-cleanup byte-identity sweep's "templates compose" role:
+// render each remaining statusline preset (simple / compact / standard)
+// under prefixSpace=true with a deterministic ctx and assert the output
+// is non-empty and free of double spaces. None of these presets carry a
+// TTL-gauge module, and m_quote is deterministic given a fixed nowMs, so
+// the guard is stable.
+describe("statusline presets compose cleanly (no double space, prefixSpace=true)", () => {
+  // Reuse the module-level `line()` helper's deterministic ctx (fixed
+  // nowMs=1_000_000, real usedPercent intervals, SNAP tokens, ageMs,
+  // version). The presets reference fragments via `m_template|<key>`,
+  // which resolve to the live registry at render time.
+  const PRESETS: Record<string, readonly string[]> = {
+    simple: DEFAULT_STATUSLINE_PRESETS.simple,
+    compact: DEFAULT_STATUSLINE_PRESETS.compact,
+    standard: DEFAULT_STATUSLINE_PRESETS.standard,
+  };
 
-  it("the s_space cleanup is byte-identical — pre-cleanup renders match the cleaned ones under prefixSpace=true", () => {
-    // Expand one level of m_template|<key> refs (fragments can't nest).
-    const tokensOf = (tpl: readonly string[]): string[] => {
-      const out: string[] = [];
-      for (const t of tpl) {
-        const m = /^m_template\|([^|]+)/.exec(t);
-        if (m) {
-          const inner = DEFAULT_LINE_TEMPLATES[m[1]!];
-          if (inner) out.push(...inner);
-        } else {
-          out.push(t);
-        }
-      }
-      return out;
-    };
-    const TTL_GAUGES = ["m_statTtlStatus", "m_sumTtlStatus", "m_cacheTtlStatus"];
-    const isFlaky = (tokens: readonly string[]): boolean =>
-      tokens.some(
-        (t) =>
-          t.startsWith("m_quote") ||
-          TTL_GAUGES.some((g) => t === g || t.startsWith(`${g}|`)),
+  for (const [name, tpl] of Object.entries(PRESETS)) {
+    it(`${name} preset renders non-empty with no double space`, () => {
+      const out = line([...tpl], { prefixSpace: true });
+      const clean = strip(out);
+      assert.ok(
+        clean.length > 0,
+        `${name} preset should render non-empty, got: ${JSON.stringify(out)}`,
       );
-    // TTL-gauge modules (m_statTtlStatus / m_sumTtlStatus / m_cacheTtlStatus)
-    // read wall-clock Date.now() for their age and must be excluded from
-    // the equality sweep — the pre-pass and cleaned-pass can see different
-    // ages and flake the byte-identity. m_quote is also excluded
-    // conservatively (time-bucketed selection — keep the swept set stable).
-    //
-    // The cleaned registry must cover exactly the pre-cleanup snapshot's
-    // key set — a drifted key means the guard silently stops covering
-    // some template.
-    assert.deepEqual(
-      [...Object.keys(DEFAULT_LINE_TEMPLATES)].sort(),
-      [...Object.keys(PRE_CLEANUP_LINE_TEMPLATES)].sort(),
-      "DEFAULT_LINE_TEMPLATES keys must match the pre-cleanup snapshot",
-    );
-    assert.deepEqual(
-      [...Object.keys(DEFAULT_STATUSLINE_PRESETS)].sort(),
-      [...Object.keys(PRE_CLEANUP_STATUSLINE_PRESETS)].sort(),
-      "DEFAULT_STATUSLINE_PRESETS keys must match the pre-cleanup snapshot",
-    );
-
-    // ctx selection: a template whose expansion carries a direct
-    // balance-only module (m_balance) and NO direct quota-only module
-    // (m_windowQuota / m_countdown / m_quota) renders under the BALANCE
-    // provider — the only ctx where its modules stay alive. On a quota
-    // ctx the m_balance would type-drop, and then the removed s_space
-    // (which the drop cannot reproduce via auto-prefix) would legitimately
-    // change the render — a degenerate case that never happens in
-    // production (the balance body only renders on DeepSeek). Everything
-    // else renders under the default quota ctx. `simple` carries both
-    // families via type-gated m_template refs, but only one family
-    // survives per ctx (the other is dropped wholesale), so quota ctx is
-    // correct for it.
-    const hasQuotaOnly = (tokens: readonly string[]): boolean =>
-      tokens.some((t) => /^m_(windowQuota|countdown|quota)(\||$)/.test(t));
-    const hasBalanceOnly = (tokens: readonly string[]): boolean =>
-      tokens.some((t) => /^m_balance(\||$)/.test(t));
-    const ctxForTpl = (tpl: readonly string[]): ReturnType<typeof ctxFor> => {
-      const tokens = tokensOf(tpl);
-      return hasBalanceOnly(tokens) && !hasQuotaOnly(tokens)
-        ? ctxFor("balance")
-        : ctxFor("quota");
-    };
-
-    const preByKey = new Map<string, readonly string[]>([
-      ...Object.entries(PRE_CLEANUP_LINE_TEMPLATES),
-      ...Object.entries(PRE_CLEANUP_STATUSLINE_PRESETS),
-    ]);
-    const curByKey = new Map<string, readonly string[]>([
-      ...Object.entries(DEFAULT_LINE_TEMPLATES),
-      ...Object.entries(DEFAULT_STATUSLINE_PRESETS),
-    ]);
-    // NOTE: preset-level comparisons are by-construction identical — the
-    // preset bodies keep their m_template|<key> refs, which renderTemplate
-    // resolves to the LIVE (cleaned) fragment registries on both sides.
-    // The meaningful guard is the fragment (line-template) level, where
-    // every removed s_space lives in a direct token array.
-    let swept = 0;
-    for (const [key, cur] of curByKey) {
-      if (isFlaky(tokensOf(cur))) continue;
-      const pre = preByKey.get(key);
-      assert.ok(pre, `pre-cleanup snapshot is missing template "${key}"`);
-      const ctx = ctxForTpl(cur);
-      __resetForTest({ prefixSpace: true, suffixSpace: false });
-      const preOut = renderTemplate(pre, ctx);
-      __resetForTest({ prefixSpace: true, suffixSpace: false });
-      const curOut = renderTemplate(cur, ctx);
-      __resetForTest();
-      assert.deepEqual(
-        curOut,
-        preOut,
-        `s_space cleanup changed built-in template "${key}": ${JSON.stringify(cur)}`,
+      assert.ok(
+        !clean.includes("  "),
+        `${name} preset produced a double space: ${JSON.stringify(clean)}`,
       );
-      swept++;
-    }
-    assert.ok(swept >= 15, `sweep should cover most built-ins, got ${swept}`);
-  });
+    });
+  }
 });
 

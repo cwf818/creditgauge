@@ -2224,43 +2224,15 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     }
   });
 
-  it("m_template|git_info_all|withStatus:false forwards teal to inner bare m_branch", () => {
-    // NOTE: git_info itself hardcodes `m_branch|withStatus:true`, so
-    // inner-explicit-wins defeats a `m_template|git_info|withStatus:false`
-    // passthrough (the suffix always renders). git_info_all keeps a BARE
-    // m_branch — that's the fragment this passthrough test targets.
-    let repoDir: string | undefined;
-    try {
-      execFileSync("git", ["--version"], { stdio: "ignore", timeout: 1000 });
-    } catch {
-      return; // skip — no git on PATH
-    }
-    repoDir = mkdtempSync(join(tmpdir(), "creditgauge-render-branch-"));
-    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repoDir });
-    execFileSync("git", ["config", "user.email", "t@t"], { cwd: repoDir });
-    execFileSync("git", ["config", "user.name", "t"], { cwd: repoDir });
-    writeFileSync(join(repoDir, "r"), "x");
-    execFileSync("git", ["add", "."], { cwd: repoDir });
-    execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir });
-    try {
-      __resetGitInfoCacheForTest();
-      const out = renderTemplate(
-        ["m_template|git_info_all|withStatus:false"],
-        ctxFor(fakeSnapshot({ cwd: repoDir })),
-      ).join("\n");
-      // The git_info_all fragment includes m_repo + m_gitStatus ("clean",
-      // brightGreen) + m_linesAdded/m_linesRemoved — so green WILL appear
-      // from m_gitStatus. The lock is: teal branch present (passthrough
-      // reached the bare m_branch) and no dirty "*"/clean "✓"
-      // (withStatus:false renders the bare branch with no marker).
-      assert.ok(out.includes("\x1b[38;5;80m"), `teal branch should appear via passthrough: ${JSON.stringify(out)}`);
-      assert.ok(!out.includes("*"), `no dirty star: ${JSON.stringify(out)}`);
-      assert.ok(!out.includes("✓"), `no clean checkmark: ${JSON.stringify(out)}`);
-      assert.ok(strip(out).includes("main"), `branch main present: ${JSON.stringify(out)}`);
-    } finally {
-      if (repoDir) rmSync(repoDir, { recursive: true, force: true });
-    }
-  });
+  // REMOVED vX.X.X+ — the `git_info_all` fragment (the only built-in
+  // carrying a BARE `m_branch`, which is what made the
+  // `m_template|git_info_all|withStatus:false` passthrough targetable)
+  // is gone from the redesigned fragment library. `git_info` hardcodes
+  // `m_branch|withStatus:true`, so inner-explicit-wins defeats a
+  // withStatus passthrough there. The m_template → inner-bare-module
+  // passthrough contract is still covered by the `m_template|foo|scope:*`
+  // tests above, so the git-status passthrough case is dropped with the
+  // fragment.
 
   it("m_branch|color:red|withStatus:true colors the body; suffix keeps its clean/dirty color", () => {
     // process.cwd() is a real git repo during tests; |color|red colors

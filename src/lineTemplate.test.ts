@@ -2028,19 +2028,20 @@ describe("lineTemplate — inline-args regression / round-trip", () => {
   beforeEach(() => __resetUnknownModuleWarnForTest());
   afterEach(() => __resetForTest());
 
-  it("default template (bare m_modeLabel) renders the post-v0.4.x quota header line", () => {
-    // v0.4.x default quota template ends with `m_age` so the line tail
-    // is `age:n/a` when no age is provided. We pin the post-default
-    // shape here (pre-v0.3.3 byte-identical contract is preserved by
-    // the m_age-absent test above).
+  it("default template (bare m_modeLabel) renders the redesigned quota header line", () => {
+    // The redesigned default quota template renders THREE windows
+    // (5h / 7d / 30d) joined by ` · `; the valueOnly countdowns drop
+    // when there's no reset time (so no label appears), and the 30d
+    // window renders its "--:(30d)" placeholder tail. No `m_age` in
+    // the template anymore.
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
       shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 38, remainingPercent: 100 - 38, remainingQuota: null, usedQuota: null, limitQuota: null },
       midInterval: { windowId: "7d", label: "7d", startAt: null, endAt: null, intervalMs: null, usedPercent: 60, remainingPercent: 100 - 60, remainingQuota: null, usedQuota: null, limitQuota: null },
       ageMs: null, stale: false, version: "",
     });
-    // Default template renders "Usage: ▓░░░ 38% 5h · ▓░░ 60% 7d age:n/a".
-    assert.match(strip(line), /^Usage: ▓+░+ 38% 5h · ▓+░+ 60% 7d age:n\/a$/);
+    // Default template renders "Usage: ▓░░░ 38% · ▓░░░ 60% · ░░░░░░░░ 0% --:(30d)".
+    assert.match(strip(line), /^Usage: ▓+░+ 38% · ▓+░+ 60% · ░+ 0% --:\(30d\)$/);
   });
 
   it("compose() round-trip preserves an inline-colored chunk without bleeding upstream", () => {
@@ -2110,8 +2111,9 @@ describe("m_template — legacy lineTemplate warns once and is ignored (v0.4.0 h
       // NOT to the legacy arrays.
       assert.deepEqual(cfg.statuslineTemplate, ["m_template|quota|type:quota", "m_template|balance|type:balance"]);
       // Render through the minimax path — output should reflect the
-      // default preset shape (m_windowQuota|term:short + m_windowQuota|term:mid, NOT just
-      // m_windowQuota|term:short as the legacy plan array would suggest).
+      // REDESIGNED default quota fragment: THREE windows (5h / 7d / 30d)
+      // joined by ` · `, with the 30d placeholder tail --:(30d). NOT the
+      // legacy single-window plan array (which had only m_windowQuota|term:short).
       const line = renderProviderLine("minimax", {
         mode: "used",
         nowMs: Date.now(),
@@ -2121,8 +2123,12 @@ describe("m_template — legacy lineTemplate warns once and is ignored (v0.4.0 h
         stale: false,
         version: "",
       });
-      assert.ok(strip(line).includes("5h"), `got: ${line}`);
-      assert.ok(strip(line).includes("7d"), `got: ${line}`);
+      const clean = strip(line);
+      assert.ok(clean.includes(" · "), `got: ${clean}`);
+      assert.ok(clean.includes("--:(30d)"), `got: ${clean}`);
+      // The valueOnly countdowns drop the window labels entirely, so
+      // the legacy single-window plan array's "5h" label must NOT appear.
+      assert.ok(!clean.includes("5h"), `legacy plan array must NOT be used, got: ${clean}`);
     } finally {
       __testing.resetPathResolver();
       fs.rmSync(tmpDir, { recursive: true, force: true });

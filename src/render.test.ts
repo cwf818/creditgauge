@@ -386,13 +386,14 @@ describe("renderQuotaLine — mode='used' (default)", () => {
     // Bar: 6 plain ░ + 2 colored ▓
     assert.ok(line.includes(`░░░░░░${YELLOW}▓▓${RESET} ${YELLOW}25%${RESET}`),
       `got: ${line}`);
-    // No resetAt → bare "5h" with no parens and no slash. v6.x:
-    // m_countdown|term|short is wrapped in DEFAULT_COLORS (teal);
-    // strip SGR before checking substring.
+    // No resetAt → the valueOnly countdown drops (no arrow / label /
+    // parens). The three windows are still joined by ' · ' (the only
+    // parens in the line are the 30d placeholder's "--:(30d)" tail).
     const cleanR = strip(line);
-    assert.ok(cleanR.includes(" 5h "), `got: ${cleanR}`);
-    assert.ok(!cleanR.includes("/ 5h"), `got: ${cleanR}`);
-    assert.ok(!cleanR.includes("("), `got: ${cleanR}`);
+    assert.ok(cleanR.includes(" · "), `got: ${cleanR}`);
+    assert.ok(!cleanR.includes("🕛"), `got: ${cleanR}`);
+    assert.ok(!cleanR.includes("5h"), `valueOnly countdown drops the window label, got: ${cleanR}`);
+    assert.ok(!cleanR.includes("7d"), `valueOnly countdown drops the window label, got: ${cleanR}`);
   });
 });
 
@@ -421,16 +422,17 @@ describe("renderQuotaLine — mode='used'", () => {
     // Bar: 6 colored ▓ (LEFT) + 2 plain ░ (RIGHT)
     assert.ok(line.includes(`${YELLOW}▓▓▓▓▓▓${RESET}░░ ${YELLOW}75%${RESET}`),
       `got: ${line}`);
-    // No resetAt → bare "5h" with no parens and no slash. v6.x:
-    // m_countdown|term|short is wrapped in DEFAULT_COLORS (teal);
-    // strip SGR before checking substring.
+    // No resetAt → the valueOnly countdown drops (no arrow / label /
+    // parens). The three windows are still joined by ' · ' (the only
+    // parens in the line are the 30d placeholder's "--:(30d)" tail).
     const cleanU = strip(line);
-    assert.ok(cleanU.includes(" 5h "), `got: ${cleanU}`);
-    assert.ok(!cleanU.includes("/ 5h"), `got: ${cleanU}`);
-    assert.ok(!cleanU.includes("("), `got: ${cleanU}`);
+    assert.ok(cleanU.includes(" · "), `got: ${cleanU}`);
+    assert.ok(!cleanU.includes("🕛"), `got: ${cleanU}`);
+    assert.ok(!cleanU.includes("5h"), `valueOnly countdown drops the window label, got: ${cleanU}`);
+    assert.ok(!cleanU.includes("7d"), `valueOnly countdown drops the window label, got: ${cleanU}`);
   });
 
-  it("full layout matches spec: 'Usage: <bar> <pct>% (<reset><arrow> <windowLabel>) · ...'", () => {
+  it("full layout matches spec: 'Usage: <bar> <pct>% <countdown><arrow> · …'", () => {
     const now = Date.parse("2026-06-24T12:00:00Z");
     const line = renderQuotaLine(
       legacyToIv({ pct: 62, resetAt: "2026-06-24T12:38:00Z" }),
@@ -440,27 +442,27 @@ describe("renderQuotaLine — mode='used'", () => {
       now
     );
     // 5h: used=62 → 5 colored ▓ (LEFT) + 3 plain ░ (RIGHT), DARK_GREEN.
-    // New template: "(38m🕛 5h)" — countdown + arrow + space + label, no slash.
-    // v6.x: m_countdown|term|short wraps the suffix in DEFAULT_COLORS
-    // (teal); assert on the SGR-stripped form so the literal substring
-    // check matches the rendered text after color removal.
+    // Redesigned template: the countdown is valueOnly (no parens /
+    // label) and the " · " between windows is a self-padding s_dot.
     const clean = strip(line);
     assert.ok(
-      clean.includes(`▓▓▓▓▓░░░ 62% (38m🕛 5h)`),
+      clean.includes(`▓▓▓▓▓░░░ 62% 38m🕛`),
       `got: ${clean}`
     );
     // 7d (was wk): used=42 → 3 colored ▓ (LEFT) + 5 plain ░ (RIGHT), BRIGHT_GREEN.
     assert.ok(
-      clean.includes(`▓▓▓░░░░░ 42% (4d16h🕛 7d)`),
+      clean.includes(`▓▓▓░░░░░ 42% 4d16h🕛`),
       `got: ${clean}`
     );
-    // Mode label once at the front, ' · ' between windows.
+    // Mode label once at the front, ' · ' between windows, and the
+    // third (30d) window renders its placeholder countdown.
     assert.ok(clean.startsWith("Usage: "), `got: ${clean}`);
     assert.ok(clean.includes(" · "));
-    // No double parens: "(38m🕛 5h)" not "(38m🕛) 5h".
-    assert.ok(!clean.includes("🕛)"), `got: ${clean}`);
-    // No slash inside the reset annotation.
-    assert.ok(!clean.includes("🕛 /"), `got: ${clean}`);
+    assert.ok(clean.includes("--:(30d)"), `got: ${clean}`);
+    // The valueOnly countdown renders the arrow right after the
+    // countdown — no "(... 🕛 5h)" parens wrapper.
+    assert.ok(!clean.includes("🕛 5h"), `got: ${clean}`);
+    assert.ok(!clean.includes("🕛 7d"), `got: ${clean}`);
   });
 });
 
@@ -468,7 +470,7 @@ describe("renderQuotaLine — reset suffix integration", () => {
   beforeEach(() => {
     __resetForTest({ timeFormat: { minUnit: "m", maxUnitCount: 2 } });
   });
-  it("appends reset countdown + arrow + label inside parens, no slash", () => {
+  it("appends reset countdown + arrow (valueOnly, no parens)", () => {
     const now = Date.parse("2026-06-24T12:00:00Z");
     const line = renderQuotaLine(
       legacyToIv({ pct: 30, resetAt: "2026-06-24T14:03:00Z" }),
@@ -477,22 +479,26 @@ describe("renderQuotaLine — reset suffix integration", () => {
       "remaining",
       now
     );
-    assert.ok(line.includes("(2h3m🕛 5h)"));
-    assert.ok(line.includes("(3d5h🕛 7d)"));
+    // The redesigned countdown is valueOnly: `<countdown><arrow>` with
+    // no parens and no window label.
+    assert.ok(line.includes("2h3m🕛"), `got: ${line}`);
+    assert.ok(line.includes("3d5h🕛"), `got: ${line}`);
   });
 
-  it("no resetAt → bare ' 5h' / ' 7d' with no parens and no arrow", () => {
+  it("no resetAt → countdowns drop (no arrow, no label, no parens)", () => {
     const line = renderQuotaLine(legacyToIv({ pct: 30 }), legacyToIv({ pct: 40 }, "7d"));
-    // v6.x: m_countdown|term:short|mid wrap in DEFAULT_COLORS (teal);
-    // strip SGR before checking substring.
     const clean = strip(line);
-    assert.ok(!clean.includes("🕛"));
-    assert.ok(!clean.includes("("));
-    assert.ok(clean.includes(" 5h"));
-    assert.ok(clean.includes(" 7d"));
+    assert.ok(!clean.includes("🕛"), `got: ${clean}`);
+    // valueOnly countdowns never emit the window label (no parens-form
+    // "(<countdown><arrow> <label>)" either — the only parens in the
+    // line come from the 30d placeholder "--:(30d)").
+    assert.ok(!clean.includes("5h"), `got: ${clean}`);
+    assert.ok(!clean.includes("7d"), `got: ${clean}`);
+    // The three windows are still joined by ' · '.
+    assert.ok(clean.includes(" · "), `got: ${clean}`);
   });
 
-  it("sub-minute remaining → '<1m' (still wrapped in parens, arrow preserved)", () => {
+  it("sub-minute remaining → '<1m' (valueOnly countdown keeps the arrow)", () => {
     const now = Date.parse("2026-06-24T12:00:00Z");
     // 5h window with 30 seconds remaining
     const line = renderQuotaLine(
@@ -502,9 +508,9 @@ describe("renderQuotaLine — reset suffix integration", () => {
       "used",
       now
     );
-    assert.ok(line.includes("(<1m"), `got: ${line}`);
-    // The parens must still be present even when the countdown is the "<1m" fallback.
-    assert.ok(line.includes(")"), `got: ${line}`);
+    assert.ok(line.includes("<1m"), `got: ${line}`);
+    // The arrow survives the "<1m" fallback even without parens.
+    assert.ok(line.includes("<1m🕛"), `got: ${line}`);
   });
 });
 
@@ -658,6 +664,10 @@ describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
   // Helper: call renderQuotaLine so the rendered glyph is what the user sees.
   // Builds a Window with the given remaining/total, sets nowMs via the
   // 4th arg. Reads the arrow off the rendered line.
+  //
+  // The 5h segment renders first (`<bar> <pct>% <countdown><arrow> · …`),
+  // so the first clock-face emoji in the line is the 5h window's arrow
+  // (the 7d window always falls back to index 0 — it has no start/duration).
   const arrow = (ratio: number, durMs: number = 5 * 3_600_000) => {
     const remaining = ratio * durMs;
     const startMs = NOW - (durMs - remaining);
@@ -673,10 +683,7 @@ describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
       "used",
       NOW
     );
-    // The 5h segment is the first "(...)"; grab the arrow between
-    // the last digit of the countdown and the space before "5h".
-    const m = line.match(/\((?:[^\u{1F550}-\u{1F55B}]+)([\u{1F550}-\u{1F55B}]) 5h\)/u);
-    return m?.[1] ?? "";
+    return line.match(/[\u{1F550}-\u{1F55B}]/u)?.[0] ?? "";
   };
 
   it("ratio≈0 → 🕛 (index 0, least remaining)", () => {
@@ -715,8 +722,8 @@ describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
           "used",
           NOW
         );
-        const m = line.match(/\((?:[^⏳⌛]+)([⏳⌛]) 5h\)/);
-        return m?.[1] ?? "";
+        // The 5h segment renders first — grab its hourglass glyph.
+        return line.match(/[⏳⌛]/)?.[0] ?? "";
       };
       assert.equal(arrowAt(0.4), "⏳");
       assert.equal(arrowAt(0.5), "⌛");
@@ -735,8 +742,8 @@ describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
       NOW
     );
     // The 5h segment is rendered — even with no start/duration, the
-    // default index 0 is 🕛.
-    assert.ok(line.includes("🕛 5h"), `got: ${line}`);
+    // default index 0 is 🕛 (first arrow in the line).
+    assert.equal(line.match(/[\u{1F550}-\u{1F55B}]/u)?.[0] ?? "", "🕛", `got: ${line}`);
   });
 
   it("derives intervalMs from start+end when explicit intervalMs is missing (v0.9.0+)", () => {
@@ -782,7 +789,7 @@ describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
       "used",
       NOW
     );
-    assert.ok(line.includes("🕐 5h"), `got: ${line}`);
+    assert.equal(line.match(/[\u{1F550}-\u{1F55B}]/u)?.[0] ?? "", "🕐", `got: ${line}`);
   });
 });
 
