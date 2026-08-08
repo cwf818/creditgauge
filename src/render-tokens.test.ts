@@ -4357,7 +4357,7 @@ describe("renderTemplate — named separator aliases (vX.X.X+)", () => {
     assert.ok(out[0].includes(GREEN), `expected GREEN in: ${JSON.stringify(out[0])}`);
   });
 
-  it("s_dot|color|red wraps the dot in the red SGR (v0.7.2+ default `wrap=true` pads with 1 space on each side)", () => {
+  it("s_dot|color|red wraps the dot in the red SGR (default `wrap=both` pads with 1 space on each side)", () => {
     const out = renderTemplate(["s_dot|color:red"], ctxFor(null));
     assert.equal(out.length, 1);
     assert.equal(strip(out[0]), " · ");

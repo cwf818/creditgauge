@@ -668,7 +668,7 @@ describe("lineTemplate — s_<name> inline-args tokens (vX.X.X+)", () => {
 
   // ----- v0.7.2+ |repeat:<N> (multiplies body, default 1, cap 8) -----
 
-  it("s_space|repeat:3 emits 3 spaces (whitespace body not padded even with default wrap=true)", () => {
+  it("s_space|repeat:3 emits 3 spaces (whitespace body not padded even with default wrap=both)", () => {
     __resetUnknownModuleWarnForTest();
     __resetForTest({
       statuslineTemplate:["s_space|repeat:3"],
@@ -695,7 +695,7 @@ describe("lineTemplate — s_<name> inline-args tokens (vX.X.X+)", () => {
     assert.equal(strip(line), " · ", `got: ${JSON.stringify(line)}`);
   });
 
-  it("s_dot|repeat:3 emits 3 padded dots (wrap=true + printable body)", () => {
+  it("s_dot|repeat:3 emits 3 padded dots (default wrap=both + printable body)", () => {
     __resetForTest({
       // s_dot / s_space / s_colon / s_pipe are built-in named
         // separators; no config array needed.
@@ -789,23 +789,23 @@ describe("lineTemplate — s_<name> inline-args tokens (vX.X.X+)", () => {
     );
   });
 
-  // ----- v0.7.2+ |wrap:<true|false> (default true; pad printable bodies) -----
+  // ----- vX.X.X+ |wrap:<left|right|both|none> (default both; legacy true/false aliases) -----
 
-  it("s_dot|wrap:false renders bare dot (no padding)", () => {
+  it("s_dot|wrap:both renders padded dot — default behavior", () => {
     __resetForTest({
       // s_dot / s_space / s_colon / s_pipe are built-in named
         // separators; no config array needed.
-      statuslineTemplate:["s_dot|wrap:false"],
+      statuslineTemplate:["s_dot|wrap:both"],
     });
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
       shortInterval: null, midInterval: null, balance: null,
       ageMs: null, stale: false, version: "",
     });
-    assert.equal(strip(line), "·", `got: ${JSON.stringify(line)}`);
+    assert.equal(strip(line), " · ", `got: ${JSON.stringify(line)}`);
   });
 
-  it("s_dot|wrap:true (explicit) renders padded dot — default behavior", () => {
+  it("s_dot|wrap:true (legacy alias for both) renders padded dot", () => {
     __resetForTest({
       // s_dot / s_space / s_colon / s_pipe are built-in named
         // separators; no config array needed.
@@ -819,9 +819,61 @@ describe("lineTemplate — s_<name> inline-args tokens (vX.X.X+)", () => {
     assert.equal(strip(line), " · ", `got: ${JSON.stringify(line)}`);
   });
 
-  it("s_space|wrap:true skips padding — whitespace bodies are exempt (no triple space)", () => {
+  it("s_dot|wrap:none renders bare dot (no padding)", () => {
     __resetForTest({
-      statuslineTemplate:["s_space|wrap:true"],
+      // s_dot / s_space / s_colon / s_pipe are built-in named
+        // separators; no config array needed.
+      statuslineTemplate:["s_dot|wrap:none"],
+    });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(strip(line), "·", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("s_dot|wrap:false (legacy alias for none) renders bare dot", () => {
+    __resetForTest({
+      // s_dot / s_space / s_colon / s_pipe are built-in named
+        // separators; no config array needed.
+      statuslineTemplate:["s_dot|wrap:false"],
+    });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(strip(line), "·", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("s_dot|wrap:left pads only the left side (leading space, no trailing)", () => {
+    __resetForTest({
+      statuslineTemplate:["s_dot|wrap:left"],
+    });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(strip(line), " ·", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("s_dot|wrap:right pads only the right side (trailing space, no leading)", () => {
+    __resetForTest({
+      statuslineTemplate:["s_dot|wrap:right"],
+    });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(strip(line), "· ", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("s_space|wrap:both skips padding — whitespace bodies are exempt (no triple space)", () => {
+    __resetForTest({
+      statuslineTemplate:["s_space|wrap:both"],
     });
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -831,12 +883,36 @@ describe("lineTemplate — s_<name> inline-args tokens (vX.X.X+)", () => {
     assert.equal(line, " ", `got: ${JSON.stringify(line)}`);
   });
 
-  it("s_newline|wrap:true skips padding — control bodies are exempt (verified via formatSepBody; s_newline as a sole token is a degenerate newline-piece case)", () => {
-    // The control-body exemption is verified through s_space|wrap:true
-    // and via the unit-level `formatSepBody` implementation in
-    // render.ts. This block documents the design constraint so a
-    // future reader doesn't accidentally remove the `isControlBody`
-    // branch.
+  it("s_space|wrap:left skips padding — whitespace bodies are exempt (no double space)", () => {
+    __resetForTest({
+      statuslineTemplate:["s_space|wrap:left"],
+    });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(line, " ", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("s_space|wrap:right skips padding — whitespace bodies are exempt (no double space)", () => {
+    __resetForTest({
+      statuslineTemplate:["s_space|wrap:right"],
+    });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(line, " ", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("s_newline|wrap:both skips padding — control bodies are exempt (verified via formatSepBody; s_newline as a sole token is a degenerate newline-piece case)", () => {
+    // The control-body exemption is verified through s_space|wrap:both
+    // / left / right and via the unit-level `formatSepBody`
+    // implementation in render.ts. This block documents the design
+    // constraint so a future reader doesn't accidentally remove the
+    // `isControlBody` branch.
     //
     // NOTE: a SOLE `s_newline` template token is a degenerate case
     // — renderTemplate's piece-splitting on `\n` would split it into
@@ -849,9 +925,9 @@ describe("lineTemplate — s_<name> inline-args tokens (vX.X.X+)", () => {
     assert.equal(true, true);
   });
 
-  it("s_colon|wrap:true pads the colon with 1 space on each side", () => {
+  it("s_colon|wrap:both pads the colon with 1 space on each side", () => {
     __resetForTest({
-      statuslineTemplate:["s_colon|wrap:true"],
+      statuslineTemplate:["s_colon|wrap:both"],
     });
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -861,9 +937,9 @@ describe("lineTemplate — s_<name> inline-args tokens (vX.X.X+)", () => {
     assert.equal(strip(line), " : ", `got: ${JSON.stringify(line)}`);
   });
 
-  it("s_pipe|wrap:true pads the pipe with 1 space on each side", () => {
+  it("s_pipe|wrap:both pads the pipe with 1 space on each side", () => {
     __resetForTest({
-      statuslineTemplate:["s_pipe|wrap:true"],
+      statuslineTemplate:["s_pipe|wrap:both"],
     });
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -897,10 +973,22 @@ describe("lineTemplate — s_<name> inline-args tokens (vX.X.X+)", () => {
 
   // ----- combinations -----
 
-  it("s_dot|repeat:3|wrap:false emits three bare dots, no padding", () => {
+  it("s_dot|repeat:3|wrap:none emits three bare dots, no padding", () => {
     __resetForTest({
       // s_dot / s_space / s_colon / s_pipe are built-in named
         // separators; no config array needed.
+      statuslineTemplate:["s_dot|repeat:3|wrap:none"],
+    });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(strip(line), "···", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("s_dot|repeat:3|wrap:false (legacy alias for none) emits three bare dots", () => {
+    __resetForTest({
       statuslineTemplate:["s_dot|repeat:3|wrap:false"],
     });
     const line = renderProviderLine("minimax", {
@@ -911,11 +999,35 @@ describe("lineTemplate — s_<name> inline-args tokens (vX.X.X+)", () => {
     assert.equal(strip(line), "···", `got: ${JSON.stringify(line)}`);
   });
 
-  it("s_dot|wrap:false|repeat:3 (param order doesn't matter) emits three bare dots", () => {
+  it("s_dot|repeat:3|wrap:left emits three left-padded dots (leading space each)", () => {
+    __resetForTest({
+      statuslineTemplate:["s_dot|repeat:3|wrap:left"],
+    });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(strip(line), " · · ·", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("s_dot|repeat:3|wrap:right emits three right-padded dots (trailing space each)", () => {
+    __resetForTest({
+      statuslineTemplate:["s_dot|repeat:3|wrap:right"],
+    });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(strip(line), "· · · ", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("s_dot|wrap:none|repeat:3 (param order doesn't matter) emits three bare dots", () => {
     __resetForTest({
       // s_dot / s_space / s_colon / s_pipe are built-in named
         // separators; no config array needed.
-      statuslineTemplate:["s_dot|wrap:false|repeat:3"],
+      statuslineTemplate:["s_dot|wrap:none|repeat:3"],
     });
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),

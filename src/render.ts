@@ -4426,19 +4426,40 @@ const REPEAT_PARAM = {
   },
 } as const;
 
-// v0.7.2+ — separator `wrap` parameter. Default `true`. When true,
-// bodies that are NOT whitespace/control get padded with one
-// space on each side (so `s_dot|wrap|true` renders ` · ` instead
-// of just `·`). Bodies that are pure whitespace/control
-// (`s_space`, `s_tab`, `s_newline`, and any array entry that's
-// a single ASCII whitespace or NUL/STP/etc.) are returned
-// as-is regardless — wrapping would either create multi-space
-// runs (with `s_space`) or push the next module onto a new line
-// twice (`s_newline`).
+// vX.X.X+ — separator `wrap` parameter. Default `both`. Controls
+// whether a NON-control body gets padded with one space on the
+// left and/or right:
+//   `left`  → pad left only  (so `s_dot|wrap|left` renders " ·")
+//   `right` → pad right only (so `s_dot|wrap|right` renders "· ")
+//   `both`  → pad both sides (so `s_dot|wrap|both` renders " · ")
+//   `none`  → no padding     (so `s_dot|wrap|none` renders "·")
+// The legacy boolean values `true` / `false` remain accepted as
+// ALIASES for `both` / `none` (byte-identical) — existing v0.7.2+
+// configs and the built-in presets keep rendering unchanged. The
+// resolver NORMALIZES the aliases to their canonical value so the
+// formatter only ever sees the four modes. Bodies that are pure
+// whitespace/control (`s_space`, `s_tab`, `s_newline`, and any
+// array entry that's a single ASCII whitespace or NUL/STP/etc.)
+// are returned as-is regardless of wrap mode — wrapping would
+// either create multi-space runs (with `s_space`) or push the
+// next module onto a new line twice (`s_newline`).
 const WRAP_PARAM = {
   named: {
-    wrap: (raw: string): ResolvedValue | null =>
-      raw === "true" || raw === "false" ? raw : null,
+    wrap: (raw: string): ResolvedValue | null => {
+      switch (raw) {
+        case "left":
+        case "right":
+        case "both":
+        case "none":
+          return raw;
+        case "true":
+          return "both"; // legacy alias
+        case "false":
+          return "none"; // legacy alias
+        default:
+          return null;
+      }
+    },
   },
 } as const;
 
@@ -4485,9 +4506,9 @@ const MOVE_PARAM = {
 } as const;
 
 // Classify a separator body as "whitespace/control" (no padding
-// even under wrap=true) or "printable" (pad with 1 space on each
-// side). Pure: only inspects the body's own characters. Used by
-// the s_ renderer's wrap step.
+// under ANY wrap mode) or "printable" (pad with 1 space on the
+// named side(s)). Pure: only inspects the body's own characters.
+// Used by the s_ renderer's wrap step.
 function isControlBody(body: string): boolean {
   if (body === "") return true;
   for (let i = 0; i < body.length; i++) {
@@ -4503,15 +4524,26 @@ function isControlBody(body: string): boolean {
 }
 
 // Pure: format a separator body with the parsed repeat count and
-// the wrap flag. Repeat=0 is rejected upstream by the resolver
-// (returns null), so this layer can assume n >= 1. wrap=true
-// + non-control body pads with 1 space on each side; wrap=false
-// returns body as-is.
+// the wrap mode. Repeat=0 is rejected upstream by the resolver
+// (returns null), so this layer can assume n >= 1. wrap is one of
+// `left` | `right` | `both` | `none` — WRAP_PARAM already
+// normalizes the legacy `true`/`false` aliases, so only the four
+// canonical modes reach here. A NON-control body pads with 1
+// space on the named side(s); `none` and control/whitespace
+// bodies return the body as-is.
 function formatSepBody(body: string, repeat: string, wrap: string): string {
   const n = Number(repeat);
-  const inner = wrap === "true" && !isControlBody(body)
-    ? ` ${body} `
-    : body;
+  const control = isControlBody(body);
+  let inner: string;
+  if (wrap === "none" || control) {
+    inner = body;
+  } else if (wrap === "left") {
+    inner = ` ${body}`;
+  } else if (wrap === "right") {
+    inner = `${body} `;
+  } else {
+    inner = ` ${body} `; // "both" (default; catch-all fallback)
+  }
   let out = "";
   for (let i = 0; i < n; i++) out += inner;
   return out;
@@ -5567,13 +5599,14 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
     // `s_pipe`). The numeric `s_<n>` form is REMOVED — those tokens
     // are unrecognized and emitted as literals by the dispatcher.
     //
-    // v0.7.2+ — added `|repeat|<1..8>` and `|wrap|<true|false>`
-    // named params for inline separators. repeat multiplies the
-    // body (1 default, max 8 — see REPEAT_PARAM). wrap=true pads
-    // printable bodies with 1 space on each side so e.g.
-    // `s_dot|wrap|true` renders " · " instead of "·"; whitespace
-    // bodies (`s_space`, `s_tab`, `s_newline`) skip the padding.
-    // See [[repeat-and-wrap-on-separator]].
+    // v0.7.2+ — added `|repeat|<1..8>` and `|wrap|<left|right|both|
+    // none>` (vX.X.X+; legacy `true`→`both`, `false`→`none` aliases
+    // kept) named params for inline separators. repeat multiplies
+    // the body (1 default, max 8 — see REPEAT_PARAM). wrap pads a
+    // printable body with 1 space on the named side(s) so e.g.
+    // `s_dot|wrap|both` renders " · " and `s_dot|wrap|none` "·";
+    // whitespace bodies (`s_space`, `s_tab`, `s_newline`) skip the
+    // padding under every mode. See [[repeat-and-wrap-on-separator]].
     implicit: {
       name: "index",
       resolver: resolveSepRef,
@@ -6089,11 +6122,12 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const body = resolveSepBody(params.index);
     if (body === INLINE_BADARG) return INLINE_BADARG;
     // v0.7.2+ — repeat N times (validated by REPEAT_PARAM resolver
-    // upstream; default "1"), then optionally pad with 1 space on
-    // each side when wrap=true and the body is non-control. See
-    // formatSepBody.
+    // upstream; default "1"), then pad with 1 space on the side(s)
+    // named by wrap (default "both"; legacy true/false aliases
+    // normalized by WRAP_PARAM). Control/whitespace bodies skip
+    // padding under every mode. See formatSepBody.
     const repeat = (params.repeat as string | undefined) ?? "1";
-    const wrap = (params.wrap as string | undefined) ?? "true";
+    const wrap = (params.wrap as string | undefined) ?? "both";
     const shape = formatSepBody(body, repeat, wrap);
     return wrapPlain(shape, params.color as string | undefined);
   },

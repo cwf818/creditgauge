@@ -586,7 +586,8 @@ Three semantic variants per metric: **per-turn** (stdin-only, zero IO), **acc** 
 | `author`    | dot-path string                                                                | `""`               | `m_quote` only. Single-path convenience for the author field. Pairs with `quote`.   |
 | `lang`      | dot-path string                                                                | `""`               | `m_quote` only. Optional language code path; not rendered, only steers the bundle.   |
 | `max`       | positive integer                                                               | `1024`             | `m_quote` only. CJK-weighted character budget for the rendered quote body.           |
-| `wrap`      | `true` \| `false`                                                              | `true`             | `m_quote` / `s_*`. Wrap the body in `~…~` (m_quote) or pad with spaces (s_*).       |
+| `wrap`      | `left` \| `right` \| `both` \| `none` (legacy `true`→`both`, `false`→`none`)       | `both`             | `s_*` only. Pad a printable separator body with 1 space on the named side(s). Whitespace / control bodies skip padding under every mode. |
+| `wrap`      | 1–2 printable ASCII chars                                                        | `""`               | `m_quote` only. Wrap the quote body in a char-pair; 1 char duplicates to both sides (`wrap=~` ≡ `~~`). Empty/missing = no-op. |
 | `insecureTls` | `true` \| `false`                                                            | `false`            | `m_quote` only. Pass `curl -k` so TLS validation is skipped against the address.    |
 | `abs`       | `true` \| `false`                                                              | `false`            | `m_accStartTime` / `m_sumStartTime` / `m_sumEndTime`. Widens `HH:MM:SS` to `YYYY-MM-DD HH:MM:SS`. |
 | `valueOnly` | `true` \| `false`                                                              | `false`            | All label-using `m_*` modules. Strips the leading label prefix from both live + placeholder bodies. |
@@ -649,14 +650,17 @@ To get a colored literal, use `m_label|<text>|color:<c>`.
 ### 11.4 `repeat` and `wrap`
 
 ```
-s_dot|repeat:3          → "···"
-s_dot|repeat:3|wrap:true → " · · · "
-s_space|repeat:4        → "    "   (whitespace body skips wrap padding)
-s_newline|repeat:2      → "\n\n"  (control body skips wrap padding)
+s_dot|repeat:3           → "···"
+s_dot|repeat:3|wrap:both → " · · · "
+s_dot|wrap:left          → " ·"   (left side only)
+s_dot|wrap:right         → "· "   (right side only)
+s_dot|wrap:none          → "·"
+s_space|repeat:4         → "    "   (whitespace body skips wrap padding)
+s_newline|repeat:2       → "\n\n"  (control body skips wrap padding)
 ```
 
 - `repeat` is an integer 1..8; out-of-range → drop.
-- `wrap=true` pads printable bodies with one space on each side; whitespace / control bodies skip the padding.
+- `wrap` accepts `left` / `right` / `both` / `none` (default `both`). Legacy `true`/`false` are accepted as aliases for `both` / `none`. Printable bodies pad with one space on the named side(s); whitespace / control bodies skip the padding under every mode.
 
 ### 11.5 `s_move`
 
