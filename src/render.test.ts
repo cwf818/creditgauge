@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+  charDisplayWidth,
   colorFor,
   colorForBalance,
   formatBalanceEntriesColored,
@@ -2924,5 +2925,42 @@ describe("m_quota valueOnly (vX.X.X+)", () => {
     } finally {
       __resetForTest();
     }
+  });
+});
+
+describe("charDisplayWidth (vX.X.X+)", () => {
+  it("narrow / ASCII chars count 1", () => {
+    assert.equal(charDisplayWidth("a"), 1);
+    assert.equal(charDisplayWidth("|"), 1);
+    assert.equal(charDisplayWidth(" "), 1);
+    assert.equal(charDisplayWidth("▓"), 1); // EAW ambiguous → 1
+  });
+
+  it("CJK / fullwidth chars count 2", () => {
+    assert.equal(charDisplayWidth("中"), 2);
+    assert.equal(charDisplayWidth("あ"), 2);
+    assert.equal(charDisplayWidth("한"), 2); // Hangul syllable U+D55C
+    assert.equal(charDisplayWidth("！"), 2); // fullwidth U+FF01
+  });
+
+  it("emoji count 2 by default", () => {
+    assert.equal(charDisplayWidth("📦"), 2); // U+1F4E6 (wide)
+    assert.equal(charDisplayWidth("⚡"), 2);  // U+26A1 emoji-presentation
+  });
+
+  it("terminal-calibrated exception overrides the table", () => {
+    assert.equal(charDisplayWidth("🗪"), 1); // U+1F5EA narrow exception
+  });
+
+  it("zero-width chars count 0", () => {
+    assert.equal(charDisplayWidth("‍"), 0); // ZWJ
+    assert.equal(charDisplayWidth("​"), 0); // ZWSP
+    assert.equal(charDisplayWidth("️"), 0); // VS16
+    assert.equal(charDisplayWidth("́"), 0); // combining acute accent
+  });
+
+  it("control chars count 0", () => {
+    assert.equal(charDisplayWidth("\t"), 0);
+    assert.equal(charDisplayWidth("\x1b"), 0);
   });
 });

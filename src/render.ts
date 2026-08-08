@@ -5536,15 +5536,80 @@ function resolveSepBody(index: string | number): string | typeof INLINE_BADARG {
   return INLINE_BADARG;
 }
 
+// vX.X.X+ — per-code-point display width for `s_move` column padding.
+// Calibrated to the user's terminal (2026-08-09): 🗪 U+1F5EA renders 1
+// cell (narrow) despite East Asian Width W; 📦 U+1F4E6 renders 2. The
+// WIDTH_EXCEPTIONS map encodes such terminal-specific deviations and is
+// extensible. Zero-width chars (combining marks, format controls like
+// ZWJ/ZWNJ/ZWSP, variation selectors, soft hyphen, BOM) are classified
+// via Unicode property escapes so we don't hand-maintain a giant range
+// list. Wide chars use the classic wcwidth East-Asian-Wide ranges plus
+// the emoji-presentation blocks. Everything else is 1.
+const WIDTH_EXCEPTIONS: Record<number, number> = {
+  // U+1F5EA right speech bubble renders narrow (1 cell) on the user's
+  // terminal; the standard EAW table says W (2).
+  0x1f5ea: 1,
+};
+
+// Unicode property escapes: M = combining marks (Mn/Mc/Me), Cf = format
+// controls (ZWJ U+200D, ZWNJ U+200C, ZWSP U+200B, soft hyphen U+00AD,
+// BOM U+FEFF, variation selectors U+FE00-U+FE0F), Zl/Zp = line/paragraph
+// separators. All render zero-width for the column cursor.
+const ZERO_WIDTH_RE = /[\p{M}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+// East Asian Wide / Fullwidth + emoji-presentation ranges. Collapsed
+// from the classic wcwidth wide set + Unicode emoji-presentation data.
+// U+1F5EA is NOT here — it is handled by WIDTH_EXCEPTIONS (narrow on
+// the user's terminal).
+const WIDE_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x1100, 0x115f],    // Hangul Jamo
+  [0x231a, 0x231b],    // ⌚ ⌛
+  [0x23e9, 0x23f3],    // ⏩…⏳ (emoji-presentation subset of Misc Technical)
+  [0x25fd, 0x25fe],    // ◽ ◾
+  [0x2600, 0x27bf],    // Misc Symbols + Dingbats (common emoji-presentation set)
+  [0x2b00, 0x2bff],    // Misc Symbols and Arrows (incl. ⭐, ➡)
+  [0x2e80, 0xa4cf],    // CJK Radicals…Yi Syllables
+  [0xac00, 0xd7a3],    // Hangul Syllables
+  [0xf900, 0xfaff],    // CJK Compatibility Ideographs
+  [0xfe10, 0xfe19],    // Vertical Forms
+  [0xfe30, 0xfe6f],    // CJK Compatibility Forms
+  [0xff00, 0xff60],    // Fullwidth Forms
+  [0xffe0, 0xffe6],    // Fullwidth Signs
+  [0x1f000, 0x1f64f],  // Mahjong…Emoticons (incl. 📦 U+1F4E6)
+  [0x1f650, 0x1f67f],  // Ornamental Dingbats
+  [0x1f680, 0x1f6ff],  // Transport & Map
+  [0x1f780, 0x1f7ff],  // Geometric Shapes Extended
+  [0x1f800, 0x1f8ff],  // Supplemental Arrows-C
+  [0x1f900, 0x1f9ff],  // Supplemental Symbols & Pictographs
+  [0x1fa00, 0x1faff],  // Symbols & Pictographs Extended (incl. 🪙 U+1FA99)
+  [0x20000, 0x2fffd],  // CJK Ext B-F
+  [0x30000, 0x3fffd],  // CJK Ext G+
+];
+
+// Display width of a single code point (a one-code-point string, as
+// produced by `for...of` iteration). Returns 0 / 1 / 2.
+export function charDisplayWidth(ch: string): number {
+  const cp = ch.codePointAt(0) ?? 0;
+  const ex = WIDTH_EXCEPTIONS[cp];
+  if (ex !== undefined) return ex;
+  // Control characters (incl. ESC and TAB) and the DEL/C1 block.
+  if (cp < 0x20 || (cp >= 0x7f && cp < 0xa0)) return 0;
+  if (ZERO_WIDTH_RE.test(ch)) return 0;
+  for (const [lo, hi] of WIDE_RANGES) {
+    if (cp >= lo && cp <= hi) return 2;
+  }
+  return 1;
+}
+
 // v0.9.0+ — ANSI SGR strip + display-width counter for `s_move`.
 // Strips ESC[…m (color/style) and ESC[…<letter> (cursor moves
 // handled as "no width" anyway — only SGR can leak into chunks
-// since renderers don't emit cursor moves). Width is JS string
-// length of the stripped result; deliberately NOT wcwidth (east-
-// asian wide chars count as 1, not 2). The trade-off is "good
-// enough for the column-pad use case without pulling in a wcwidth
-// dep" — the user's examples are all ASCII-padded, and the
-// statusline's primary consumer is plain-ASCII data.
+// since renderers don't emit cursor moves). Width is the sum of
+// per-code-point DISPLAY widths via charDisplayWidth (vX.X.X+:
+// emoji/CJK = 2, narrow = 1, zero-width = 0), so the s_move column
+// cursor matches the terminal's actual columns instead of the old
+// JS string length (which counted astral emoji as 2 code units and
+// CJK BMP chars as 1 — both wrong for a terminal column).
 //
 // Used by renderTemplate's cursor tracking on every emitted
 // chunk (the cursor lives in a closure, not in ctx, so a nested
@@ -5577,7 +5642,12 @@ function visibleCellLength(s: string): number {
     stripped += s[i];
     i++;
   }
-  return stripped.length;
+  // vX.X.X+ — width-aware: sum per-code-point display width instead
+  // of JS string length. `for...of` iterates full code points, so
+  // surrogate-pair emoji are measured as one glyph (not 2 units).
+  let width = 0;
+  for (const ch of stripped) width += charDisplayWidth(ch);
+  return width;
 }
 
 const INLINE_SCHEMAS: Record<string, InlineSchema> = {

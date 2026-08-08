@@ -213,7 +213,6 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   // current Claude Code process slot; resets on totalApiMs
   // regression per v0.8.x contract).
   "tickline": [
-    "m_label|⚡: |color:orange",
     "m_tokenOutSpeed",
     "m_tokenIn",
     "m_tokenOut",
@@ -222,7 +221,6 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "m_apiMs",
   ],
   "scopeline": [
-    "m_label|🗪 : |color:orange",
     "m_accTokenOutSpeed",
     "m_accTokenOut",
     "m_accTokenTotalIn",
@@ -230,7 +228,6 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "m_accApiCalls"
   ],
   "periodline": [
-    "m_label|⌛5h: |color:yellow",
     "m_sumTokenOutSpeed|align:true",
     "m_sumTokenOut|align:true",
     "m_sumTokenTotalIn|align:true",
@@ -275,9 +272,11 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_memUsage|valueOnly:true",
     "s_newline",
 
+    "m_label|⚡: |color:orange",
     "m_template|tickline",
     "s_newline",
 
+    "m_label|🗪 : |color:orange",
     "m_template|scopeline|scope:session",
     "s_pipe|wrap:true",
     "m_label|⏱️: |color:yellow",
@@ -286,6 +285,7 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_accTokenCost|scope:session|valueOnly:true",
     "s_newline",
 
+    "m_label|📦: |color:orange",
     "m_template|scopeline|scope:project",
     "s_pipe|wrap:true",
     "m_template|git_info",
@@ -302,35 +302,41 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "s_pipe|wrap:true",
     "m_template|mem_info",
     "s_pipe|wrap:true",
-    "m_version|color:yellow",
-    "s_pipe|wrap:true",
+    "m_version|color:orange",
+    "s_newline",
+
+    "m_label|⚡: |color:orange",
+    "m_template|tickline",
+    "s_dot|wrap:true",
+    "m_template|git_info",
+    "s_dot|wrap:true",
     "m_label|⏱️: |color:yellow",
     "m_accApiMs|scope:session|valueOnly:true",
     "m_label|🪙: |color:yellow",
     "m_accTokenCost|scope:session|valueOnly:true",
     "s_newline",
 
-    "m_template|tickline",
-    "s_pipe|wrap:true",
-    "m_template|git_info",
-    "s_newline",
-
+    "m_label|🗪 : |color:orange",
     "m_template|scopeline|scope:session",
-    "s_move|pos:47",
+    "s_move|pos:51",
     "s_pipe",
+    "m_label|⌛5h: |color:yellow",
     "m_template|periodline|window:5h",
     "s_newline",
 
-    "m_template|scopeline|scope:session",
-    "s_move|pos:46",
+    "m_label|📦: |color:orange",
+    "m_template|scopeline|scope:project",
+    "s_move|pos:51",
     "s_pipe",
+    "m_label|⌛7d: |color:yellow",
     "m_template|periodline|window:7d",
     "s_newline",
 
-    "m_pluginSource",
     "m_template|quota|type:quota",
     "m_template|balance|type:balance",
     "s_newline",
+    "m_pluginSource",
+    "s_space",
     "m_template|quote"
   ],
 };

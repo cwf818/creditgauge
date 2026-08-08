@@ -9,7 +9,7 @@ import {
   configStore,
   loadConfig,
 } from "./config.ts";
-import { DEFAULT_LINE_TEMPLATES } from "./config.template.ts";
+import { DEFAULT_LINE_TEMPLATES, DEFAULT_STATUSLINE_PRESETS } from "./config.template.ts";
 
 let dir: string;
 let tpDir: string;
@@ -87,9 +87,10 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
   it('"standard" resolves to the standard preset body', async () => {
     // The redesigned `standard` preset composes the new fragment
     // library: model_info + mem_info on line 1, tickline + git_info
-    // on line 2, and the session scopeline paired with per-window
-    // periodlines (5h / 7d) on lines 3-4, then pluginSource +
-    // quota/balance dispatch + quote.
+    // on line 2, and the session/project scopelines paired with
+    // per-window periodlines (5h / 7d) on lines 3-4, then the
+    // quota/balance dispatch, and pluginSource + quote on the last
+    // line.
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "standard" }));
     const cfg = await loadConfig();
     assert.ok(cfg.statuslineTemplate[0].startsWith("m_template|model_info"));
@@ -137,13 +138,25 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     // L6 quote.
     assert.ok(cfg.statuslineTemplate.includes("m_template|quote"));
     // The scopeline fragment itself is the session/project acc line.
+    // vX.X.X+ — the 🗪 / 📦 per-scope labels moved OUT of the shared
+    // fragment into the `standard` preset, so the fragment is label-
+    // free and reusable at any scope. The compact preset leaves its
+    // scopelines unlabeled; only the ⚡ tickline prefix is added here.
     const scopeline = DEFAULT_LINE_TEMPLATES.scopeline;
-    assert.ok(scopeline.includes("m_label|🗪 : |color:orange"));
+    assert.ok(!scopeline.includes("m_label"), "scopeline fragment is label-free");
     assert.ok(scopeline.includes("m_accTokenOutSpeed"));
     assert.ok(scopeline.includes("m_accTokenOut"));
     assert.ok(scopeline.includes("m_accTokenTotalIn"));
     assert.ok(scopeline.includes("m_accTokenHitRate"));
     assert.ok(scopeline.includes("m_accApiCalls"));
+    // The ⚡ tickline prefix now lives at the preset level (it used to
+    // be hardcoded inside the tickline fragment).
+    assert.ok(cfg.statuslineTemplate.includes("m_label|⚡: |color:orange"));
+    // The standard preset supplies the per-scope labels for its own
+    // scopeline usages (compact intentionally renders them bare).
+    const standard = DEFAULT_STATUSLINE_PRESETS.standard;
+    assert.ok(standard.includes("m_label|🗪 : |color:orange"));
+    assert.ok(standard.includes("m_label|📦: |color:orange"));
     // 6 logical lines = 5 newlines in the array.
     const newlines = cfg.statuslineTemplate.filter((t) => t === "s_newline").length;
     assert.equal(newlines, 5, `expected 5 s_newline (6-line layout), got ${newlines}`);

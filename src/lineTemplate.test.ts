@@ -17,6 +17,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+  charDisplayWidth,
   renderProviderLine,
   renderTemplate,
   setPrevTick,
@@ -2615,6 +2616,40 @@ describe("s_move — column pad separator (v0.9.0+)", () => {
         line2.length,
         20,
         `line 2 must end at column 20 (4 + 15 + wrap-stripped), got: ${JSON.stringify(line2)}`,
+      );
+    } finally {
+      __resetForTest();
+    }
+  });
+
+  it("pads by display width, not JS length, for emoji labels (vX.X.X+)", () => {
+    // 🗪 renders 1 cell (U+1F5EA narrow exception), so `🗪 : x` is 5
+    // display cells. s_move|pos:20 must emit 15 spaces so the next
+    // chunk lands on display column 20. Under the old JS-length
+    // cursor, 🗪 counted as 2 code units → only 14 spaces → the chunk
+    // landed on column 19.
+    __resetForTest({
+      statuslineTemplate: ["m_label|🗪 : x", "s_move|pos:20"],
+      lineTemplates: {},
+    });
+    try {
+      const line = renderProviderLine("minimax", {
+        mode: "used", nowMs: Date.now(),
+        shortInterval: null, midInterval: null, longInterval: null,
+        balance: null,
+        ageMs: null, stale: false, version: "",
+      });
+      const stripped = strip(line);
+      let display = 0;
+      for (const ch of stripped) display += charDisplayWidth(ch);
+      assert.equal(
+        display,
+        20,
+        `expected next chunk at display col 20, got col ${display}: ${JSON.stringify(stripped)}`,
+      );
+      assert.ok(
+        stripped.endsWith(" ".repeat(20 - 5)),
+        `expected 15 trailing pad spaces, got: ${JSON.stringify(stripped)}`,
       );
     } finally {
       __resetForTest();

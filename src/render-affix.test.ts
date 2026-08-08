@@ -29,7 +29,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { renderProviderLine } from "./render.ts";
+import { charDisplayWidth, renderProviderLine } from "./render.ts";
 import { DEFAULT_STATUSLINE_PRESETS } from "./config.template.ts";
 import { __resetForTest } from "./config.ts";
 import {
@@ -298,7 +298,14 @@ describe("statusline presets compose cleanly (no double space, prefixSpace=true)
 
   for (const [name, tpl] of Object.entries(PRESETS)) {
     it(`${name} preset renders non-empty with no double space`, () => {
-      const out = line([...tpl], { prefixSpace: true });
+      // `s_move`'s column-pad legitimately emits runs of spaces (the
+      // `standard` preset pads each scopeline block out to a fixed
+      // column before its `|` separator), which would false-positive
+      // the double-space check below. s_move's own behavior is covered
+      // by the dedicated s_move tests in lineTemplate.test.ts, so strip
+      // its tokens here and check the remaining composition.
+      const tplNoMove = tpl.filter((t) => !t.startsWith("s_move"));
+      const out = line([...tplNoMove], { prefixSpace: true });
       const clean = strip(out);
       assert.ok(
         clean.length > 0,
@@ -310,5 +317,33 @@ describe("statusline presets compose cleanly (no double space, prefixSpace=true)
       );
     });
   }
+
+  // vX.X.X+ — the standard preset's two scopeline lines (L3 `🗪 : ` +
+  // scopeline|session, L4 `📦: ` + scopeline|project) must have their
+  // `|` separator at the SAME display column. s_move pads to an
+  // absolute column, so width-aware measurement + equal pos values
+  // (both 51) is what keeps them aligned. The display column must be
+  // computed with charDisplayWidth: the two labels differ in emoji
+  // width (🗪=1 vs 📦=2), so the raw JS indexOf differs even when the
+  // display columns are equal.
+  it("standard preset aligns both scopeline `|` at the same display column", () => {
+    const out = line([...DEFAULT_STATUSLINE_PRESETS.standard], { prefixSpace: true });
+    const lines = strip(out).split("\n");
+    assert.ok(lines.length >= 4, `expected >=5 lines, got ${lines.length}: ${JSON.stringify(out)}`);
+    const displayColOfPipe = (ln: string) => {
+      const idx = ln.indexOf("|");
+      assert.ok(idx > 0, `expected a pipe in line: ${JSON.stringify(ln)}`);
+      let w = 0;
+      for (const ch of ln.slice(0, idx)) w += charDisplayWidth(ch);
+      return w;
+    };
+    const col3 = displayColOfPipe(lines[2]); // L3 `🗪` scopeline line
+    const col4 = displayColOfPipe(lines[3]); // L4 `📦` scopeline line
+    assert.equal(
+      col4,
+      col3,
+      `expected aligned pipe (L3 col ${col3}, L4 col ${col4}): ${JSON.stringify(lines)}`,
+    );
+  });
 });
 
