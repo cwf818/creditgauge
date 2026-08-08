@@ -2978,17 +2978,18 @@ m_quota: Object.assign(
   m_ccVersion: (c) => c.tokens?.ccversion ? wrapPlainDefault("m_ccVersion", c.tokens.ccversion, undefined) : placeholderBare("m_ccVersion", c),
   // Current git branch. v6.x: cwd missing / not a git repo /
   // detached HEAD now emit "branch:n/a" placeholder (was: drop).
-  // vX.X.X+ — |withStatus|<true|false> (default true): withStatus
+  // vX.X.X+ — |withStatus|<true|false> (default false): withStatus
   // controls ONLY the status suffix and its color — clean → "✓"
   // brightGreen, dirty → "*" brown (same colors as m_gitStatus). The
   // branch body itself keeps its original color (teal default). With
-  // withStatus:false there is no suffix (pre-vX.X.X body). readGitInfo
-  // is called once per render (the pre-vX.X.X form called it twice).
+  // withStatus unset or "false" there is no suffix (pre-vX.X.X body).
+  // readGitInfo is called once per render (the pre-vX.X.X form called
+  // it twice).
   m_branch: (c) => {
     const info = readGitInfo(c.tokens?.cwd);
     if (info?.branch == null) return placeholderBare("m_branch", c);
     const body = wrapPlainDefault("m_branch", info.branch, undefined);
-    if (c.passThrough?.withStatus === "false") return body;
+    if (c.passThrough?.withStatus !== "true") return body;
     const suffixColor = info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN;
     return `${body}${suffixColor}${info.dirty ? "*" : "✓"}${RESET}`;
   },
@@ -6924,7 +6925,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const info = readGitInfo(ctx.tokens?.cwd);
     if (info?.branch == null) return placeholderWithColor("m_branch", params, ctx);
     const body = wrapPlainDefault("m_branch", info.branch, params.color as string | undefined);
-    if (params.withStatus === "false") return body;
+    if (params.withStatus !== "true") return body;
     const suffixColor = info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN;
     return `${body}${suffixColor}${info.dirty ? "*" : "✓"}${RESET}`;
   },

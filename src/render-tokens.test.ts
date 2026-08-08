@@ -2116,7 +2116,7 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     assert.equal(strip(out), "git:n/a");
   });
 
-  it("m_branch| withStatus defaults to true: teal 'main' + green '✓' clean, teal 'main' + brown '*' dirty", () => {
+  it("m_branch| bare default (withStatus:false) → teal 'main', no suffix", () => {
     let repoDir: string | undefined;
     try {
       execFileSync("git", ["--version"], { stdio: "ignore", timeout: 1000 });
@@ -2134,6 +2134,41 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     try {
       __resetGitInfoCacheForTest();
       const clean = renderTemplate(["m_branch"], ctxFor(fakeSnapshot({ cwd: repoDir }))).join("\n");
+      assert.equal(strip(clean), "main");
+      assert.ok(clean.includes("\x1b[38;5;80m"), `branch body should be teal: ${JSON.stringify(clean)}`);
+      assert.ok(!clean.includes("✓"), `no clean checkmark by default: ${JSON.stringify(clean)}`);
+      assert.ok(!clean.includes("*"), `no dirty star by default: ${JSON.stringify(clean)}`);
+
+      writeFileSync(join(repoDir, "new"), "y");
+      __resetGitInfoCacheForTest();
+      const dirty = renderTemplate(["m_branch"], ctxFor(fakeSnapshot({ cwd: repoDir }))).join("\n");
+      assert.equal(strip(dirty), "main");
+      assert.ok(dirty.includes("\x1b[38;5;80m"), `branch body should be teal: ${JSON.stringify(dirty)}`);
+      assert.ok(!dirty.includes("*"), `no dirty star by default: ${JSON.stringify(dirty)}`);
+      assert.ok(!dirty.includes("✓"), `no clean checkmark by default: ${JSON.stringify(dirty)}`);
+    } finally {
+      if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("m_branch|withStatus:true → teal 'main' + green '✓' clean, teal 'main' + brown '*' dirty", () => {
+    let repoDir: string | undefined;
+    try {
+      execFileSync("git", ["--version"], { stdio: "ignore", timeout: 1000 });
+    } catch {
+      return; // skip — no git on PATH
+    }
+    repoDir = mkdtempSync(join(tmpdir(), "creditgauge-render-branch-"));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repoDir });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: repoDir });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: repoDir });
+    writeFileSync(join(repoDir, "r"), "x");
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir });
+
+    try {
+      __resetGitInfoCacheForTest();
+      const clean = renderTemplate(["m_branch|withStatus:true"], ctxFor(fakeSnapshot({ cwd: repoDir }))).join("\n");
       assert.equal(strip(clean), "main✓");
       assert.ok(clean.includes("\x1b[38;5;80m"), `branch body should be teal: ${JSON.stringify(clean)}`);
       assert.ok(clean.includes("\x1b[38;5;41m"), `clean suffix should be brightGreen: ${JSON.stringify(clean)}`);
@@ -2142,7 +2177,7 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
 
       writeFileSync(join(repoDir, "new"), "y");
       __resetGitInfoCacheForTest();
-      const dirty = renderTemplate(["m_branch"], ctxFor(fakeSnapshot({ cwd: repoDir }))).join("\n");
+      const dirty = renderTemplate(["m_branch|withStatus:true"], ctxFor(fakeSnapshot({ cwd: repoDir }))).join("\n");
       assert.equal(strip(dirty), "main*");
       assert.ok(dirty.includes("\x1b[38;5;80m"), `branch body should be teal: ${JSON.stringify(dirty)}`);
       assert.ok(dirty.includes("\x1b[38;5;130m"), `dirty suffix should be brown: ${JSON.stringify(dirty)}`);
@@ -2223,12 +2258,12 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     }
   });
 
-  it("m_branch|color:red colors the body; suffix keeps its clean/dirty color", () => {
+  it("m_branch|color:red|withStatus:true colors the body; suffix keeps its clean/dirty color", () => {
     // process.cwd() is a real git repo during tests; |color|red colors
     // the branch BODY, while the withStatus suffix keeps its status
     // color (✓ brightGreen when clean, * brown when dirty).
     const out = renderTemplate(
-      ["m_branch|color:red"],
+      ["m_branch|color:red|withStatus:true"],
       ctxFor(fakeSnapshot({ cwd: process.cwd() })),
     ).join("\n");
     assert.ok(out.includes("\x1b[38;5;196m"), `got: ${JSON.stringify(out)}`);
