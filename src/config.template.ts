@@ -56,11 +56,14 @@ const DEFAULT_LINE_TEMPLATE: {
   quota: [
     "m_modeLabel|color:yellow",
     "m_windowQuota|term:short",
-    "m_countdown|term:short",
+    "m_countdown|term:short|valueOnly:true",
     "s_dot|wrap:true",
     "m_windowQuota|term:mid",
-    "m_countdown|term:mid",
-    "m_age"
+    "m_countdown|term:mid|valueOnly:true",
+    "s_dot|wrap:true",
+    "m_windowQuota|term:long",
+    "m_countdown|term:long|valueOnly:true",
+    "m_quota|term:long|display:remaining|valueOnly:true|nulldrop:true"
   ],
   balance: ["m_modeLabel|color:yellow", "m_balance", "m_age"],
 };
@@ -117,7 +120,7 @@ export const DEFAULT_STATUSLINE_TEMPLATE: StatuslineTemplate = ["m_template|quot
 // `_complete` / `_balance_simple` / `_balance_simple-alone`) is
 // REMOVED. There are no `_`-prefixed built-in presets anymore; the
 // fragment library in DEFAULT_LINE_TEMPLATES (tokens_tick /
-// tokens_acc / tokens_stat / information / tick_eval / combline2 /
+// tokens_acc / tokens_stat / model_info / tickline / combline2 /
 // git_info_all / context_all + quota / balance) is the user-facing
 // surface. The `_`-prefix collision check in applyOverrides
 // (config.ts) is retained as a no-op safety net so a future
@@ -177,102 +180,25 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   quota: DEFAULT_LINE_TEMPLATE.quota,
   balance: DEFAULT_LINE_TEMPLATE.balance,
 
-  quota_all: [
-    "m_modeLabel|color:yellow",
-    "m_windowQuota|term:short",
-    "m_countdown|term:short",
-    "~",
-    "m_sumEstQuota|term:short|valueOnly:true",
-    "s_dot|wrap:true",
-    "m_windowQuota|term:mid",
-    "m_countdown|term:mid",
-    "~",
-    "m_sumEstQuota|term:mid|valueOnly:true",
-    // "s_dot|wrap:true",
-    // "m_windowQuota|term:long", "s_space", "m_countdown|term:long",
-    // "~",
-    // "m_sumEstQuota|term:long|valueOnly:true",
-    "m_age"
+  // "model_info" — context window + memory + git pipeline on one
+  // line; the inline `|wrap:true` on `s_pipe` wraps the trailing
+  // body so the rendered segment pads out (cf. s_*|wrap| memo).
+  model_info: [
+    "m_label|💳: |color:blue",
+    "m_provider",
+    "/",
+    "m_model",
+    "s_pipe|wrap:true",
+    "m_label|📜: |color:yellow",
+    "m_windowContext|display:used",
+    "m_contextUsage|valueOnly:true",
   ],
-  
-  quota_all_compact: [
-    "m_modeLabel|color:yellow",
-    "m_windowQuota|term:short",
-    "m_countdown|term:short|valueOnly:true",
-    "s_dot|wrap:true",
-    "m_windowQuota|term:mid",
-    "m_countdown|term:mid|valueOnly:true",
-    "s_dot|wrap:true",
-    "m_windowQuota|term:long",
-    "m_countdown|term:long|valueOnly:true"
-  ],
-
   plugin_info: [
     "m_label|CreditGauge |color:yellow",
     "m_version|color:yellow",
   ],
-
-  // ----- User-facing fragment library (vX.X.X+) -----
-  // Reference via `m_template|<key>` from statuslineTemplate.
-  // Tokens render left-to-right; bare literals like "[", "]",
-  // "/" are emitted verbatim by the renderer (unknown tokens →
-  // literal passthrough). All module names below resolve in
-  // src/render.ts; the `tokens_tick` family mirrors the per-turn /
-  // acc / sum-avg three-tier split of the v0.8.x contract.
-  tokens_tick: [
-    "m_tokenInSpeed",
-    "m_tokenOutSpeed",
-    "m_tokenHitRate",
-    "m_apiMs",
-    "m_tokenIn",
-    "m_tokenOut",
-    "m_tokenCachedIn",
-    "m_tokenTotalIn",
-    "m_tokenCost"
-  ],
-  tokens_acc: [
-    "m_accTokenInSpeed",
-    "m_accTokenOutSpeed",
-    "m_accTokenHitRate",
-    "m_accApiMs",
-    "m_accTokenIn",
-    "m_accTokenOut",
-    "m_accTokenCachedIn",
-    "m_accTokenTotalIn",
-    "m_accApiCalls",
-    "m_accTokenCost",
-    "m_accStartTime|abs:true",
-  ],
-  tokens_stat: [
-    "m_sumTokenInSpeed",
-    "m_sumTokenOutSpeed",
-    "m_sumTokenHitRate",
-    "m_sumApiMs",
-    "m_sumTokenIn",
-    "m_sumTokenOut",
-    "m_sumTokenCachedIn",
-    "m_sumTokenTotalIn",
-    "m_sumApiCalls",
-    "m_sumTokenCost",
-    "m_sumStartTime|abs:true",
-  ],
-  // "information" — context window + memory + git pipeline on one
-  // line; the inline `|wrap:true` on `s_pipe` wraps the trailing
-  // body so the rendered segment pads out (cf. s_*|wrap| memo).
-  information: [
-    "[",
-    "m_provider",
-    "/",
-    "m_model",
-    "] ",
-    "m_label|Context: |color:yellow",
-    "m_windowContext|display:used",
-    "m_contextSize|valueOnly:true",
-    "/",
-    "m_contextWindowSize|valueOnly:true",
-  ],
   mem_info: [
-    "m_label|▦ Memory: |color:yellow",
+    "m_label|▦ : |color:yellow",
     "m_windowMemUsage|display:used",
     "m_memUsage|valueOnly:true",
   ],
@@ -282,66 +208,11 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "m_linesAdded",
     "m_linesRemoved",
   ],
-  // "tick_eval" — per-turn tick diagnostics paired with the
+  // "tickline" — per-turn tick diagnostics paired with the
   // session-scoped accumulator (scope:session filters to the
   // current Claude Code process slot; resets on totalApiMs
   // regression per v0.8.x contract).
-  tick_eval: [
-    "m_label|⚡Tick-tock: |color:cyan",
-    "m_tokenInSpeed",
-    "m_tokenOutSpeed",
-    "m_tokenIn",
-    "m_tokenOut",
-    "m_apiMs",
-    "m_tokenCachedIn",
-    "m_tokenTotalIn",
-    // RULE B — the s_space before m_template|quote stays: m_template is
-    // excluded from the affix path, so auto-prefix cannot reproduce it.
-    "s_space",
-    "m_template|quote",
-  ],
-  combline1: [
-    "m_label|🟢Session:   |color:orange",
-    "m_accTokenInSpeed|scope:session",
-    "m_accTokenOutSpeed|scope:session",
-    "m_accTokenIn|scope:session",
-    "m_accTokenOut|scope:session",
-    "m_accTokenCachedIn|scope:session",
-    "m_accTokenHitRate|scope:session",
-    "m_accApiCalls|scope:session",
-    "s_move|pos:73",
-    "s_pipe|wrap:true",
-    "m_label|⌛5h-align: |color:yellow",
-    "m_sumTokenInSpeed|window:5h|align:true",
-    "m_sumTokenOutSpeed|window:5h|align:true",
-    "m_sumTokenIn|window:5h|align:true",
-    "m_sumTokenOut|window:5h|align:true",
-    "m_sumTokenCachedIn|window:5h|align:true",
-    "m_sumTokenHitRate|window:5h|align:true",
-    "m_sumApiCalls|window:5h|align:true",
-  ],
-  combline2: [
-    "m_label|🟢Project:   |color:orange",
-    "m_accTokenInSpeed|scope:project",
-    "m_accTokenOutSpeed|scope:project",
-    "m_accTokenIn|scope:project",
-    "m_accTokenOut|scope:project",
-    "m_accTokenCachedIn|scope:project",
-    "m_accTokenHitRate|scope:project",
-    "m_accApiCalls|scope:project",
-    "s_move|pos:73",
-    "s_pipe|wrap:true",
-    "m_label|⌛7d-align: |color:yellow",
-    "m_sumTokenInSpeed|window:7d|align:true",
-    "m_sumTokenOutSpeed|window:7d|align:true",
-    "m_sumTokenIn|window:7d|align:true",
-    "m_sumTokenOut|window:7d|align:true",
-    "m_sumTokenCachedIn|window:7d|align:true",
-    "m_sumTokenHitRate|window:7d|align:true",
-    "m_sumApiCalls|window:7d|align:true",
-    "m_statTtlStatus",
-  ],
-  "tickline-slim": [
+  "tickline": [
     "m_label|⚡: |color:orange",
     "m_tokenOutSpeed",
     "m_tokenIn",
@@ -349,59 +220,23 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "m_tokenCachedIn",
     "m_tokenTotalIn",
     "m_apiMs",
-    "s_pipe|wrap:true",
-    "m_session"
   ],
-  "combline1-slim": [
+  "scopeline": [
     "m_label|🗪 : |color:orange",
-    "m_accTokenOutSpeed|scope:session",
-    "m_accTokenOut|scope:session",
-    "m_accTokenTotalIn|scope:session",
-    "m_accTokenHitRate|scope:session",
-    "m_accApiCalls|scope:session",
-    "s_move|pos:47",
-    "s_pipe",
+    "m_accTokenOutSpeed",
+    "m_accTokenOut",
+    "m_accTokenTotalIn",
+    "m_accTokenHitRate",
+    "m_accApiCalls"
+  ],
+  "periodline": [
     "m_label|⌛5h: |color:yellow",
-    "m_sumTokenOutSpeed|window:5h|align:true",
-    "m_sumTokenOut|window:5h|align:true",
-    "m_sumTokenTotalIn|window:5h|align:true",
-    "m_sumTokenHitRate|window:5h|align:true",
-    "m_sumApiCalls|window:5h|align:true",
-    "m_sumTokenCost|window:5h|align:true|valueOnly:true",
-    "m_statTtlStatus"
-  ],
-  "combline2-slim": [
-    "m_label|📦: |color:orange",
-    "m_accTokenOutSpeed|scope:project",
-    "m_accTokenOut|scope:project",
-    "m_accTokenTotalIn|scope:project",
-    "m_accTokenHitRate|scope:project",
-    "m_accApiCalls|scope:project",
-    "s_move|pos:46",
-    "s_pipe",
-    "m_label|⌛7d: |color:yellow",
-    "m_sumTokenOutSpeed|window:7d|align:true",
-    "m_sumTokenOut|window:7d|align:true",
-    "m_sumTokenTotalIn|window:7d|align:true",
-    "m_sumTokenHitRate|window:7d|align:true",
-    "m_sumApiCalls|window:7d|align:true",
-    "m_sumTokenCost|window:7d|align:true|valueOnly:true",
-  ],
-  git_info_all: [
-    "m_label|⎇ Git: |color:yellow",
-    "m_repo",
-    "m_branch",
-    "m_gitStatus",
-    "m_linesAdded",
-    "m_linesRemoved",
-  ],
-  context_all: [
-    "m_label|Context: |color:yellow",
-    "m_windowContext|display:used",
-    "m_contextSize",
-    "m_contextWindowSize",
-    "m_contextUsedPercent",
-    "m_contextRemainingPercent",
+    "m_sumTokenOutSpeed|align:true",
+    "m_sumTokenOut|align:true",
+    "m_sumTokenTotalIn|align:true",
+    "m_sumTokenHitRate|align:true",
+    "m_sumApiCalls|align:true",
+    "m_sumTokenCost|align:true|valueOnly:true"
   ],
   quote: [
     "m_quote|freq:120s|color:rainbow|lang:en|wrap:~",
@@ -413,7 +248,7 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
 // `m_template|<key>`). A preset here IS the whole statusline — the
 // loader resolves a string-form `statuslineTemplate: "<key>"`
 // against this registry and substitutes the body array. Fragment
-// names (`tokens_tick` / `information` / etc.) are NOT valid here
+// names (`tokens_tick` / `model_info` / etc.) are NOT valid here
 // and vice versa.
 //
 // Bodies reuse fragments where helpful — `m_template|<fragment>`
@@ -427,37 +262,23 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   // minimal: provider-type-aware quota/balance dispatch +
   // m_age (chain emoji) + m_pluginSource.
   simple: [
-    "m_pluginSource",
     "m_template|quota|type:quota",
     "m_template|balance|type:balance",
     "m_template|plugin_info|type:unknown",
   ],
+
   // multi-line: context-info / tick-eval / stat-eval stacked.
   compact: [
-    "m_label|💳: |color:blue",
-    "m_provider",
-    "/",
-    "m_model",
-    "s_pipe|wrap:true",
-    "m_label|📜: |color:yellow",
-    "m_windowContext|display:used",
-    "m_contextSize|valueOnly:true",
-    "/",
-    "m_contextWindowSize|valueOnly:true",
+    "m_template|model_info",
     "s_pipe|wrap:true",
     "m_label|▦: |color:yellow",
     "m_memUsage|valueOnly:true",
     "s_newline",
 
-    "m_template|tickline-slim",
+    "m_template|tickline",
     "s_newline",
 
-    "m_label|🗪 : |color:orange",
-    "m_accTokenOutSpeed|scope:session",
-    "m_accTokenOut|scope:session",
-    "m_accTokenTotalIn|scope:session",
-    "m_accTokenHitRate|scope:session",
-    "m_accApiCalls|scope:session",
+    "m_template|scopeline|scope:session",
     "s_pipe|wrap:true",
     "m_label|⏱️: |color:yellow",
     "m_accApiMs|scope:session|valueOnly:true",
@@ -465,121 +286,52 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_accTokenCost|scope:session|valueOnly:true",
     "s_newline",
 
-    "m_label|📦: |color:orange",
-    "m_accTokenOutSpeed|scope:project",
-    "m_accTokenOut|scope:project",
-    "m_accTokenTotalIn|scope:project",
-    "m_accTokenHitRate|scope:project",
-    "m_accApiCalls|scope:project",
+    "m_template|scopeline|scope:project",
     "s_pipe|wrap:true",
     "m_template|git_info",
     "s_newline",
 
-    "m_template|quota_all_compact|type:quota",
+    "m_template|quota|type:quota",
     "m_template|balance|type:balance",
     "s_newline",
     "m_template|quote"
   ],
+
   standard: [
-    "m_template|information",
-    // RULE B — s_space adjacent to m_template stays: m_template is
-    // excluded from the affix path, so auto-prefix cannot reproduce it.
-    "s_space",
+    "m_template|model_info",
+    "s_pipe|wrap:true",
     "m_template|mem_info",
     "s_pipe|wrap:true",
     "m_version|color:yellow",
-    "s_newline",
-    "m_template|tick_eval",
-    "s_newline",
-    "m_template|combline1",
-    "s_newline",
-    "m_template|combline2",
-    "s_newline",
-    "m_pluginSource",
-    "m_template|quota|type:quota",
-    "m_template|balance|type:balance",
-    // RULE B — s_space adjacent to m_template stays.
-    "s_space",
-    "m_template|git_info",
-  ],
-  // kitchen-sink: every fragment + per-scope acc + per-window
-  // stat + long-interval quota + chain emoji + version.
-  abundant: [
-    "m_template|information",
-    // RULE B — s_space adjacent to m_template stays: m_template is
-    // excluded from the affix path, so auto-prefix cannot reproduce it.
-    "s_space",
-    "m_template|mem_info",
-    "s_pipe|wrap:true",
-    "m_version|color:yellow",
-    "s_newline",
-    "m_template|git_info_all",
-    "s_pipe|wrap:true",
-    "m_template|quote",
-    "s_newline",
-    "m_label|⚡Tick-tock: |color:cyan",
-    "m_template|tokens_tick",
-    "s_newline",
-    "m_label|🟢Session:   |color:orange",
-    "m_template|tokens_acc|scope:session",
-    "s_newline",
-    "m_label|🟢Project:   |color:orange",
-    "m_template|tokens_acc|scope:project",
-    "s_newline",
-    "m_label|⌛5h-align:  |color:yellow",
-    "m_template|tokens_stat|window:5h|align:true",
-    "s_pipe|wrap:true",
-    "m_sumTtlStatus|window:5h|align:true",
-    "s_newline",
-    "m_label|⌛7d-align:  |color:yellow",
-    "m_template|tokens_stat|window:7d|align:true",
-    "s_pipe|wrap:true",
-    "m_sumTtlStatus|window:7d|align:true",
-    "s_newline",
-    "m_pluginSource",
-    "m_template|quota_all|type:quota",
-    "m_template|balance|type:balance",
-    // RULE B — s_space adjacent to m_template|balance stays (the
-    // following m_quota is a quota-only module that drops on a balance
-    // provider; keeping the explicit space preserves the trailing pad).
-    "s_space",
-    "m_quota|term:long|display:remaining|nulldrop:true"
-  ],
-  "standard-slim": [
-    "[",
-    "m_provider",
-    "/",
-    "m_model",
-    "] ",
-    "m_label|📜: |color:yellow",
-    "m_windowContext|display:used",
-    "m_contextWindowSize|valueOnly:true",
-    "s_pipe|wrap:true",
-    "m_label|▦: |color:yellow",
-    "m_windowMemUsage|display:used",
-    "m_memUsage|valueOnly:true",
     "s_pipe|wrap:true",
     "m_label|⏱️: |color:yellow",
     "m_accApiMs|scope:session|valueOnly:true",
     "m_label|🪙: |color:yellow",
     "m_accTokenCost|scope:session|valueOnly:true",
+    "s_newline",
+
+    "m_template|tickline",
     "s_pipe|wrap:true",
-    "m_version|color:yellow",
+    "m_template|git_info",
     "s_newline",
-    "m_template|tickline-slim",
-    // RULE B — s_space adjacent to m_template stays.
-    "s_space",
-    "m_template|quote",
+
+    "m_template|scopeline|scope:session",
+    "s_move|pos:47",
+    "s_pipe",
+    "m_template|periodline|window:5h",
     "s_newline",
-    "m_template|combline1-slim",
+
+    "m_template|scopeline|scope:session",
+    "s_move|pos:46",
+    "s_pipe",
+    "m_template|periodline|window:7d",
     "s_newline",
-    "m_template|combline2-slim",
-    "s_newline",
-    "m_template|quota_all|type:quota",
+
+    "m_pluginSource",
+    "m_template|quota|type:quota",
     "m_template|balance|type:balance",
-    // RULE B — s_space adjacent to m_template stays.
-    "s_space",
-    "m_template|git_info"
+    "s_newline",
+    "m_template|quote"
   ],
 };
 
