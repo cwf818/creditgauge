@@ -2224,7 +2224,11 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     }
   });
 
-  it("m_template|git_info|withStatus:false forwards teal to inner bare m_branch", () => {
+  it("m_template|git_info_all|withStatus:false forwards teal to inner bare m_branch", () => {
+    // NOTE: git_info itself hardcodes `m_branch|withStatus:true`, so
+    // inner-explicit-wins defeats a `m_template|git_info|withStatus:false`
+    // passthrough (the suffix always renders). git_info_all keeps a BARE
+    // m_branch — that's the fragment this passthrough test targets.
     let repoDir: string | undefined;
     try {
       execFileSync("git", ["--version"], { stdio: "ignore", timeout: 1000 });
@@ -2241,14 +2245,14 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     try {
       __resetGitInfoCacheForTest();
       const out = renderTemplate(
-        ["m_template|git_info|withStatus:false"],
+        ["m_template|git_info_all|withStatus:false"],
         ctxFor(fakeSnapshot({ cwd: repoDir })),
       ).join("\n");
-      // The git_info fragment includes m_gitStatus ("clean", brightGreen)
-      // and m_linesAdded/m_linesRemoved — so green WILL appear from
-      // m_gitStatus. The lock is: teal branch present (passthrough reached
-      // the bare m_branch) and no dirty "*"/clean "✓" (withStatus:false
-      // renders the bare branch with no marker).
+      // The git_info_all fragment includes m_repo + m_gitStatus ("clean",
+      // brightGreen) + m_linesAdded/m_linesRemoved — so green WILL appear
+      // from m_gitStatus. The lock is: teal branch present (passthrough
+      // reached the bare m_branch) and no dirty "*"/clean "✓"
+      // (withStatus:false renders the bare branch with no marker).
       assert.ok(out.includes("\x1b[38;5;80m"), `teal branch should appear via passthrough: ${JSON.stringify(out)}`);
       assert.ok(!out.includes("*"), `no dirty star: ${JSON.stringify(out)}`);
       assert.ok(!out.includes("✓"), `no clean checkmark: ${JSON.stringify(out)}`);
