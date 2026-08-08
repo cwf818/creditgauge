@@ -44,7 +44,7 @@ describe("renderTemplate — m_contextUsage (vX.X.X+ two-tone context x/y)", () 
   it("bare renders ctx:<bandUsed>/<blueTotal>", () => {
     const out = renderTemplate(["m_contextUsage"], ctxFor(fakeSnapshot())).join("\n");
     const s = strip(out);
-    if (/n\/a$/.test(s)) return; // placeholder-path guard (no tokens)
+    // fixture is deterministic — no placeholder-path guard needed.
     assert.equal(s, "ctx:163.5k/200.0k");
     // used chunk is its own SGR segment, closed with RESET before "/".
     assert.match(out, /\x1b\[0m\//);

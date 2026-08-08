@@ -332,6 +332,10 @@ const DEFAULT_CONFIG: {
     labelContextWindowSize: string;
     labelContextUsedPercent: string;
     labelContextRemainingPercent: string;
+    // vX.X.X+ — m_contextUsage two-tone x/y prefix (used/capacity).
+    // Default "ctx:" (lowercase, matching the context-module family
+    // style). Override via labels.labelContextUsage.
+    labelContextUsage: string;
     // v0.8.24+ — start of the tick statistics window. Read by
     // m_accStartTime and m_sumStartTime (the cross-project min
     // of per-row startAt). Default "start:" preserves a clean
@@ -496,6 +500,8 @@ const DEFAULT_CONFIG: {
     labelContextWindowSize: "size:",
     labelContextUsedPercent: "used:",
     labelContextRemainingPercent: "remain:",
+    // vX.X.X+ — m_contextUsage two-tone x/y prefix.
+    labelContextUsage: "ctx:",
     // v0.8.24+ — start/end of the tick statistics window. Net-new
     // axes (no v0.8.23 default to preserve), so the literals are
     // pure v0.8.24 conventions.
@@ -1135,6 +1141,8 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
         "labelContextWindowSize",
         "labelContextUsedPercent",
         "labelContextRemainingPercent",
+        // vX.X.X+ — m_contextUsage two-tone x/y prefix axis.
+        "labelContextUsage",
         // v0.8.24+ — start/end of the tick statistics window.
         // Net-new axes (no v0.8.23 default to preserve).
         "labelStartTime",

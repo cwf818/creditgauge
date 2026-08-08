@@ -6067,6 +6067,92 @@ describe("renderTemplate — m_memUsed / m_memTotal (vX.X.X+)", () => {
   });
 });
 
+describe("renderTemplate — m_contextUsage (vX.X.X+ two-tone context x/y)", () => {
+  // Default fakeSnapshot: tokenTotalIn=163479 → "163.5k",
+  // contextWindowSize=200000 → "200.0k", pct=81.7% → band 3 → orange.
+  it("bare renders ctx:<bandUsed>/<blueTotal>", () => {
+    const out = renderTemplate(["m_contextUsage"], ctxFor(fakeSnapshot())).join("\n");
+    const s = strip(out);
+    // fixture is deterministic — no placeholder-path guard needed.
+    assert.equal(s, "ctx:163.5k/200.0k");
+    // used chunk is its own SGR segment, closed with RESET before "/".
+    assert.match(out, /\x1b\[0m\//);
+    // "ctx:" prefix carries the blue default (38;5;33).
+    assert.match(out, /\x1b\[38;5;33mctx:/);
+    // total chunk also blue.
+    assert.match(out, /\x1b\[38;5;33m200\.0k/);
+  });
+
+  it("used chunk band color follows colorFor(pct, used)", () => {
+    // tokenTotalIn=100000, capacity=200000 → pct=50 → band 0 (brightGreen 38;5;41).
+    const snap = fakeSnapshot({
+      totals: { tokenTotalIn: 100000, tokenTotalOut: 0 },
+      contextWindow: { contextWindowSize: 200000, contextUsedPercent: 50, contextRemainingPercent: 50 },
+    });
+    const out = renderTemplate(["m_contextUsage"], ctxFor(snap)).join("\n");
+    assert.equal(strip(out), "ctx:100.0k/200.0k");
+    assert.match(out, /\x1b\[38;5;41m100\.0k/);
+  });
+
+  it("|valueOnly:true| drops the ctx: prefix", () => {
+    const out = renderTemplate(["m_contextUsage|valueOnly:true"], ctxFor(fakeSnapshot())).join("\n");
+    assert.equal(strip(out), "163.5k/200.0k");
+  });
+
+  it("|color|red| overrides the whole line", () => {
+    const out = renderTemplate(["m_contextUsage|color:red"], ctxFor(fakeSnapshot())).join("\n");
+    assert.equal(strip(out), "ctx:163.5k/200.0k");
+    // whole line wrapped in red (38;5;196 = colors.red palette token
+    // via resolveColor), NOT the default blue (38;5;33). The override
+    // wraps once, so the used+total run to a trailing RESET with no
+    // intervening SGR.
+    assert.match(out, /\x1b\[38;5;196mctx:/);
+    assert.match(out, /163\.5k\/200\.0k\x1b\[0m$/);
+    assert.doesNotMatch(out, /\x1b\[38;5;33m/);
+  });
+
+  it("missing used → ctx:n/a placeholder (STALE_COLOR)", () => {
+    const snap = fakeSnapshot({ totals: { tokenTotalIn: null, tokenTotalOut: 0 } });
+    const out = renderTemplate(["m_contextUsage"], ctxFor(snap)).join("\n");
+    assert.equal(strip(out), "ctx:n/a");
+    assert.match(out, /\x1b\[90m/);
+  });
+
+  it("missing capacity → ctx:n/a placeholder", () => {
+    const snap = fakeSnapshot({
+      contextWindow: { contextWindowSize: null, contextUsedPercent: 0, contextRemainingPercent: 0 },
+    });
+    const out = renderTemplate(["m_contextUsage"], ctxFor(snap)).join("\n");
+    assert.equal(strip(out), "ctx:n/a");
+  });
+
+  it("used=0, capacity>0 → ctx:0/200.0k (value-zero rule)", () => {
+    const snap = fakeSnapshot({
+      totals: { tokenTotalIn: 0, tokenTotalOut: 0 },
+      contextWindow: { contextWindowSize: 200000, contextUsedPercent: 0, contextRemainingPercent: 100 },
+    });
+    const out = renderTemplate(["m_contextUsage"], ctxFor(snap)).join("\n");
+    assert.equal(strip(out), "ctx:0/200.0k");
+    // pct=0 → band 0 brightGreen.
+    assert.match(out, /\x1b\[38;5;41m0/);
+  });
+
+  it("labelContextUsage override reaches the prefix (withLabels)", () => {
+    withLabels({ labelContextUsage: "占用:" }, () => {
+      const out = renderTemplate(["m_contextUsage"], ctxFor(fakeSnapshot())).join("\n");
+      assert.equal(strip(out), "占用:163.5k/200.0k");
+    });
+  });
+
+  it("capacity 0 → ctx:n/a placeholder (no divide-by-zero)", () => {
+    const snap = fakeSnapshot({
+      contextWindow: { contextWindowSize: 0, contextUsedPercent: 0, contextRemainingPercent: 0 },
+    });
+    const out = renderTemplate(["m_contextUsage"], ctxFor(snap)).join("\n");
+    assert.equal(strip(out), "ctx:n/a");
+  });
+});
+
 // v0.8.0+ — tickStatus field renames and additions. The on-disk
 // shape under `state/<projectHash>/status.json` is updated:
 //   cacheRead  → cachedIn   (per-turn cache_read_input_tokens)

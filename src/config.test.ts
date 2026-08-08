@@ -186,6 +186,12 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     assert.deepEqual(cfg.statuslineTemplate, ["m_template|quota|type:quota", "m_template|balance|type:balance"]);
   });
 
+  it("labels default includes labelContextUsage: 'ctx:'", async () => {
+    writeFileSync(join(dir, "config.json"), JSON.stringify({}));
+    const cfg = await loadConfig();
+    assert.equal(cfg.labels.labelContextUsage, "ctx:");
+  });
+
   it("array-form statuslineTemplate still works (no preset lookup)", async () => {
     writeFileSync(
       join(dir, "config.json"),

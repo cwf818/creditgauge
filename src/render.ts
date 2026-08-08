@@ -175,6 +175,7 @@ type LabelAxis =
   | "memUsed" | "memTotal" // vX.X.X+ — m_memUsed / m_memTotal label axis
   | "hitRate"   // v0.8.22+ — lifted out of hardcoded literal
   | "contextSize" | "contextWindowSize" | "contextUsedPercent" | "contextRemainingPercent" // v0.8.23+
+  | "contextUsage" // vX.X.X+ — m_contextUsage two-tone x/y prefix ("ctx:")
   | "startTime" | "endTime" // v0.8.24+ — start/end of the tick statistics window
   | "quota"   // v0.9.0+ — quota module prefix ("quota(5h):123/500")
   | "cost"    // vX.X.X+ — token cost module prefix ("cost:$0.0123")
@@ -212,6 +213,7 @@ function labelFor(axis: LabelAxis): string {
     case "contextWindowSize": return labels.labelContextWindowSize;
     case "contextUsedPercent": return labels.labelContextUsedPercent;
     case "contextRemainingPercent": return labels.labelContextRemainingPercent;
+    case "contextUsage": return labels.labelContextUsage;
     // v0.8.24+ — start/end of the tick statistics window.
     // m_accStartTime / m_sumStartTime use labelStartTime;
     // m_sumEndTime uses labelEndTime. Defaults "start:" / "end:"
@@ -1977,6 +1979,38 @@ function renderMemUsageBody(
   return `${prefixSpan}${usedColor}${usedStr}${RESET}/${wrap(totalStr)}`;
 }
 
+// vX.X.X+ — build the m_contextUsage body as a two-tone string,
+// mirroring renderMemUsageBody but for context-window tokens. With
+// the user's |color|<c>, the whole "<prefix><used>/<total>" line is
+// wrapped in that color (override always wins, same contract as
+// wrapPlainDefault). With NO color, the used chunk (left of "/")
+// gets band color via colorFor(pct, "used") — thresholds.percentBands
+// (default [60,70,80,90]) — and prefix and total keep the module's
+// DEFAULT_COLORS entry (blue); the "/" is a plain separator between
+// the band-colored used chunk and the blue total. mode is pinned to
+// "used" because an occupancy x/y display has no used/remaining
+// semantics: the danger axis is always "how much context is spent",
+// so the color always indexes by usedPct (mirrors m_memUsage).
+// NOTE: the pct "else 0" and wrap ": s" fallbacks are unreachable —
+// callers pre-filter total <= 0 and the blue default is always
+// truthy; kept for diff-parity with renderMemUsageBody.
+function renderContextUsageBody(
+  prefix: string,
+  used: number,
+  total: number,
+  paramsColor: string | undefined,
+): string {
+  const usedStr = formatCompactToken(used);
+  const totalStr = formatCompactToken(total);
+  if (paramsColor) return `${paramsColor}${prefix}${usedStr}/${totalStr}${RESET}`;
+  const pct = total > 0 ? (used / total) * 100 : 0;
+  const usedColor = colorFor(pct, "used");
+  const restColor = DEFAULT_COLORS.m_contextUsage;
+  const wrap = (s: string) => (restColor ? `${restColor}${s}${RESET}` : s);
+  const prefixSpan = prefix ? wrap(prefix) : "";
+  return `${prefixSpan}${usedColor}${usedStr}${RESET}/${wrap(totalStr)}`;
+}
+
 const MODULES: Record<string, Module> = {
   // v0.4.x — body routes on ctx.providerType. providerType === "balance"
   // gets the dedicated Balance label; providerType === "quota" or
@@ -3296,6 +3330,21 @@ m_quota: Object.assign(
       undefined,
     );
   },
+  // vX.X.X+ — context-window usage x/y (used/capacity). Data source
+  // mirrors m_contextSize (used = totals.tokenTotalIn) and
+  // m_contextWindowSize (capacity = contextWindow.contextWindowSize),
+  // formatted with formatCompactToken on both sides. The two-tone
+  // body (band-colored used chunk + blue prefix/total) is built by
+  // renderContextUsageBody. value=0 renders as "0" (value-zero rule);
+  // missing used/capacity → "ctx:n/a" placeholder.
+  m_contextUsage: (c) => {
+    // vX.X.X+ — |valueOnly|true drops the "ctx:" prefix.
+    const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("contextUsage");
+    const used = c.tokens?.totals?.tokenTotalIn;
+    const total = c.tokens?.contextWindow?.contextWindowSize;
+    if (used == null || total == null || total <= 0) return placeholderBare("m_contextUsage", c);
+    return renderContextUsageBody(prefix, used, total, undefined);
+  },
 };
 
 // Cap unknown-module warnings to once per process so a template typo
@@ -4051,6 +4100,10 @@ const DEFAULT_COLORS: Record<string, string> = {
   m_memUsage: NAMED_PALETTE.cyan,
   m_memUsed: NAMED_PALETTE.cyan,
   m_memTotal: NAMED_PALETTE.cyan,
+  // vX.X.X+ — m_contextUsage. Blue rest color (prefix + total). The
+  // used chunk is band-colored internally by renderContextUsageBody
+  // (colorFor(pct, "used")), so this entry only tints the rest.
+  m_contextUsage: NAMED_PALETTE.blue,
   // v0.8.36+ — m_windowMemUsage. Moot for the value tint (the
   // renderer uses colorFor(pct, "used") not wrapPlainDefault),
   // but kept so the dispatcher doesn't warn on bare-form paths
@@ -4584,7 +4637,7 @@ const ABS_PARAM = {
 
 // vX.X.X+ — boolean toggle that strips the leading label prefix
 // from the rendered body. Applies to every label-using m_* module
-// (~38 modules: the per-turn / m_acc* / m_sum* / m_memUsage
+// (~39 modules: the per-turn / m_acc* / m_sum* / m_memUsage
 // families). Default `false` so v0.8.x renders stay
 // byte-identical after upgrade. When `true`, the leading
 // `labelFor(axis)` prefix is dropped from BOTH the live render
@@ -4968,6 +5021,9 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   m_memUsage: placeholderLabelOr("memUsage"),
   m_memUsed: placeholderLabelOr("memUsed"),
   m_memTotal: placeholderLabelOr("memTotal"),
+  // vX.X.X+ — m_contextUsage placeholder. "ctx:n/a" (prefix dropped
+  // when |valueOnly|true is set). Mirrors m_memUsage's shape.
+  m_contextUsage: placeholderLabelOr("contextUsage"),
   // v0.8.36+ — m_windowMemUsage placeholder mirrors m_windowContext:
   // a gray gauge (filled-bar "100%" in remaining mode, empty-bar
   // "0%" in used mode). Color is STALE_COLOR.
@@ -5658,6 +5714,10 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // m_memUsage: color + nulldrop + valueOnly.
   m_memUsed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_memTotal: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
+  // vX.X.X+ — m_contextUsage inline-args. Same shape as m_memUsage:
+  // color + nulldrop + valueOnly. |color|<c> overrides the whole
+  // two-tone body; with no color, used chunk band-colored + rest blue.
+  m_contextUsage: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   // v0.8.36+ — m_windowMemUsage inline-args. Same shape as
   // m_windowContext: color + display + nulldrop. |color|<c>
   // overrides the 5-band percentBands color; |display|<used|
@@ -7086,6 +7146,16 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const prefix = params.valueOnly === "true" ? "" : labelFor("memUsage");
     return renderMemUsageBody(prefix, m.used, m.total, params.color as string | undefined);
   },
+  // vX.X.X+ — context-window usage inline form. Mirror of the bare
+  // MODULES entry but with the user's |color|<c> override applied
+  // before the default tint (override always wins).
+  m_contextUsage: (params, ctx) => {
+    const used = ctx.tokens?.totals?.tokenTotalIn;
+    const total = ctx.tokens?.contextWindow?.contextWindowSize;
+    if (used == null || total == null || total <= 0) return placeholderWithColor("m_contextUsage", params, ctx);
+    const prefix = params.valueOnly === "true" ? "" : labelFor("contextUsage");
+    return renderContextUsageBody(prefix, used, total, params.color as string | undefined);
+  },
   // vX.X.X+ — system RAM used bytes inline form. Mirrors the bare
   // MODULES entry but with the user's |color|<c> override.
   m_memUsed: (params, ctx) => {
@@ -7716,6 +7786,9 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       } else if (tok.startsWith("m_memUsed|")) {
         // m_memUsed → 9 chars + "|" = 10 skipLen.
         inline = expandInlineToken(tok, "m_memUsed", 10, ctx);
+      } else if (tok.startsWith("m_contextUsage|")) {
+        // m_contextUsage → 14 chars + "|" = 15 skipLen.
+        inline = expandInlineToken(tok, "m_contextUsage", 15, ctx);
       } else if (tok.startsWith("m_memTotal|")) {
         // m_memTotal → 10 chars + "|" = 11 skipLen.
         inline = expandInlineToken(tok, "m_memTotal", 11, ctx);
