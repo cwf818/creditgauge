@@ -120,25 +120,31 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
   });
 
   it('"compact" resolves to the compact preset body', async () => {
-    // Lock the current compact body shape: 6 lines — 📜 header (context
-    // + ▦ memory + version), ⚡ tickline-slim + provider/model suffix,
-    // session acc + ⏱️/🪙 (🗪), project acc + git_info (📦), quota/
-    // balance dispatch (⚖️), quote (~). No information / tick_eval /
-    // combline* / per-window stat fragments (those belong to `standard`
-    // / `abundant`). If a future refactor re-points `compact` at a
+    // Lock the current compact body shape: 6 lines — 💳 provider/model
+    // bracket → 📜 context (used + size/capacity) + ▦ memory, ⚡
+    // tickline-slim (+ m_tokenTotalIn + m_session tail), session acc +
+    // ⏱️/🪙 (🗪), project acc + git_info (📦), quota/balance dispatch
+    // (⚖️), quote (~). No information / tick_eval / combline* /
+    // per-window stat fragments (those belong to `standard` /
+    // `abundant`). If a future refactor re-points `compact` at a
     // different layout, this test breaks loudly so we don't silently
     // swap a 1-line `simple` body into a 6-line slot or vice-versa.
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "compact" }));
     const cfg = await loadConfig();
-    // L1 opens the 📜 context header (no provider/model bracket).
-    assert.equal(cfg.statuslineTemplate[0], "m_label|📜: |color:yellow");
+    // L1 opens the 💳 provider/model bracket (no m_version anymore).
+    assert.equal(cfg.statuslineTemplate[0], "m_label|💳: |color:blue");
     assert.ok(cfg.statuslineTemplate.includes("m_contextWindowSize|valueOnly:true"));
+    assert.ok(cfg.statuslineTemplate.includes("m_contextSize|valueOnly:true"));
     assert.ok(cfg.statuslineTemplate.includes("m_memUsage|valueOnly:true"));
-    assert.ok(cfg.statuslineTemplate.includes("m_version"));
-    // L2 tick diagnostics via the slim fragment + provider/model suffix.
+    // L2 tick diagnostics via the slim fragment + session tail.
     assert.ok(cfg.statuslineTemplate.includes("m_template|tickline-slim"));
     assert.ok(cfg.statuslineTemplate.includes("m_provider"));
     assert.ok(cfg.statuslineTemplate.includes("m_model"));
+    // The slim fragment itself carries m_tokenTotalIn + the m_session tail.
+    const slim = DEFAULT_LINE_TEMPLATES["tickline-slim"];
+    assert.ok(slim.includes("m_tokenTotalIn"));
+    assert.ok(slim.includes("m_session"));
+    assert.ok(!cfg.statuslineTemplate.includes("m_version"), "compact no longer shows m_version");
     // L3 session acc (scope:session) + api/cost tail.
     assert.ok(cfg.statuslineTemplate.includes("m_accTokenOutSpeed|scope:session"));
     assert.ok(cfg.statuslineTemplate.includes("m_accTokenTotalIn|scope:session"));

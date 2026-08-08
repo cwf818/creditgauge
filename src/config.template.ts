@@ -403,7 +403,11 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "s_space",
     "m_tokenCachedIn",
     "s_space",
-    "m_apiMs"
+    "m_tokenTotalIn",
+    "s_space",
+    "m_apiMs",
+    "s_pipe|wrap:true",
+    "m_session"
   ],
   "combline1-slim": [
     "m_label|🗪 : |color:orange",
@@ -514,24 +518,23 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   ],
   // multi-line: context-info / tick-eval / stat-eval stacked.
   compact: [
-    "m_label|📜: |color:yellow",
-    "m_windowContext|display:used",
-    "s_space",
-    "m_contextWindowSize|valueOnly:true",
-    "s_pipe|wrap:true",
-    "m_label|▦: |color:yellow",
-    "m_windowMemUsage|display:used",
-    "s_space",
-    "m_memUsage|valueOnly:true",
-    "s_pipe|wrap:true",
-    "m_version",
-    "s_newline",
-
-    "m_template|tickline-slim",
-    "s_pipe|wrap:true",
+    "m_label|💳: |color:blue",
     "m_provider",
     "/",
     "m_model",
+    "s_pipe|wrap:true",
+    "m_label|📜: |color:yellow",
+    "m_windowContext|display:used",
+    "s_space",
+    "m_contextSize|valueOnly:true",
+    "/",
+    "m_contextWindowSize|valueOnly:true",
+    "s_pipe|wrap:true",
+    "m_label|▦: |color:yellow",
+    "m_memUsage|valueOnly:true",
+    "s_newline",
+
+    "m_template|tickline-slim",
     "s_newline",
 
     "m_label|🗪 : |color:orange",
