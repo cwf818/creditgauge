@@ -2033,7 +2033,7 @@ describe("lineTemplate — inline-args regression / round-trip", () => {
     // The redesigned default quota template renders THREE windows
     // (5h / 7d / 30d) joined by ` · `; the valueOnly countdowns drop
     // when there's no reset time (so no label appears), and the 30d
-    // window renders its "--:(30d)" placeholder tail. No `m_age` in
+    // window renders its "--·30d" placeholder tail. No `m_age` in
     // the template anymore.
     const line = renderProviderLine("minimax", {
       mode: "used", nowMs: Date.now(),
@@ -2041,8 +2041,8 @@ describe("lineTemplate — inline-args regression / round-trip", () => {
       midInterval: { windowId: "7d", label: "7d", startAt: null, endAt: null, intervalMs: null, usedPercent: 60, remainingPercent: 100 - 60, remainingQuota: null, usedQuota: null, limitQuota: null },
       ageMs: null, stale: false, version: "",
     });
-    // Default template renders "Usage: ▓░░░ 38% · ▓░░░ 60% · ░░░░░░░░ 0% --:(30d)".
-    assert.match(strip(line), /^Usage: ▓+░+ 38% · ▓+░+ 60% · ░+ 0% --:\(30d\)$/);
+    // Default template renders "Usage: ▓░░░ 38% · ▓░░░ 60% · ░░░░░░░░ 0% --·30d".
+    assert.match(strip(line), /^Usage: ▓+░+ 38% · ▓+░+ 60% · ░+ 0% --·30d$/);
   });
 
   it("compose() round-trip preserves an inline-colored chunk without bleeding upstream", () => {
@@ -2113,7 +2113,7 @@ describe("m_template — legacy lineTemplate warns once and is ignored (v0.4.0 h
       assert.deepEqual(cfg.statuslineTemplate, ["m_template|quota|type:quota", "m_template|balance|type:balance"]);
       // Render through the minimax path — output should reflect the
       // REDESIGNED default quota fragment: THREE windows (5h / 7d / 30d)
-      // joined by ` · `, with the 30d placeholder tail --:(30d). NOT the
+      // joined by ` · `, with the 30d placeholder tail --·30d. NOT the
       // legacy single-window plan array (which had only m_windowQuota|term:short).
       const line = renderProviderLine("minimax", {
         mode: "used",
@@ -2126,7 +2126,7 @@ describe("m_template — legacy lineTemplate warns once and is ignored (v0.4.0 h
       });
       const clean = strip(line);
       assert.ok(clean.includes(" · "), `got: ${clean}`);
-      assert.ok(clean.includes("--:(30d)"), `got: ${clean}`);
+      assert.ok(clean.includes("--·30d"), `got: ${clean}`);
       // The valueOnly countdowns drop the window labels entirely, so
       // the legacy single-window plan array's "5h" label must NOT appear.
       assert.ok(!clean.includes("5h"), `legacy plan array must NOT be used, got: ${clean}`);

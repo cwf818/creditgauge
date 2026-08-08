@@ -481,7 +481,7 @@ Every module the renderer recognizes. **Type filter** tells you which provider T
 | ------ | ----------------------- | ------------ | ----------- | ----------- |
 | `m_modeLabel` | `Usage:` / `Remain:` / `Balance:`. | derived from `providerType` + global `display` | agnostic | `color`, `nulldrop` |
 | `m_windowQuota\|term:short\|mid\|long` (default `term=short`) | Bar + colored % of the chosen interval, e.g. `▓░░░░░░░ 9%`. | canonical `Interval.{usedPercent,remainingPercent,startAt,endAt}` | plan | `color`, `display`, `term`, `nulldrop` |
-| `m_countdown\|term:<key>` (default `term=short`) | `(4h47m🕔 5h)` reset countdown with fill-state arrow. `term` is the intervals dict key (`short` / `mid` / `long` or any plugin-declared key like `monthly`). | canonical `Interval.{startAt,endAt,intervalMs}` | plan | `color`, `term`, `nulldrop` |
+| `m_countdown\|term:<key>` (default `term=short`) | `🕔4h47m·5h` reset countdown with fill-state arrow (`\|valueOnly:true` → `🕔4h47m`, no `·` label). `term` is the intervals dict key (`short` / `mid` / `long` or any plugin-declared key like `monthly`). | canonical `Interval.{startAt,endAt,intervalMs}` | plan | `color`, `term`, `valueOnly`, `nulldrop` |
 | `m_quota\|term:<key>` (default `term=short`) | Quota display, e.g. `quota(5h):100/500`. `term` accepts any intervals dict key. | canonical `Interval.{usedQuota,limitQuota}` | plan | `color`, `term`, `nulldrop` |
 | `m_balance` | `CNY 110.00 · USD 5.00`. | `balance.entries[]` | balance | `color`, `nulldrop` |
 | `m_age` | `🔗 5m ago` (fresh) / `⛓️‍💥 5m ago` (stale). | `ageMs`, `stale` | agnostic | `color`, `nulldrop` |

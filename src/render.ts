@@ -815,8 +815,8 @@ function isStaleAndPastDue(w: Window, stale: boolean, nowMs: number): boolean {
   return t <= nowMs;
 }
 
-// Build the `(n/a<arrow> <label>)` body that replaces the regular
-// past-due "(0m<arrow> <label>)" body when ctx.stale AND resetAt
+// Build the `<arrow>n/a·<label>` body that replaces the regular
+// past-due "<arrow>0m·<label>" body when ctx.stale AND resetAt
 // is in the past. The arrow still comes from pickResetArrow so the
 // user sees the same fill-state glyph they would have seen for
 // that elapsed ratio — index 0 when ratio ≤ 0 (matches the
@@ -828,7 +828,7 @@ function formatStalePastDueResetSuffix(
   nowMs: number,
 ): string {
   const arrow = pickResetArrow(nowMs, w.resetStartAt, w.resetDurationMs);
-  return `(n/a${arrow} ${windowLabel})`;
+  return `${arrow}n/a·${windowLabel}`;
 }
 function formatOneResetSuffix(
   windowLabel: string,
@@ -836,29 +836,29 @@ function formatOneResetSuffix(
   nowMs: number = Date.now(),
 ): string {
   if (!windowLabel) return "";
-  // Two pieces: the countdown (e.g. "2h3m") and the arrow (e.g. "🕛").
+  // Two pieces: the arrow (e.g. "🕛") and the countdown (e.g. "2h3m").
   // Both are derived from the same Window + nowMs; the arrow is the
   // single thing we always have even when the countdown is empty
   // (e.g. "<1m" or just the arrow alone if resetAt is present but
   // remaining is 0). Template:
-  //   resetAt present → "(<countdown><arrow> <windowLabel>)"
+  //   resetAt present → "<arrow><countdown>·<windowLabel>"
   //   resetAt missing  → "<windowLabel>" (DeepSeek / legacy — no
   //   reset info at all, don't fake it with a default arrow)
   const resetSuffix = formatResetSuffix(w.resetAt, nowMs);
   const arrow = pickResetArrow(nowMs, w.resetStartAt, w.resetDurationMs);
   return w.resetAt
-    ? `(${resetSuffix}${arrow} ${windowLabel})`
+    ? `${arrow}${resetSuffix}·${windowLabel}`
     : windowLabel;
 }
 
-// vX.X.X+ — |valueOnly|true variant: returns just the countdown +
-// arrow (e.g. "25d20h🕑") without wrapping parentheses and window
-// label. Returns "" when no reset time is available (DeepSeek /
-// legacy — nothing to show in value-only mode).
+// vX.X.X+ — |valueOnly|true variant: returns just the arrow +
+// countdown (e.g. "🕑25d20h") without the `·` window label.
+// Returns "" when no reset time is available (DeepSeek / legacy —
+// nothing to show in value-only mode).
 function formatCountdownValueOnly(w: Window, nowMs: number): string {
   const resetSuffix = formatResetSuffix(w.resetAt, nowMs);
   const arrow = pickResetArrow(nowMs, w.resetStartAt, w.resetDurationMs);
-  return w.resetAt ? `${resetSuffix}${arrow}` : "";
+  return w.resetAt ? `${arrow}${resetSuffix}` : "";
 }
 
 // Compact "remaining time until reset" formatter. Returns the countdown
@@ -2047,8 +2047,8 @@ m_windowQuota: Object.assign(
   // label is read from the live `Interval.label` rather than being
   // hard-coded — so a user with `intervals.shortInterval.label =
   // "5h🕐"` sees their custom label in the placeholder too. The
-  // stale+past-due branch reads the same label so the "(n/a<arrow>
-  // <label>)" body stays in sync with the active renderer.
+  // stale+past-due branch reads the same label so the
+  // "<arrow>n/a·<label>" body stays in sync with the active renderer.
 m_countdown: Object.assign(
   ((c: RenderContext) => {
     const iv = (c.intervals ?? {})["short"] ?? null;
@@ -4803,9 +4803,9 @@ function termFallbackLabel(term: string): string {
 // Standard per-term + per-interval label resolver used by the
 // m_countdown placeholder. `wrap` receives the resolved term-label
 // (e.g. "5h" / "7d" / "30d"); the caller shapes the body uniformly
-// across terms. The vX.X.X+ convention is dashes-left,
-// label-bracketed-right:
-//   - m_countdown        → "--:(<label>)"
+// across terms. The vX.X.X+ convention is dashes-left, label after a
+// "·":
+//   - m_countdown        → "--·<label>"
 function placeholderTermLabel(
   params: Record<string, ResolvedValue>,
   ctx: RenderContext,
@@ -5080,10 +5080,11 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   m_age: placeholderNA("age:"),
   m_version: placeholderNA("v:"),
   m_countdown: placeholderDashesUnitFn((p, c) =>
-    // Per-term shape — uniform dashes-left, label-right:
-    //   short / mid / long → "--:(<label>)"
-    //     e.g. "--:(5h)", "--:(7d)", "--:(30d)"
-    placeholderTermLabel(p, c, (label) => `--:(${label})`),
+    // Per-term shape — uniform dashes-left, label-right (matches the
+    // live "<arrow><countdown>·<label>" but with no arrow and dashes):
+    //   short / mid / long → "--·<label>"
+    //     e.g. "--·5h", "--·7d", "--·30d"
+    placeholderTermLabel(p, c, (label) => `--·${label}`),
   ),
   m_balance: placeholderNA("balance:"),
   m_quota: placeholderQuota,
@@ -6236,11 +6237,11 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_countdown: (params, ctx) => {
     // v0.9.0+ — replaces v0.5.0–v0.8.x `m_countdown5h` +
     // `m_countdown7d`. Same `term` arg as `m_windowQuota` (open
-    // dict in v0.9.4+). The label printed in `(n/a<arrow> <label>)`
-    // and `(4h47m🕔 <label>)` is read from the live `Interval.label`
-    // (no more hard-coded "5h" / "7d" strings).
-    // vX.X.X+ — |valueOnly|true strips the parens and window label,
-    // showing just the countdown + arrow (e.g. "25d20h🕑").
+    // dict in v0.9.4+). The label printed in `<arrow>n/a·<label>`
+    // and `<arrow>4h47m·<label>` is read from the live
+    // `Interval.label` (no more hard-coded "5h" / "7d" strings).
+    // vX.X.X+ — |valueOnly|true strips the `·` window label,
+    // showing just the arrow + countdown (e.g. "🕑25d20h").
     const term = (params.term as string | undefined) ?? "short";
     const iv = intervalForTerm(term, ctx);
     if (!iv) return placeholderWithColor("m_countdown", params, ctx);
@@ -6252,7 +6253,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
       const color = userColor ?? STALE_COLOR;
       if (valueOnly) {
         const arrow = pickResetArrow(ctx.nowMs, w.resetStartAt, w.resetDurationMs);
-        return `${color}n/a${arrow}${RESET}`;
+        return `${color}${arrow}n/a${RESET}`;
       }
       const body = formatStalePastDueResetSuffix(iv.label, w, ctx.nowMs);
       return `${color}${body}${RESET}`;

@@ -389,7 +389,7 @@ describe("renderQuotaLine — mode='used' (default)", () => {
       `got: ${line}`);
     // No resetAt → the valueOnly countdown drops (no arrow / label /
     // parens). The three windows are still joined by ' · ' (the only
-    // parens in the line are the 30d placeholder's "--:(30d)" tail).
+    // parens in the line are the 30d placeholder's "--·30d" tail).
     const cleanR = strip(line);
     assert.ok(cleanR.includes(" · "), `got: ${cleanR}`);
     assert.ok(!cleanR.includes("🕛"), `got: ${cleanR}`);
@@ -425,7 +425,7 @@ describe("renderQuotaLine — mode='used'", () => {
       `got: ${line}`);
     // No resetAt → the valueOnly countdown drops (no arrow / label /
     // parens). The three windows are still joined by ' · ' (the only
-    // parens in the line are the 30d placeholder's "--:(30d)" tail).
+    // parens in the line are the 30d placeholder's "--·30d" tail).
     const cleanU = strip(line);
     assert.ok(cleanU.includes(" · "), `got: ${cleanU}`);
     assert.ok(!cleanU.includes("🕛"), `got: ${cleanU}`);
@@ -433,7 +433,7 @@ describe("renderQuotaLine — mode='used'", () => {
     assert.ok(!cleanU.includes("7d"), `valueOnly countdown drops the window label, got: ${cleanU}`);
   });
 
-  it("full layout matches spec: 'Usage: <bar> <pct>% <countdown><arrow> · …'", () => {
+  it("full layout matches spec: 'Usage: <bar> <pct>% <arrow><countdown> · …'", () => {
     const now = Date.parse("2026-06-24T12:00:00Z");
     const line = renderQuotaLine(
       legacyToIv({ pct: 62, resetAt: "2026-06-24T12:38:00Z" }),
@@ -443,25 +443,25 @@ describe("renderQuotaLine — mode='used'", () => {
       now
     );
     // 5h: used=62 → 5 colored ▓ (LEFT) + 3 plain ░ (RIGHT), DARK_GREEN.
-    // Redesigned template: the countdown is valueOnly (no parens /
-    // label) and the " · " between windows is a self-padding s_dot.
+    // Redesigned template: the countdown is valueOnly (`<arrow><countdown>`,
+    // no `·` label) and the " · " between windows is a self-padding s_dot.
     const clean = strip(line);
     assert.ok(
-      clean.includes(`▓▓▓▓▓░░░ 62% 38m🕛`),
+      clean.includes(`▓▓▓▓▓░░░ 62% 🕛38m`),
       `got: ${clean}`
     );
     // 7d (was wk): used=42 → 3 colored ▓ (LEFT) + 5 plain ░ (RIGHT), BRIGHT_GREEN.
     assert.ok(
-      clean.includes(`▓▓▓░░░░░ 42% 4d16h🕛`),
+      clean.includes(`▓▓▓░░░░░ 42% 🕛4d16h`),
       `got: ${clean}`
     );
     // Mode label once at the front, ' · ' between windows, and the
     // third (30d) window renders its placeholder countdown.
     assert.ok(clean.startsWith("Usage: "), `got: ${clean}`);
     assert.ok(clean.includes(" · "));
-    assert.ok(clean.includes("--:(30d)"), `got: ${clean}`);
-    // The valueOnly countdown renders the arrow right after the
-    // countdown — no "(... 🕛 5h)" parens wrapper.
+    assert.ok(clean.includes("--·30d"), `got: ${clean}`);
+    // The valueOnly countdown renders the arrow first, tight against
+    // the countdown — no "(... 🕛 5h)" parens wrapper.
     assert.ok(!clean.includes("🕛 5h"), `got: ${clean}`);
     assert.ok(!clean.includes("🕛 7d"), `got: ${clean}`);
   });
@@ -480,19 +480,19 @@ describe("renderQuotaLine — reset suffix integration", () => {
       "remaining",
       now
     );
-    // The redesigned countdown is valueOnly: `<countdown><arrow>` with
-    // no parens and no window label.
-    assert.ok(line.includes("2h3m🕛"), `got: ${line}`);
-    assert.ok(line.includes("3d5h🕛"), `got: ${line}`);
+    // The redesigned countdown is valueOnly: `<arrow><countdown>` with
+    // no `·` window label and no parens.
+    assert.ok(line.includes("🕛2h3m"), `got: ${line}`);
+    assert.ok(line.includes("🕛3d5h"), `got: ${line}`);
   });
 
   it("no resetAt → countdowns drop (no arrow, no label, no parens)", () => {
     const line = renderQuotaLine(legacyToIv({ pct: 30 }), legacyToIv({ pct: 40 }, "7d"));
     const clean = strip(line);
     assert.ok(!clean.includes("🕛"), `got: ${clean}`);
-    // valueOnly countdowns never emit the window label (no parens-form
-    // "(<countdown><arrow> <label>)" either — the only parens in the
-    // line come from the 30d placeholder "--:(30d)").
+    // valueOnly countdowns never emit the window label (no
+    // "<arrow><countdown>·<label>" full-form either — the only `·`
+    // in the line comes from the 30d placeholder "--·30d").
     assert.ok(!clean.includes("5h"), `got: ${clean}`);
     assert.ok(!clean.includes("7d"), `got: ${clean}`);
     // The three windows are still joined by ' · '.
@@ -511,7 +511,7 @@ describe("renderQuotaLine — reset suffix integration", () => {
     );
     assert.ok(line.includes("<1m"), `got: ${line}`);
     // The arrow survives the "<1m" fallback even without parens.
-    assert.ok(line.includes("<1m🕛"), `got: ${line}`);
+    assert.ok(line.includes("🕛<1m"), `got: ${line}`);
   });
 });
 
@@ -1178,12 +1178,12 @@ describe("m_window5h/7d — stale coloring (v0.6.0+)", () => {
   });
 });
 
-describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STALE_COLOR (v0.7.x)", () => {
+describe("m_countdown5h/7d — stale AND past-due renders '<arrow>n/a·5h' in STALE_COLOR (v0.7.x)", () => {
   // The countdown module is the only one that swaps its body on
   // the stale+past-due combination. The trigger is AND-combined:
-  //   - stale=true, future reset   → "(Xm🕒 5h)" default teal
-  //   - stale=false, past-due      → "(0m🕒 5h)" default teal
-  //   - stale=true, past-due       → "(n/a🕒 5h)" STALE_COLOR (this block)
+  //   - stale=true, future reset   → "<arrow>Xm·5h" default teal
+  //   - stale=false, past-due      → "<arrow>0m·5h" default teal
+  //   - stale=true, past-due       → "<arrow>n/a·5h" STALE_COLOR (this block)
   //
   // The body swap uses the n/a placeholder instead of "0m" so the
   // user can distinguish "cached value already expired" from a
@@ -1192,7 +1192,7 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
   // Default teal used by wrapPlainDefault for m_countdown5h/7d.
   const TEAL_DEFAULT = "\x1b[38;5;80m";
 
-  it("bare m_countdown5h emits '(n/a🕒 5h)' in STALE_COLOR when stale=true AND resetAt is past-due", () => {
+  it("bare m_countdown5h emits '<arrow>n/a·5h' in STALE_COLOR when stale=true AND resetAt is past-due", () => {
     const nowMs = Date.parse("2026-06-24T12:00:00Z");
     __resetForTest({
       statuslineTemplate: ["m_countdown|term:short"],
@@ -1208,7 +1208,7 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
       const clean = strip(line);
       // Body should be the n/a form, NOT "0m".
       assert.ok(
-        clean.includes("(n/a"),
+        clean.includes("n/a·5h"),
         `stale+past-due should emit n/a body: ${clean}`,
       );
       assert.ok(
@@ -1216,12 +1216,12 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
         `stale+past-due should NOT include 0m: ${clean}`,
       );
       assert.ok(
-        clean.includes("5h)"),
-        `body should still close with the window label: ${clean}`,
+        clean.includes("·5h"),
+        `body should still carry the window label: ${clean}`,
       );
       // Color: STALE_COLOR wraps the whole block.
       assert.ok(
-        line.includes(`${STALE_COLOR}(n/a`),
+        line.includes(`${STALE_COLOR}🕛n/a`),
         `stale+past-due body should start with STALE_COLOR: ${line}`,
       );
       assert.ok(
@@ -1233,7 +1233,7 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
     }
   });
 
-  it("bare m_countdown5h keeps '(0m🕒 5h)' default teal when stale=false (fresh tick, past-due)", () => {
+  it("bare m_countdown5h keeps '<arrow>0m·5h' default teal when stale=false (fresh tick, past-due)", () => {
     // The fresh-but-past-due case is a separate state — the next
     // tick will roll the countdown forward, so we don't gray it.
     const nowMs = Date.parse("2026-06-24T12:00:00Z");
@@ -1250,7 +1250,7 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
       });
       const clean = strip(line);
       assert.ok(
-        clean.includes("(0m"),
+        clean.includes("0m·5h"),
         `fresh past-due should still emit 0m body: ${clean}`,
       );
       assert.ok(
@@ -1283,7 +1283,7 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
       });
       const clean = strip(line);
       assert.ok(
-        clean.includes("(30m"),
+        clean.includes("30m·5h"),
         `stale-but-future should keep its real countdown: ${clean}`,
       );
       assert.ok(
@@ -1311,11 +1311,11 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
       });
       const clean = strip(line);
       assert.ok(
-        clean.includes("(n/a"),
+        clean.includes("n/a·7d"),
         `stale+past-due 7d should emit n/a body: ${clean}`,
       );
       assert.ok(
-        line.includes(`${STALE_COLOR}(n/a`),
+        line.includes(`${STALE_COLOR}🕛n/a`),
         `stale+past-due 7d should wrap in STALE_COLOR: ${line}`,
       );
     } finally {
@@ -1341,11 +1341,11 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
       });
       const clean = strip(line);
       assert.ok(
-        clean.includes("(n/a"),
+        clean.includes("n/a·5h"),
         `explicit :color: should still swap body to n/a: ${clean}`,
       );
       assert.ok(
-        line.includes(`${RED}(n/a`),
+        line.includes(`${RED}🕛n/a`),
         `explicit :color: should override STALE_COLOR on the wrap: ${line}`,
       );
       assert.ok(
@@ -1383,7 +1383,7 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
         `window percent should still render: ${clean}`,
       );
       assert.ok(
-        clean.includes("(n/a"),
+        clean.includes("n/a·5h"),
         `countdown should still render n/a: ${clean}`,
       );
     } finally {
@@ -1396,8 +1396,8 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
 // AND uniformly dashes-left across all terms. The pre-vX.X.X
 // shape mixed directions: short / mid rendered "<label>:--" but
 // long rendered "--:<label>". vX.X.X unifies all terms on the
-// dashes-left convention with the label bracketed on the right:
-//   - m_countdown        → "--:(<label>)"
+// dashes-left convention with the label after a "·":
+//   - m_countdown        → "--·<label>"
 //   - m_quota            → "quota: n/a"
 // Baked-in fallback labels (term:short → "5h", term:mid → "7d",
 // term:long → "30d") resolve the same way as the live renderer
@@ -1406,9 +1406,9 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
 describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
   const nowMs = Date.parse("2026-06-24T12:00:00Z");
 
-  it("m_countdown|term|mid placeholder reads '--:(7d)' when midInterval is null", () => {
+  it("m_countdown|term|mid placeholder reads '--·7d' when midInterval is null", () => {
     // No mid-interval at all → placeholder falls back to the
-    // built-in "7d" label rendered as "--:(7d)" (dashes left,
+    // built-in "7d" label rendered as "--·7d" (dashes left,
     // label bracketed right), the same shape as
     // term=short / term=long. The legacy "<label>:--" form for
     // short/mid is GONE — every term now uses the dashes-left
@@ -1427,8 +1427,8 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
       });
       const clean = strip(line);
       assert.ok(
-        clean.includes("--:(7d)"),
-        `placeholder should use --:(7d) fallback for term=mid, got: ${clean}`,
+        clean.includes("--·7d"),
+        `placeholder should use --·7d fallback for term=mid, got: ${clean}`,
       );
       assert.ok(
         !clean.includes("5h:--") && !clean.includes("7d:--") && !clean.includes("30d:--"),
@@ -1439,8 +1439,8 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
     }
   });
 
-  it("m_countdown|term|long placeholder reads '--:(30d)' when longInterval is null", () => {
-    // Same uniform shape for term=long: "--:(30d)".
+  it("m_countdown|term|long placeholder reads '--·30d' when longInterval is null", () => {
+    // Same uniform shape for term=long: "--·30d".
     __resetForTest({
       statuslineTemplate: ["m_countdown|term:long"],
       timeFormat: { minUnit: "m", maxUnitCount: 2 },
@@ -1455,15 +1455,15 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
       });
       const clean = strip(line);
       assert.ok(
-        clean.includes("--:(30d)"),
-        `placeholder should use --:(30d) fallback for term=long, got: ${clean}`,
+        clean.includes("--·30d"),
+        `placeholder should use --·30d fallback for term=long, got: ${clean}`,
       );
     } finally {
       __resetForTest();
     }
   });
 
-  it("m_countdown|term|short placeholder reads '--:(5h)' when shortInterval is null", () => {
+  it("m_countdown|term|short placeholder reads '--·5h' when shortInterval is null", () => {
     // Sanity-check that term=short ALSO uses the new dashes-left
     // shape (regression guard: short used to be "5h:--").
     __resetForTest({
@@ -1480,8 +1480,8 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
       });
       const clean = strip(line);
       assert.ok(
-        clean.includes("--:(5h)"),
-        `placeholder should use --:(5h) fallback for term=short, got: ${clean}`,
+        clean.includes("--·5h"),
+        `placeholder should use --·5h fallback for term=short, got: ${clean}`,
       );
       assert.ok(
         !clean.includes("5h:--"),
@@ -1518,9 +1518,9 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
         !clean.includes("quota:(5h):--") &&
         !clean.includes("quota:(7d):--") &&
         !clean.includes("quota:(30d):--") &&
-        !clean.includes("quota:--:(5h)") &&
-        !clean.includes("quota:--:(7d)") &&
-        !clean.includes("quota:--:(30d)"),
+        !clean.includes("quota:--·5h") &&
+        !clean.includes("quota:--·7d") &&
+        !clean.includes("quota:--·30d"),
         `legacy "quota:(<label>):--" / "quota:--:(<label>)" shapes must NOT leak, got: ${clean}`,
       );
     } finally {
@@ -1582,7 +1582,7 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
     }
   });
 
-  it("bare m_countdown placeholder reads '--:(5h)' (term=short default)", () => {
+  it("bare m_countdown placeholder reads '--·5h' (term=short default)", () => {
     // The bare-MODULES path defaults to term=short upstream of
     // the placeholder body, so it now also reads the unified
     // dashes-left shape (regression guard for the bare path —
@@ -1601,8 +1601,8 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
       });
       const clean = strip(line);
       assert.ok(
-        clean.includes("--:(5h)"),
-        `bare m_countdown placeholder must use unified --:(5h) shape, got: ${clean}`,
+        clean.includes("--·5h"),
+        `bare m_countdown placeholder must use unified --·5h shape, got: ${clean}`,
       );
     } finally {
       __resetForTest();

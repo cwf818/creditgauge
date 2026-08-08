@@ -1,6 +1,6 @@
 <pre>
 [upstream statusline lines]
-Usage: ▓▓▓▓░░░░ 40% (1h27m🕗 5h) · ▓▓░░░░░░ 20% (4d3h🕔 7d)    # Quota
+Usage: ▓▓▓▓░░░░ 40% 🕗1h27m·5h · ▓▓░░░░░░ 20% 🕔4d3h·7d    # Quota
 Balance: ¥110.00 · $3.5                                        # Balance
 </pre>
 
@@ -227,12 +227,12 @@ Both endpoints are called with `Authorization: Bearer $ANTHROPIC_AUTH_TOKEN` —
 ### MiniMax token-plan line
 
 <pre>
- Usage: ▓▓▓░░░░░ 38% (47m🕖 5h) · ▓▓▓░░░░░ 39% (4d47m🕓 7d)
-Remain: ░░░▓▓▓▓▓ 62% (47m🕖 5h) · ░░░▓▓▓▓▓ 61% (4d47m🕓 7d)
+ Usage: ▓▓▓░░░░░ 38% 🕖47m·5h · ▓▓▓░░░░░ 39% 🕓4d47m·7d
+Remain: ░░░▓▓▓▓▓ 62% 🕖47m·5h · ░░░▓▓▓▓▓ 61% 🕓4d47m·7d
 </pre>
 
 Two windows (5-hour + weekly), split-bar with colored percentage, reset
-countdown in parentheses, window label after the countdown. The bar
+glyph + countdown, window label after a `·`. The bar
 glyphs flip in remaining mode — both modes read left-to-right as
 "what's spent → what's left":
 
