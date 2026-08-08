@@ -1675,9 +1675,9 @@ describe("lineTemplate — colored modules :color override (user wins)", () => {
       tokens: snap,
     });
     // STALE_COLOR must not appear; red must wrap the speed chunk.
-    // delta_in=100, delta_api=2000 → speed=50 t/s → "in:50.0 t/s"
+    // delta_in=100, delta_api=2000 → speed=50/s → "in:50.0/s"
     assert.ok(!line.includes("\x1b[90m"), `got: ${JSON.stringify(line)}`);
-    assert.ok(line.includes("\x1b[38;5;196min:50.0 t/s"), `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[38;5;196min:50.0/s"), `got: ${JSON.stringify(line)}`);
   });
 
   it("m_tokenHitRate|color:brightGreen replaces the band-based cache color with brightGreen", () => {
@@ -1962,7 +1962,7 @@ describe("lineTemplate — m_*tokenIn/m_*tokenOut default tints (v0.8.30+)", () 
       ageMs: null, stale: false, version: "",
       tokens: snap,
     });
-    // The speed modules emit a colored "<prefix>N.N t/s" body. We
+    // The speed modules emit a colored "<prefix>N.N/s" body. We
     // just assert the result is non-empty and starts with an SGR
     // (i.e. the 5-band scale fired). Exact color is governed by
     // speedScaleColor; we don't pin it here.

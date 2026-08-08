@@ -82,24 +82,24 @@ describe("compose — multi-line planLine (v0.4.0+)", () => {
     // closes it; if compose() just passed it through, the next
     // prompt would inherit the gray. Verify the reset is appended.
     const STALE = "\x1b[90m";
-    const plan = `${STALE}in:272.5 t/s\n${STALE}out:0.3 t/s`;
+    const plan = `${STALE}in:272.5/s\n${STALE}out:0.3/s`;
     const out = compose("upstream", plan);
     // Each line gets a trailing \x1b[0m so the next line / prompt
     // starts unstyled.
     assert.equal(
       out,
-      `upstream\n${STALE}in:272.5 t/s\x1b[0m\n${STALE}out:0.3 t/s\x1b[0m\n`,
+      `upstream\n${STALE}in:272.5/s\x1b[0m\n${STALE}out:0.3/s\x1b[0m\n`,
     );
   });
 
   it("does not double-close lines that already end with RESET", () => {
     const STALE = "\x1b[90m";
     const RESET = "\x1b[0m";
-    const plan = `${STALE}in:272.5 t/s${RESET}\nout:0.3 t/s`;
+    const plan = `${STALE}in:272.5/s${RESET}\nout:0.3/s`;
     const out = compose("upstream", plan);
     // First line already closes itself; second line has no open SGR
     // so nothing is appended.
-    assert.equal(out, `upstream\n${STALE}in:272.5 t/s${RESET}\nout:0.3 t/s\n`);
+    assert.equal(out, `upstream\n${STALE}in:272.5/s${RESET}\nout:0.3/s\n`);
   });
 
   it("drops blank lines from consecutive '\\n' separators", () => {
@@ -130,11 +130,11 @@ describe("compose — multi-line planLine (v0.4.0+)", () => {
     const RED = "\x1b[31m";
     const STALE = "\x1b[90m";
     const upstream = `hud ${RED}`;
-    const plan = `${STALE}in:272.5 t/s\n${STALE}out:0.3 t/s`;
+    const plan = `${STALE}in:272.5/s\n${STALE}out:0.3/s`;
     const out = compose(upstream, plan);
     assert.equal(
       out,
-      `hud ${RED}\n\x1b[0m${STALE}in:272.5 t/s\x1b[0m\n${STALE}out:0.3 t/s\x1b[0m\n`,
+      `hud ${RED}\n\x1b[0m${STALE}in:272.5/s\x1b[0m\n${STALE}out:0.3/s\x1b[0m\n`,
     );
   });
 

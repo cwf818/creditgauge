@@ -167,7 +167,7 @@ function cfg() {
 // intentionally independent of the corresponding in/out token-
 // axis defaults so a user who renames `labelTokenIn` for the
 // token-axis family can keep the speed axis reading as
-// "in:12.3 t/s" (or override it independently).
+// "in:12.3/s" (or override it independently).
 type LabelAxis =
   | "in" | "out" | "cacheIn" | "totalIn"
   | "inSpeed" | "outSpeed" | "apiMs" | "apiCalls"
@@ -1413,7 +1413,7 @@ export {
 // ----- lastActive (v0.4.x) --------------------------------------------
 //
 // Stores the LAST active-tick tps per direction (in / out), so an
-// idle tick (deltaApi == 0) that would otherwise render "-- t/s"
+// idle tick (deltaApi == 0) that would otherwise render "--/s"
 // can fall back to the cached value. Stored in status.json under
 // the `lastActive:in` / `lastActive:out` keys (no sessionId in the
 // key — project-wide singleton per direction). 60s TTL is enforced
@@ -1536,14 +1536,14 @@ export { setAvg } from "./status-store.ts";
 // Compute the per-API-call throughput for one of {in, out}. v0.4.0+
 // — always returns a non-null value. The module occupies a stable
 // slot in the user's lineTemplate; a missing-data render is
-// "in:-- t/s", not a drop. This keeps the line layout stable across
+// "in:--/s", not a drop. This keeps the line layout stable across
 // ticks — the user always sees the module where they put it, and
 // learns to read "--" as "no data / nothing to report".
 //
 // math (when hasDelta):
 //   tps = current_in_or_out / delta_api * 1000
 //
-// Missing-data conditions (render "in:-- t/s"):
+// Missing-data conditions (render "in:--/s"):
 //   - no current snapshot data
 //   - delta_api <= 0 (no API call between ticks) AND no cached
 //     value from a previous active tick to fall back to
@@ -1553,14 +1553,14 @@ export { setAvg } from "./status-store.ts";
 // OUT don't have to move together — a thinking-only turn adds
 // 0 input tokens but 0 output tokens too; a synthesized-message
 // turn adds 0 input but real output. The truthful rate is
-// 0.0 t/s, not "-- t/s". We render 0.0 directly so the user
+// 0.0/s, not "--/s". We render 0.0 directly so the user
 // sees the real measurement and learns the difference between
-// "0 t/s" (real zero) and "in:-- t/s" (no data).
+// "0/s" (real zero) and "in:--/s" (no data).
 //
 // v0.4.0+ second revision: cache the last ACTIVE-tick tps per
 // session. On an idle tick (no API call this turn), fall back
 // to the cached tps so the speed module doesn't blink
-// in:-- t/s between real measurements during fast statusline
+// in:--/s between real measurements during fast statusline
 // ticks. The cache is only written on active ticks (idle ticks
 // preserve the previous measurement). Returns an `active` flag
 // so the caller can pick color: active = scale band, inactive
@@ -1595,7 +1595,7 @@ function computeTickSpeed(
   const r = getDeltaForRender();
   if (!r.hasMeasurement) {
     // Idle tick — fall back to the last active measurement if
-    // we have one, otherwise render the truthful "0.0 t/s".
+    // we have one, otherwise render the truthful "0.0/s".
     const cached = peekLastSpeed(t.sessionId, direction, t.cwd);
     if (cached != null) {
       return {
@@ -1628,9 +1628,9 @@ function computeTickSpeed(
 //   - "n/a" placeholder when scope has never been written
 //     (no v from peekAcc) — same `direction:n/a` shape as
 //     the per-turn sibling.
-//   - "0 t/s" plain when accApiMs > 0 but accToken* === 0
+//   - "0/s" plain when accApiMs > 0 but accToken* === 0
 //     (the value-zero rule at [[render-value-zero-rule]]).
-//   - scale-colored "N t/s" when accApiMs > 0 AND the chosen
+//   - scale-colored "N/s" when accApiMs > 0 AND the chosen
 //     token accumulator is positive (the active, measurable
 //     case).
 function computeAccSpeed(
@@ -1654,7 +1654,7 @@ function computeAccSpeed(
     return { value: `${prefix}n/a`, active: false, tps: null };
   }
   if (v.accApiMs === 0) {
-    // No API duration accumulated yet → "direction:0 t/s" plain
+    // No API duration accumulated yet → "direction:0/s" plain
     // (the natural zero state — the value-zero rule says count:0
     // is real data, not a placeholder).
     return {
@@ -3378,15 +3378,15 @@ export function formatCompactToken(n: number): string {
   return `${(n / 1_000_000).toFixed(t.precision)}M`;
 }
 
-// Speed formatter: t/s with k suffix above 1000. Mirrors ccstatusline's
+// Speed formatter: tokens/s shown as "/s" with k suffix above 1000. Mirrors ccstatusline.s
 // formatSpeed. Null → "—". Exported for tests.
 export function formatSpeed(tps: number | null): string {
   if (tps == null || !Number.isFinite(tps)) return "—";
   const precision = cfg().tokenFormat.speedPrecision;
   if (Math.abs(tps) >= 1000) {
-    return `${(tps / 1000).toFixed(precision)}k t/s`;
+    return `${(tps / 1000).toFixed(precision)}k/s`;
   }
-  return `${tps.toFixed(precision)} t/s`;
+  return `${tps.toFixed(precision)}/s`;
 }
 
 // v0.8.40+ — tiered-precision cost formatter for m_tokenCost family.
@@ -4739,7 +4739,7 @@ function placeholderNA(
 // is applied by the INLINE_RENDERER (via wrapPlain) for the same
 // reason as placeholderNA. The `body` is the COMPLETE placeholder
 // text the module would otherwise emit (e.g. "5h:--", "+ --",
-// "-- t/s"). Bare-number modules pass body="--" with no suffix
+// "--/s"). Bare-number modules pass body="--" with no suffix
 // (e.g. m_sessionDuration → "--", matching the existing
 // formatRemainingMs shape).
 function placeholderDashesUnit(
@@ -4961,7 +4961,7 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   m_contextRemainingPercent: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("contextRemainingPercent")}n/a%`,
   // number+unit — placeholder shape is the module's normal body
   // with "--" swapped in for the numeric value (e.g. "5h:--",
-  // "+ --", "-- t/s"). Empty body = bare dash.
+  // "+ --", "--/s"). Empty body = bare dash.
   m_sessionDuration: placeholderDashesUnit("--"),
   m_sessionApiDuration: placeholderDashesUnit("--"),
   // v0.8.0+ — per-turn API-ms delta placeholder. Body uses the
@@ -5044,9 +5044,9 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   m_ccversion: placeholderNA(""),
   // v6.x: per-API-call token modules. Previously these had no
   // placeholder registration — bare forms dropped on null and the
-  // inline path produced "in:-- t/s" / "in:--" sentinels. New
+  // inline path produced "in:--/s" / "in:--" sentinels. New
   // rule (per user direction): null → "n/a"; idle tick (delta=0)
-  // → "in:0" / "out:0" / "in:0.0 t/s"; 0 is always rendered, never
+  // → "in:0" / "out:0" / "in:0.0/s"; 0 is always rendered, never
   // hidden. The bare MODULES paths now route through these
   // placeholders instead of returning null so layout stays stable.
   m_tokenIn: placeholderLabelOr("in"),
@@ -5056,7 +5056,7 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   // configured independently from labels.labelIn / labels.labelOut.
   // Defaults remain "in:" / "out:" matching the previous literal
   // strings byte-for-byte; a user who renames labelIn="In:" will
-  // see "In:42" for tokens BUT still "in:12.3 t/s" for the speed
+  // see "In:42" for tokens BUT still "in:12.3/s" for the speed
   // module until they also override labelInSpeed.
   m_tokenInSpeed: placeholderLabelOr("inSpeed"),
   m_tokenOutSpeed: placeholderLabelOr("outSpeed"),

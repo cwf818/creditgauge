@@ -288,13 +288,13 @@ describe("formatCost (vX.X.X+ m_tokenCost family)", () => {
 });
 
 describe("formatSpeed", () => {
-  it("<1000 t/s → decimal t/s", () => {
-    assert.equal(formatSpeed(42.5), "42.5 t/s");
-    assert.equal(formatSpeed(0.1), "0.1 t/s");
+  it("<1000/s → decimal/s", () => {
+    assert.equal(formatSpeed(42.5), "42.5/s");
+    assert.equal(formatSpeed(0.1), "0.1/s");
   });
 
-  it("≥1000 t/s → k t/s", () => {
-    assert.equal(formatSpeed(1200), "1.2k t/s");
+  it("≥1000/s → k/s", () => {
+    assert.equal(formatSpeed(1200), "1.2k/s");
   });
 
   it("null → —", () => {
@@ -928,9 +928,9 @@ describe("renderTemplate — m_token* modules", () => {
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(snap)).join("\n");
-    // delta_in = 38, delta_api = 60_000 → 38/60000*1000 = 0.633 → "0.6 t/s".
+    // delta_in = 38, delta_api = 60_000 → 38/60000*1000 = 0.633 → "0.6/s".
     // v0.4.0+ scale coloring: 0.6 < 50 (the lowest `in` band) → red.
-    assert.equal(strip(out), "in:0.6 t/s");
+    assert.equal(strip(out), "in:0.6/s");
     assert.ok(out.includes(RED), `expected RED band in: ${JSON.stringify(out)}`);
   });
 
@@ -940,16 +940,16 @@ describe("renderTemplate — m_token* modules", () => {
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenOutSpeed"], ctxFor(snap)).join("\n");
-    // delta_out = 155, delta_api = 60_000 → 155/60000*1000 = 2.583 → "2.6 t/s".
+    // delta_out = 155, delta_api = 60_000 → 155/60000*1000 = 2.583 → "2.6/s".
     // v0.4.0+ scale coloring: 2.6 < 10 (the lowest `out` band) → red.
-    assert.equal(strip(out), "out:2.6 t/s");
+    assert.equal(strip(out), "out:2.6/s");
   });
 
   it("m_tokenInSpeed| first tick (no prev) → back-derives apiMs from tokenOut (v0.4.x legacy fallback)", () => {
     // v0.8.10-alpha.2 (per user refinement 2026-07-04): when
     // prev.totalApiMs is null (no prev tick), the canonical
     // fallback is apiMs = tokenOut * 1000 / 50 (the v0.4.x
-    // back-derivation formula at 50 t/s). This preserves the
+    // back-derivation formula at 50/s). This preserves the
     // "first tick shows a real rate" contract — the speed
     // module renders current.input / apiMs * 1000 from the
     // back-derived apiMs, NOT from the stale literal totalApi.
@@ -958,8 +958,8 @@ describe("renderTemplate — m_token* modules", () => {
     statusStore.commit();
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(snap)).join("\n");
     // current.input=38, fallback apiMs = 155 * 1000 / 50 = 3100
-    // → 38/3100*1000 ≈ 12.258 → "12.3 t/s"
-    assert.equal(strip(out), "in:12.3 t/s");
+    // → 38/3100*1000 ≈ 12.258 → "12.3/s"
+    assert.equal(strip(out), "in:12.3/s");
     const cached = peekPrevTick("sess-test", "D:\\test");
     assert.ok(cached);
     // v0.8.10-alpha.2 snapshot contract: only totalApiMs + identity
@@ -969,13 +969,13 @@ describe("renderTemplate — m_token* modules", () => {
     assert.equal(cached!.totalApiMs, 60_000);
   });
 
-  it("m_tokenInSpeed| no API call between ticks (deltaApi=0) → 'in|0.0 t/s' (v6.x idle=0)", () => {
-    // v6.x — idle tick now renders the truthful 0.0 t/s rate rather
-    // than "-- t/s". The "no data" sentinel is reserved for the
+  it("m_tokenInSpeed| no API call between ticks (deltaApi=0) → 'in|0.0/s' (v6.x idle=0)", () => {
+    // v6.x — idle tick now renders the truthful 0.0/s rate rather
+    // than "--/s". The "no data" sentinel is reserved for the
     // snapshot-missing case (test elsewhere uses ctxFor(null)).
     setPrevTick("sess-test", { totalApiMs: 60_000 }, "D:\\test");
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(fakeSnapshot())).join("\n");
-    assert.equal(strip(out), "in:0.0 t/s");
+    assert.equal(strip(out), "in:0.0/s");
   });
 
   it("m_tokenInSpeed| sessionId changes → prev cache miss → assumes prev=0", () => {
@@ -988,14 +988,14 @@ describe("renderTemplate — m_token* modules", () => {
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(snap)).join("\n");
-    // current.input=38, deltaApi=60_000 → 0.6 t/s
-    assert.equal(strip(out), "in:0.6 t/s");
+    // current.input=38, deltaApi=60_000 → 0.6/s
+    assert.equal(strip(out), "in:0.6/s");
   });
 
-  it("m_tokenInSpeed| thinking-only turn (deltaApi>0, current.input=0) → '0.0 t/s'", () => {
+  it("m_tokenInSpeed| thinking-only turn (deltaApi>0, current.input=0) → '0.0/s'", () => {
     // v0.4.0+ (revised): a turn with deltaApi>0 and current.input=0
     // (a thinking-only turn that produced no input tokens) is
-    // valid — the rate is genuinely 0.0 t/s, not "-- t/s". This
+    // valid — the rate is genuinely 0.0/s, not "--/s". This
     // is the per-turn-delta contract: an API call CAN add zero
     // input tokens (synthesized message, etc). The speed
     // module's direction-specific gate was a legacy artifact
@@ -1010,8 +1010,8 @@ describe("renderTemplate — m_token* modules", () => {
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(snap)).join("\n");
-    // current.input=0, deltaApi=30_000 → 0.0 t/s
-    assert.equal(strip(out), "in:0.0 t/s");
+    // current.input=0, deltaApi=30_000 → 0.0/s
+    assert.equal(strip(out), "in:0.0/s");
   });
 
   it("m_tokenInSpeed| second tick with real API call → emits real speed", () => {
@@ -1028,7 +1028,7 @@ describe("renderTemplate — m_token* modules", () => {
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(next)).join("\n");
     // deltaTokenIn = current.input = 200 (no subtraction),
     // deltaApi = 65_000 - 60_000 = 5_000 → 200/5000*1000 = 40.0
-    assert.equal(strip(out), "in:40.0 t/s");
+    assert.equal(strip(out), "in:40.0/s");
   });
 
 
@@ -1280,7 +1280,7 @@ describe("renderTemplate — m_token* modules", () => {
     assert.equal(strip(out), "in:n/a out:n/a size:n/a hit:n/a");
   });
 
-  it("partial snapshot: missing cost.totalApiDurationMs → m_tokenInSpeed renders 'in:0.0 t/s' (v6.x)", () => {
+  it("partial snapshot: missing cost.totalApiDurationMs → m_tokenInSpeed renders 'in:0.0/s' (v6.x)", () => {
     // v6.x — when totalApiDurationMs is null the function takes the
     // idle-without-measurement path (cost missing means we can't
     // compute a rate this tick). Per the v6.x "0 renders, n/a is
@@ -1290,7 +1290,7 @@ describe("renderTemplate — m_token* modules", () => {
       ["m_tokenInSpeed"],
       ctxFor(fakeSnapshot({ cost: { totalDurationMs: null, totalApiDurationMs: null, totalLinesAdded: null, totalLinesRemoved: null } })),
     ).join("\n");
-    assert.equal(strip(out), "in:0.0 t/s");
+    assert.equal(strip(out), "in:0.0/s");
   });
 
   it("m_tokenHitRate| per-turn cacheRead / totals.input = 100.0% (v0.8.0 per-turn formula)", () => {
@@ -2726,7 +2726,7 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
 //
 // Placeholder shape per family (see PLACEHOLDERS in render.ts):
 //   pure-number → STALE_COLOR "n/a" wrapped     (e.g. "in:n/a")
-//   number+unit → STALE_COLOR "-- <unit>"       (e.g. "5h:-- t/s")
+//   number+unit → STALE_COLOR "-- <unit>"       (e.g. "5h:--/s")
 //   gauge       → STALE_COLOR "░░░░░░░░ 0%"     (or full bar 100% in remaining mode)
 //   bare-string → STALE_COLOR "n/a" wrapped
 //
@@ -3238,7 +3238,7 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
 // The speed modules gained two new behaviors in v0.4.0:
 //   1. Cache the last ACTIVE-tick tps per session. On an idle
 //      tick (no API call this turn), fall back to the cached
-//      tps instead of rendering "-- t/s". Idle ticks do NOT
+//      tps instead of rendering "--/s". Idle ticks do NOT
 //      overwrite the cache.
 //   2. 5-band scale coloring (`:color:scale` or bare default).
 //      Faster = greener; slower = redder. `out` bands:
@@ -3260,21 +3260,21 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
   });
   // ----- 5-band scale coloring on active ticks -----
 
-  it("m_tokenInSpeed| 0.6 t/s → red (slowest band, < 50)", () => {
-    // current.input=38, deltaApi=60_000 → 0.633 t/s; 0.6 < 50
+  it("m_tokenInSpeed| 0.6/s → red (slowest band, < 50)", () => {
+    // current.input=38, deltaApi=60_000 → 0.633/s; 0.6 < 50
     // → red.
     setPrevTick("sess-test", { totalApiMs: 0 }, "D:\\test");
     const snap = fakeSnapshot();
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(snap)).join("\n");
-    assert.equal(strip(out), "in:0.6 t/s");
+    assert.equal(strip(out), "in:0.6/s");
     assert.ok(out.includes(RED), `expected RED in: ${JSON.stringify(out)}`);
     assert.ok(!out.includes(STALE), `did not expect STALE in: ${JSON.stringify(out)}`);
   });
 
-  it("m_tokenInSpeed| 50 t/s → orange (bands[0] boundary)", () => {
-    // current.input=3000, deltaApi=60_000 → 50 t/s; 50 >= bands[0]=50
+  it("m_tokenInSpeed| 50/s → orange (bands[0] boundary)", () => {
+    // current.input=3000, deltaApi=60_000 → 50/s; 50 >= bands[0]=50
     // → palette[3] = orange.
     setPrevTick("sess-test", { totalApiMs: 0 }, "D:\\test");
     const snap = fakeSnapshot({
@@ -3283,12 +3283,12 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(snap)).join("\n");
-    assert.equal(strip(out), "in:50.0 t/s");
+    assert.equal(strip(out), "in:50.0/s");
     assert.ok(out.includes(ORANGE), `expected ORANGE in: ${JSON.stringify(out)}`);
   });
 
-  it("m_tokenInSpeed| 400 t/s → bright green (fastest band, >= 400)", () => {
-    // current.input=24000, deltaApi=60_000 → 400 t/s;
+  it("m_tokenInSpeed| 400/s → bright green (fastest band, >= 400)", () => {
+    // current.input=24000, deltaApi=60_000 → 400/s;
     // 400 >= bands[3]=400 → bright green.
     setPrevTick("sess-test", { totalApiMs: 0 }, "D:\\test");
     const snap = fakeSnapshot({
@@ -3297,12 +3297,12 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(snap)).join("\n");
-    assert.equal(strip(out), "in:400.0 t/s");
+    assert.equal(strip(out), "in:400.0/s");
     assert.ok(out.includes(GREEN), `expected GREEN in: ${JSON.stringify(out)}`);
   });
 
-  it("m_tokenOutSpeed| 80 t/s → bright green (fastest out band)", () => {
-    // current.output=4800, deltaApi=60_000 → 80 t/s;
+  it("m_tokenOutSpeed| 80/s → bright green (fastest out band)", () => {
+    // current.output=4800, deltaApi=60_000 → 80/s;
     // 80 >= bands[3]=80 → bright green.
     setPrevTick("sess-test", { totalApiMs: 0 }, "D:\\test");
     const snap = fakeSnapshot({
@@ -3311,11 +3311,11 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenOutSpeed"], ctxFor(snap)).join("\n");
-    assert.equal(strip(out), "out:80.0 t/s");
+    assert.equal(strip(out), "out:80.0/s");
     assert.ok(out.includes(GREEN), `expected GREEN in: ${JSON.stringify(out)}`);
   });
 
-  it("m_tokenOutSpeed| 30 t/s → yellow (20 ≤ 30 < 40)", () => {
+  it("m_tokenOutSpeed| 30/s → yellow (20 ≤ 30 < 40)", () => {
     setPrevTick("sess-test", { totalApiMs: 0 }, "D:\\test");
     const snap = fakeSnapshot({
       current: { tokenIn: 1800, tokenOut: 1800, tokenCacheCreation: 0, tokenCachedIn: 0 },
@@ -3323,7 +3323,7 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenOutSpeed"], ctxFor(snap)).join("\n");
-    assert.equal(strip(out), "out:30.0 t/s");
+    assert.equal(strip(out), "out:30.0/s");
     assert.ok(out.includes(YELLOW), `expected YELLOW in: ${JSON.stringify(out)}`);
   });
 
@@ -3356,7 +3356,7 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
       ["m_tokenInSpeed|color:scale"],
       ctxFor(scaledSnap),
     ).join("\n");
-    // Both should land in the same band (red, 0.6 t/s).
+    // Both should land in the same band (red, 0.6/s).
     assert.equal(strip(bare), strip(scaled));
     assert.ok(bare.includes(RED) && scaled.includes(RED), `bare=${JSON.stringify(bare)} scaled=${JSON.stringify(scaled)}`);
   });
@@ -3370,15 +3370,15 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
       ["m_tokenInSpeed|color:red"],
       ctxFor(snap),
     ).join("\n");
-    // 0.6 t/s would normally be red via scale; with explicit
+    // 0.6/s would normally be red via scale; with explicit
     // `:color:red` it stays red (same color in this case —
     // semantically equivalent).
-    assert.equal(strip(out), "in:0.6 t/s");
+    assert.equal(strip(out), "in:0.6/s");
     assert.ok(out.includes(RED));
   });
 
   it("m_tokenInSpeed|color|brightGreen on a slow turn still renders green", () => {
-    // 0.6 t/s would be red via scale; the user's `:color:brightGreen`
+    // 0.6/s would be red via scale; the user's `:color:brightGreen`
     // override wins. This is the "if user explicitly asked, ignore
     // the natural scheme in favor of theirs" rule.
     setPrevTick("sess-test", { totalApiMs: 0 }, "D:\\test");
@@ -3389,13 +3389,13 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
       ["m_tokenInSpeed|color:brightGreen"],
       ctxFor(snap),
     ).join("\n");
-    assert.equal(strip(out), "in:0.6 t/s");
+    assert.equal(strip(out), "in:0.6/s");
     assert.ok(out.includes(GREEN), `expected GREEN override in: ${JSON.stringify(out)}`);
   });
 
   // ----- cached (inactive) tick behavior -----
 
-  it("m_tokenInSpeed| idle tick with cached tps → STALE_COLOR, not -- t/s", () => {
+  it("m_tokenInSpeed| idle tick with cached tps → STALE_COLOR, not --/s", () => {
     // First tick: active, writes 38/60000*1000 = 0.633 → cache
     // holds 0.633. Second tick: deltaApi=0 (same totalApiDurationMs
     // as cached) → falls back to cached value with STALE_COLOR.
@@ -3410,18 +3410,18 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
     processTick(idle.cwd, idle, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(idle)).join("\n");
-    // Cached value (0.6 t/s) wrapped in STALE_COLOR.
-    assert.equal(strip(out), "in:0.6 t/s");
+    // Cached value (0.6/s) wrapped in STALE_COLOR.
+    assert.equal(strip(out), "in:0.6/s");
     assert.ok(out.includes(STALE), `expected STALE (cached) in: ${JSON.stringify(out)}`);
   });
 
-  it("m_tokenInSpeed| idle tick with NO cached tps → 'in|0.0 t/s' (v6.x idle=0)", () => {
-    // v6.x — idle tick now renders the truthful 0.0 t/s rate.
+  it("m_tokenInSpeed| idle tick with NO cached tps → 'in|0.0/s' (v6.x idle=0)", () => {
+    // v6.x — idle tick now renders the truthful 0.0/s rate.
     // The missing-data sentinel is reserved for the snapshot-missing
     // case (handled via ctxFor(null) elsewhere).
     setPrevTick("sess-test", { totalApiMs: 60_000 }, "D:\\test");
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(fakeSnapshot())).join("\n");
-    assert.equal(strip(out), "in:0.0 t/s");
+    assert.equal(strip(out), "in:0.0/s");
   });
 
   it("m_tokenInSpeed| idle tick → STALE_COLOR even with |color|red override", () => {
@@ -3445,7 +3445,7 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
       ["m_tokenInSpeed|color:red"],
       ctxFor(idle),
     ).join("\n");
-    assert.equal(strip(out), "in:0.6 t/s");
+    assert.equal(strip(out), "in:0.6/s");
     assert.ok(
       out.includes(STALE),
       `expected STALE on cached tick even with :color:red in: ${JSON.stringify(out)}`,
@@ -3489,12 +3489,12 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
       ["m_tokenInSpeed"],
       ctxFor(snapB),
     ).join("\n");
-    assert.equal(strip(out), "in:0.6 t/s");
+    assert.equal(strip(out), "in:0.6/s");
     assert.ok(out.includes(STALE), `expected STALE on idle cross-session tick in: ${JSON.stringify(out)}`);
   });
 
   it("m_tokenInSpeed| idle tick does NOT overwrite the cache", () => {
-    // Prime with 0.6 t/s.
+    // Prime with 0.6/s.
     setPrevTick("sess-test", { totalApiMs: 0 }, "D:\\test");
     const first = fakeSnapshot();
     processTick(first.cwd, first, null);
@@ -3514,7 +3514,7 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
     // write is implicit in the fact that we got a cached 0.6.
     // Render another idle tick to confirm cache is still 0.6.
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(idle)).join("\n");
-    assert.equal(strip(out), "in:0.6 t/s");
+    assert.equal(strip(out), "in:0.6/s");
   });
 
   // ----- v0.8.x R7 — TTL gate disabled for the 4 speed/api/hitrate
@@ -3593,7 +3593,7 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenInSpeed"], ctxFor(snap)).join("\n");
-    assert.equal(strip(out), "in:12.5 t/s");
+    assert.equal(strip(out), "in:12.5/s");
     assert.ok(out.includes(STALE), `expected STALE on backdated cache: ${JSON.stringify(out)}`);
   });
 
@@ -3605,7 +3605,7 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
     processTick(snap.cwd, snap, null);
     statusStore.commit();
     const out = renderTemplate(["m_tokenOutSpeed"], ctxFor(snap)).join("\n");
-    assert.equal(strip(out), "out:8.3 t/s");
+    assert.equal(strip(out), "out:8.3/s");
     assert.ok(out.includes(STALE), `expected STALE on backdated cache: ${JSON.stringify(out)}`);
   });
 
@@ -5515,7 +5515,7 @@ describe("renderTemplate — v0.8.0+ m_sum*/m_avg* advanced statistics", () => {
     assert.equal(strip(out), "in:n/a");
   });
 
-  it("m_sumTokenInSpeed| sum(in) / sum(apiMs) * 1000 in t/s", () => {
+  it("m_sumTokenInSpeed| sum(in) / sum(apiMs) * 1000 in/s", () => {
     const stateRootDir = join(_tmpDir, "sum-fixture-speed");
     setStateRoot(() => stateRootDir);
     const projHash = "d--sum-s";
@@ -5523,7 +5523,7 @@ describe("renderTemplate — v0.8.0+ m_sum*/m_avg* advanced statistics", () => {
     const cwd = "D:\\sum-s";
     const sessionFile = join(stateRootDir, projHash, `${sess}.jsonl`);
     mkdirSync(dirname(sessionFile), { recursive: true });
-    // sumIn=1000, sumApiMs=2000 → 1000/2000*1000 = 500 t/s.
+    // sumIn=1000, sumApiMs=2000 → 1000/2000*1000 = 500/s.
     // Rows anchored near the test ctx's nowMs (1_000_000).
     writeFileSync(
       sessionFile,
@@ -5537,8 +5537,8 @@ describe("renderTemplate — v0.8.0+ m_sum*/m_avg* advanced statistics", () => {
       ["m_sumTokenInSpeed"],
       ctxFor(fakeSnapshot({ sessionId: sess, cwd, modelDisplayName: "MiniMax-M3" })),
     ).join("\n");
-    // 500 t/s → "500.0 t/s"
-    assert.equal(strip(out), "in:500.0 t/s");
+    // 500/s → "500.0/s"
+    assert.equal(strip(out), "in:500.0/s");
   });
 
   it("m_sumApiMs formats sum as dhms (v0.8.x — was formatCompactToken in earlier builds)", () => {
@@ -5804,7 +5804,7 @@ describe("renderTemplate — v0.8.0+ labels.* config customization", () => {
   it("labelTokenInSpeed override is independent of labelTokenIn", () => {
     // The speed-axis labels got their own slot in v0.8.13+ so a
     // user who renames labelTokenIn="In:" can keep speed reading
-    // "in:12.3 t/s" until they explicitly override labelTokenInSpeed.
+    // "in:12.3/s" until they explicitly override labelTokenInSpeed.
     setStateRoot(() => join(_tmpDir, "labels-labelTokenInSpeed"));
     withLabels({ labelTokenIn: "In:", labelTokenInSpeed: "speed-in:" }, () => {
       const snap = fakeSnapshot({ sessionId: "label-inspeed" });
