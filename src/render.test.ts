@@ -1397,7 +1397,7 @@ describe("m_countdown5h/7d — stale AND past-due renders '(n/a🕒 5h)' in STAL
 // long rendered "--:<label>". vX.X.X unifies all terms on the
 // dashes-left convention with the label bracketed on the right:
 //   - m_countdown        → "--:(<label>)"
-//   - m_quota            → "quota:n/a(<label>)"
+//   - m_quota            → "quota: n/a"
 // Baked-in fallback labels (term:short → "5h", term:mid → "7d",
 // term:long → "30d") resolve the same way as the live renderer
 // (params.term → Interval.label || fallback), so a configured
@@ -1491,11 +1491,11 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
     }
   });
 
-  it("m_quota|term|mid placeholder reads 'quota:n/a(7d)' when midInterval is null", () => {
+  it("m_quota|term|mid placeholder reads 'quota: n/a' when midInterval is null", () => {
     // m_quota placeholder used to be hard-coded `quota:--`
-    // (no per-term unit at all). vX.X.X+ unifies on
-    // `${prefix}n/a(<label>)` for all three terms (dashes-and-colon
-    // collapsed to `n/a`, label moved to the tail).
+    // (no per-term unit at all). vX.X.X+ unifies all terms on the
+    // term-agnostic `${prefix}n/a` body (the `(<label>)` tail is
+    // gone).
     __resetForTest({
       statuslineTemplate: ["m_quota|term:mid"],
       timeFormat: { minUnit: "m", maxUnitCount: 2 },
@@ -1510,8 +1510,8 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
       });
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:n/a(7d)"),
-        `placeholder should embed n/a(7d) for term=mid, got: ${clean}`,
+        clean.includes("quota: n/a"),
+        `placeholder should render quota: n/a for term=mid, got: ${clean}`,
       );
       assert.ok(
         !clean.includes("quota:(5h):--") &&
@@ -1527,7 +1527,7 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
     }
   });
 
-  it("m_quota|term|long placeholder reads 'quota:n/a(30d)' when longInterval is null", () => {
+  it("m_quota|term|long placeholder reads 'quota: n/a' when longInterval is null", () => {
     // Same uniform shape, just with the 30d fallback.
     __resetForTest({
       statuslineTemplate: ["m_quota|term:long"],
@@ -1543,18 +1543,18 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
       });
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:n/a(30d)"),
-        `placeholder should embed n/a(30d) for term=long, got: ${clean}`,
+        clean.includes("quota: n/a"),
+        `placeholder should render quota: n/a for term=long, got: ${clean}`,
       );
     } finally {
       __resetForTest();
     }
   });
 
-  it("m_quota|term|mid placeholder uses the live midInterval.label when present", () => {
-    // When the chosen interval IS present, the placeholder still
-    // falls back to its label via `intervalForTerm`. The shape
-    // remains "quota:n/a(<label>)".
+  it("m_quota|term|mid placeholder renders 'quota: n/a' regardless of the live interval's label", () => {
+    // Even when the chosen interval IS present, the placeholder
+    // is term-agnostic: the shape is "quota: n/a" regardless of
+    // midInterval.label (the `(<label>)` tail is gone in vX.X.X+).
     __resetForTest({
       statuslineTemplate: ["m_quota|term:mid"],
       timeFormat: { minUnit: "m", maxUnitCount: 2 },
@@ -1570,10 +1570,11 @@ describe("m_countdown / m_quota term-aware placeholders (vX.X.X+)", () => {
       const clean = strip(line);
       // midInterval.label is "7d" and the quota body returns null
       // (no remainingQuota / usedQuota / limitQuota mapping) → the
-      // placeholder fires and uses the resolved midInterval.label.
+      // placeholder fires with the term-agnostic `quota: n/a` body,
+      // regardless of midInterval.label.
       assert.ok(
-        clean.includes("quota:n/a(7d)"),
-        `placeholder should read midInterval.label=7d, got: ${clean}`,
+        clean.includes("quota: n/a"),
+        `placeholder should render quota: n/a regardless of midInterval.label, got: ${clean}`,
       );
     } finally {
       __resetForTest();
@@ -1661,8 +1662,8 @@ describe("m_quota body — remainingQuota fallback (vX.X.X+)", () => {
       const line = quotaOnly({ remainingQuota: 1500, limitQuota: 1500 });
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:0/1500(30d)"),
-        `expected quota:0/1500(30d), got: ${clean}`,
+        clean.includes("quota: 0/1500"),
+        `expected quota: 0/1500, got: ${clean}`,
       );
     } finally {
       __resetForTest();
@@ -1678,8 +1679,8 @@ describe("m_quota body — remainingQuota fallback (vX.X.X+)", () => {
       const line = quotaOnly({ remainingQuota: 735, limitQuota: 1500 });
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:765/1500(30d)"),
-        `expected quota:765/1500(30d) (used = limit - remaining), got: ${clean}`,
+        clean.includes("quota: 765/1500"),
+        `expected quota: 765/1500 (used = limit - remaining), got: ${clean}`,
       );
       assert.ok(
         !clean.includes("0/1500"),
@@ -1699,7 +1700,7 @@ describe("m_quota body — remainingQuota fallback (vX.X.X+)", () => {
       const line = quotaOnly({ usedQuota: 42, limitQuota: 1500, remainingQuota: 1458 });
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:42/1500(30d)"),
+        clean.includes("quota: 42/1500"),
         `legacy used+limit path should still win, got: ${clean}`,
       );
     } finally {
@@ -1714,7 +1715,7 @@ describe("m_quota body — remainingQuota fallback (vX.X.X+)", () => {
       const line = quotaOnly({ remainingQuota: 1600, limitQuota: 1500 });
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:0/1500(30d)"),
+        clean.includes("quota: 0/1500"),
         `over-the-limit remaining clamps used to 0, got: ${clean}`,
       );
     } finally {
@@ -1730,7 +1731,7 @@ describe("m_quota body — remainingQuota fallback (vX.X.X+)", () => {
       const line = quotaOnly({ remainingQuota: null, limitQuota: 1500 });
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:0/1500(30d)"),
+        clean.includes("quota: 0/1500"),
         `legacy 0/limit branch must still fire, got: ${clean}`,
       );
     } finally {
@@ -1796,7 +1797,7 @@ describe("m_quota display arg (vX.X.X+)", () => {
       );
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:765/1500(30d)"),
+        clean.includes("quota: 765/1500"),
         `default display should render used axis, got: ${clean}`,
       );
     } finally {
@@ -1814,11 +1815,11 @@ describe("m_quota display arg (vX.X.X+)", () => {
       );
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:735/1500(30d)"),
+        clean.includes("quota: 735/1500"),
         `display:remaining should swap to remaining axis, got: ${clean}`,
       );
       assert.ok(
-        !clean.includes("quota:765/1500(30d)"),
+        !clean.includes("quota: 765/1500"),
         `legacy used axis must NOT leak into display:remaining, got: ${clean}`,
       );
     } finally {
@@ -1837,7 +1838,7 @@ describe("m_quota display arg (vX.X.X+)", () => {
       );
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:735/1500(30d)"),
+        clean.includes("quota: 735/1500"),
         `remaining axis should derive from used+limit, got: ${clean}`,
       );
     } finally {
@@ -1857,7 +1858,7 @@ describe("m_quota display arg (vX.X.X+)", () => {
       );
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:1500/1500(30d)"),
+        clean.includes("quota: 1500/1500"),
         `no-data case in remaining mode should render full bucket, got: ${clean}`,
       );
     } finally {
@@ -1876,7 +1877,7 @@ describe("m_quota display arg (vX.X.X+)", () => {
       );
       const clean = strip(line);
       assert.ok(
-        clean.includes("quota:0/1500(30d)"),
+        clean.includes("quota: 0/1500"),
         `overflowing used should clamp remaining to 0, got: ${clean}`,
       );
     } finally {
@@ -2785,5 +2786,143 @@ describe("pluginSource cache row (v0.9.x)", () => {
     cache.__resetForTest();
     const got = cache.peek<"user" | "builtin" | "missing">("deepseek:pluginSource");
     assert.equal(got, "builtin");
+  });
+});
+
+// vX.X.X+ — `m_quota` accepts |valueOnly|true: the prefix (and the
+// now-removed `(label)` tail) disappear, leaving just the colored
+// `<axis>/<total>` body. Mirrors the other valueOnly-capable modules.
+describe("m_quota valueOnly (vX.X.X+)", () => {
+  const nowMs = Date.parse("2026-06-24T12:00:00Z");
+
+  function quotaIv(over: Partial<import("./render.ts").Interval> = {}): import("./render.ts").Interval {
+    return {
+      windowId: "30d",
+      label: "30d",
+      startAt: null,
+      endAt: null,
+      intervalMs: null,
+      usedPercent: null,
+      remainingPercent: null,
+      remainingQuota: null,
+      usedQuota: null,
+      limitQuota: null,
+      ...over,
+    };
+  }
+
+  it("m_quota|valueOnly:true renders just the axis/total body (no prefix)", () => {
+    __resetForTest({
+      statuslineTemplate: ["m_quota|term:long|valueOnly:true"],
+      timeFormat: { minUnit: "m", maxUnitCount: 2 },
+    });
+    try {
+      const line = renderProviderLine("minimax", {
+        mode: "used", nowMs,
+        shortInterval: null,
+        midInterval: null,
+        longInterval: quotaIv({ usedQuota: 765, limitQuota: 1500 }),
+        balance: null,
+        ageMs: 5 * 60_000, stale: false, version: "",
+      });
+      const clean = strip(line);
+      assert.equal(clean, "765/1500", `expected bare 765/1500, got: ${clean}`);
+      assert.ok(!clean.includes("quota"), `valueOnly must not leak the prefix, got: ${clean}`);
+    } finally {
+      __resetForTest();
+    }
+  });
+
+  it("m_quota|valueOnly:true keeps the band color on the digit", () => {
+    __resetForTest({
+      statuslineTemplate: ["m_quota|term:long|valueOnly:true"],
+      timeFormat: { minUnit: "m", maxUnitCount: 2 },
+    });
+    try {
+      const line = renderProviderLine("minimax", {
+        mode: "used", nowMs,
+        shortInterval: null,
+        midInterval: null,
+        longInterval: quotaIv({ usedQuota: 765, limitQuota: 1500 }),
+        balance: null,
+        ageMs: 5 * 60_000, stale: false, version: "",
+      });
+      // usedPct=51 → band 0 → BRIGHT_GREEN on the digit, /1500 plain.
+      assert.ok(
+        line.includes(`${BRIGHT_GREEN}765${RESET}/1500`),
+        `valueOnly digit should keep the band tint, got: ${strip(line)}`,
+      );
+    } finally {
+      __resetForTest();
+    }
+  });
+
+  it("m_quota|valueOnly:true|color:<c> — user override wraps the whole body", () => {
+    __resetForTest({
+      statuslineTemplate: ["m_quota|term:long|valueOnly:true|color:" + RED],
+      timeFormat: { minUnit: "m", maxUnitCount: 2 },
+    });
+    try {
+      const line = renderProviderLine("minimax", {
+        mode: "used", nowMs,
+        shortInterval: null,
+        midInterval: null,
+        longInterval: quotaIv({ usedQuota: 765, limitQuota: 1500 }),
+        balance: null,
+        ageMs: 5 * 60_000, stale: false, version: "",
+      });
+      assert.ok(
+        line.includes(`${RED}765${RESET}/1500`),
+        `valueOnly + color override should win, got: ${strip(line)}`,
+      );
+    } finally {
+      __resetForTest();
+    }
+  });
+
+  it("m_quota|valueOnly:true placeholder renders bare 'n/a' when no quota data", () => {
+    __resetForTest({
+      statuslineTemplate: ["m_quota|term:long|valueOnly:true"],
+      timeFormat: { minUnit: "m", maxUnitCount: 2 },
+    });
+    try {
+      const line = renderProviderLine("minimax", {
+        mode: "used", nowMs,
+        shortInterval: null,
+        midInterval: null,
+        longInterval: quotaIv(),
+        balance: null,
+        ageMs: 5 * 60_000, stale: false, version: "",
+      });
+      const clean = strip(line);
+      assert.equal(clean, "n/a", `valueOnly placeholder should be bare n/a, got: ${clean}`);
+    } finally {
+      __resetForTest();
+    }
+  });
+
+  it("m_template|frag|valueOnly:true cascades to an inner m_quota", () => {
+    __resetForTest({
+      lineTemplates: { q: ["m_quota|term:long"] },
+      statuslineTemplate: ["m_template|q|valueOnly:true"],
+      timeFormat: { minUnit: "m", maxUnitCount: 2 },
+    });
+    try {
+      const line = renderProviderLine("minimax", {
+        mode: "used", nowMs,
+        shortInterval: null,
+        midInterval: null,
+        longInterval: quotaIv({ usedQuota: 765, limitQuota: 1500 }),
+        balance: null,
+        ageMs: 5 * 60_000, stale: false, version: "",
+      });
+      assert.equal(
+        strip(line),
+        "765/1500",
+        `m_template passthrough valueOnly should strip the prefix, got: ${strip(line)}`,
+      );
+    } finally {
+      __resetForTest();
+    }
   });
 });

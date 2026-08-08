@@ -96,7 +96,7 @@ export type Interval = {
   windowId: string;
   // Built-in default: same as windowId. Configurable via
   // `intervals.<key>.label`. The renderer reads this to print the
-  // window's display label (e.g. "5h" in `quota(5h):123/500`).
+  // window's display label (e.g. "5h" in `quota: 123/500`).
   label: string;
   // Epoch ms when the window started, or null if unknown.
   startAt: number | null;
@@ -177,7 +177,7 @@ type LabelAxis =
   | "contextSize" | "contextWindowSize" | "contextUsedPercent" | "contextRemainingPercent" // v0.8.23+
   | "contextUsage" // vX.X.X+ — m_contextUsage two-tone x/y prefix ("ctx:")
   | "startTime" | "endTime" // v0.8.24+ — start/end of the tick statistics window
-  | "quota"   // v0.9.0+ — quota module prefix ("quota(5h):123/500")
+  | "quota"   // v0.9.0+ — quota module prefix ("quota: 123/500")
   | "cost"    // vX.X.X+ — token cost module prefix ("cost:$0.0123")
   | "est"     // vX.X.X+ — periodic quota estimate prefix ("est:$30.20")
   | "pluginSystem"        // vX.X.X+ — m_pluginSource glyph when built-in (default "⚙")
@@ -220,9 +220,10 @@ function labelFor(axis: LabelAxis): string {
     // (per config.ts:DEFAULT_CONFIG.labels).
     case "startTime": return labels.labelStartTime;
     case "endTime": return labels.labelEndTime;
-    // v0.9.0+ — quota module prefix. Default "quota:" (set in
-    // config.ts:DEFAULT_CONFIG.labels.labelQuota). Reads "used/limit"
-    // in `m_quota|term|short`'s body, e.g. "quota(5h):123/500".
+    // v0.9.0+ — quota module prefix. Default "quota: " (trailing
+    // space, set in config.ts:DEFAULT_CONFIG.labels.labelQuota).
+    // Reads "used/limit" in `m_quota|term|short`'s body, e.g.
+    // "quota: 123/500".
     case "quota": return labels.labelQuota;
     // vX.X.X+ — token cost module prefix. Default "cost:" (set in
     // config.ts:DEFAULT_CONFIG.labels.labelTokenCost). Read by
@@ -545,14 +546,12 @@ function intervalToWindow(i: Interval): Window | null {
 // v0.9.0+ — render the quota body for an `Interval`. Returns null
 // when neither quota nor limit is present (the caller falls back to
 // the placeholder). Renders per the user spec:
-//   used + limit  → "quota(5h):123/500"
-//   limit only    → "quota(5h):0/500"
-//   used only     → "quota(5h):123/--"
+//   used + limit  → "quota: 123/500"
+//   limit only    → "quota: 0/500"
+//   used only     → "quota: 123/--"
 //   none          → null
-// The label in `(5h)` is read from the live `Interval.label` (so a
-// user who set the plugin's `Interval.shortInterval.label = "5h🕐"`
-// sees that label in the body). The leading `quota:` prefix is
-// read from `labels.labelQuota` via `labelFor("quota")`.
+// The leading `quota:` prefix is read from `labels.labelQuota` via
+// `labelFor("quota")`.
 // v0.9.0+ — splits an Interval's quota axis into the structural
 // parts so the renderer can color just the digit (the "metric of
 // concern"), not the prefix / limit tail. Mirrors the
@@ -571,21 +570,16 @@ function renderQuotaParts(
   mode: DisplayMode = "used",
 ): {
   prefix: string;
-  label: string;
   axisNumber: number;    // the displayed digit
   total: number | null;  // the right side ("1500" or "--")
   axisPct: number | null;// 0..100 of the displayed digit relative to limit
 } | null {
-  // vX.X.X+ — label moved from prefix-head to the tail of the body
-  // (after the `<axis>/<total>` slice), so the shape is now
-  // `quota:<axis>/<total>(<label>)` instead of `quota:(<label>):<axis>/<total>`.
   const prefix = labelFor("quota");
-  const label = iv.label;
 
   if (mode === "remaining") {
     if (iv.remainingQuota != null && iv.limitQuota != null) {
       return {
-        prefix, label,
+        prefix,
         axisNumber: iv.remainingQuota,
         total: iv.limitQuota,
         axisPct: (iv.remainingQuota / iv.limitQuota) * 100,
@@ -595,7 +589,7 @@ function renderQuotaParts(
       const remaining = iv.limitQuota - iv.usedQuota;
       const clamped = Math.max(0, Math.min(iv.limitQuota, remaining));
       return {
-        prefix, label,
+        prefix,
         axisNumber: clamped,
         total: iv.limitQuota,
         axisPct: (clamped / iv.limitQuota) * 100,
@@ -603,7 +597,7 @@ function renderQuotaParts(
     }
     if (iv.limitQuota != null) {
       return {
-        prefix, label,
+        prefix,
         axisNumber: iv.limitQuota,
         total: iv.limitQuota,
         axisPct: 100, // nothing used ⇒ full remaining
@@ -611,7 +605,7 @@ function renderQuotaParts(
     }
     if (iv.remainingQuota != null) {
       return {
-        prefix, label,
+        prefix,
         axisNumber: iv.remainingQuota,
         total: null,
         axisPct: null, // no limit → no ratio possible
@@ -623,7 +617,7 @@ function renderQuotaParts(
   // mode === "used" (default)
   if (iv.usedQuota != null && iv.limitQuota != null) {
     return {
-      prefix, label,
+      prefix,
       axisNumber: iv.usedQuota,
       total: iv.limitQuota,
       axisPct: (iv.usedQuota / iv.limitQuota) * 100,
@@ -633,7 +627,7 @@ function renderQuotaParts(
     const used = iv.limitQuota - iv.remainingQuota;
     const clamped = Math.max(0, Math.min(iv.limitQuota, used));
     return {
-      prefix, label,
+      prefix,
       axisNumber: clamped,
       total: iv.limitQuota,
       axisPct: (clamped / iv.limitQuota) * 100,
@@ -641,7 +635,7 @@ function renderQuotaParts(
   }
   if (iv.limitQuota != null) {
     return {
-      prefix, label,
+      prefix,
       axisNumber: 0,
       total: iv.limitQuota,
       axisPct: 0, // nothing known used ⇒ 0% consumed
@@ -649,7 +643,7 @@ function renderQuotaParts(
   }
   if (iv.usedQuota != null) {
     return {
-      prefix, label,
+      prefix,
       axisNumber: iv.usedQuota,
       total: null,
       axisPct: null,
@@ -671,6 +665,7 @@ function wrapQuotaBody(
   parts: NonNullable<ReturnType<typeof renderQuotaParts>>,
   mode: DisplayMode,
   userColor: string | undefined,
+  valueOnly: boolean = false,
 ): string {
   const total = parts.total == null ? "--" : `${parts.total}`;
   // Pick the tint: user override wins; else band color when
@@ -684,10 +679,11 @@ function wrapQuotaBody(
   } else {
     tint = colorFor(parts.axisPct, mode);
   }
-  // vX.X.X+ — label moved from the prefix slot to the tail;
-  // shape: `${prefix}<axis>/<total>(<label>)` — e.g.
-  // `quota:413.7/1500(30d)`.
-  return `${parts.prefix}${tint}${parts.axisNumber}${RESET}/${total}(${parts.label})`;
+  // vX.X.X+ — `(label)` tail dropped; valueOnly strips the prefix.
+  //   normal    → `quota: <axis>/<total>`  (e.g. `quota: 413.7/1500`)
+  //   valueOnly → `<axis>/<total>`          (e.g. `413.7/1500`)
+  const body = `${tint}${parts.axisNumber}${RESET}/${total}`;
+  return valueOnly ? body : `${parts.prefix}${body}`;
 }
 
 // v0.9.0+ — epoch-ms → ISO timestamp. Local to render.ts (same
@@ -2069,20 +2065,19 @@ m_countdown: Object.assign(
   // v0.9.0+ — quota module. Reads the quota group from
   // `c.intervals["short"]` (default term; bare form), and the
   // chosen `term` slot for the inline form. Renders
-  // `<labelQuota>(<interval.label>):<axis>/limit` shape where
-  // `<axis>` is `used` by default and `remaining` when
-  // `c.mode === "remaining"` (mirrors `m_windowQuota`). The
-  // placeholder (rendered when no quota data is present) is
-  // `${labelFor("quota")}(<term-label>):--` — bare defaults to
-  // `c.intervals["short"]?.label`; inline honors `params.term` so
-  // a `m_quota|term|mid` placeholder reads `(7d):--`, not `(5h):--`.
+  // `<labelQuota><axis>/<limit>` shape (e.g. "quota: 123/500";
+  // the `(label)` tail is gone in vX.X.X+), where `<axis>` is
+  // `used` by default and `remaining` when `c.mode ===
+  // "remaining"` (mirrors `m_windowQuota`). The placeholder
+  // (rendered when no quota data is present) is term-agnostic:
+  // `${labelFor("quota")}n/a` (e.g. "quota: n/a").
 m_quota: Object.assign(
   ((c: RenderContext) => {
     const iv = (c.intervals ?? {})["short"] ?? null;
     if (!iv) return placeholderBare("m_quota", c);
     const parts = renderQuotaParts(iv, c.mode);
     if (!parts) return placeholderBare("m_quota", c);
-    return wrapQuotaBody(parts, c.mode, undefined);
+    return wrapQuotaBody(parts, c.mode, undefined, c.passThrough?.valueOnly === "true");
   }),
   { type: "quota" as const },
 ),
@@ -4805,13 +4800,12 @@ function termFallbackLabel(term: string): string {
   return PLACEHOLDER_TERM_FALLBACK[term] ?? term;
 }
 
-// Standard per-term + per-interval label resolver shared by
-// m_countdown / m_quota placeholders. `wrap` receives the
-// resolved term-label (e.g. "5h" / "7d" / "30d"); callers shape
-// the body uniformly across terms. The vX.X.X+ convention is
-// dashes-or-n/a-left, label-bracketed-right:
+// Standard per-term + per-interval label resolver used by the
+// m_countdown placeholder. `wrap` receives the resolved term-label
+// (e.g. "5h" / "7d" / "30d"); the caller shapes the body uniformly
+// across terms. The vX.X.X+ convention is dashes-left,
+// label-bracketed-right:
 //   - m_countdown        → "--:(<label>)"
-//   - m_quota            → "${prefix}n/a(<label>)"
 function placeholderTermLabel(
   params: Record<string, ResolvedValue>,
   ctx: RenderContext,
@@ -4823,27 +4817,21 @@ function placeholderTermLabel(
   return wrap(label);
 }
 
-// v0.9.0+ — quota module placeholder. Per-term, all terms share
-// the same "${labelFor("quota")}n/a(<label>)" shape (vX.X.X+:
-// dashes collapsed to `n/a`, label moved to tail to mirror the
-// live body's `quota:<axis>/<total>(<label>)` shape):
-//   - short → "quota:n/a(5h)"
-//   - mid   → "quota:n/a(7d)"
-//   - long  → "quota:n/a(30d)"
-// Bare-MODULES default term is "short" upstream of this helper,
-// so bare `m_quota` keeps reading `c.shortInterval?.label`.
+// v0.9.0+ — quota module placeholder. vX.X.X+ — term-agnostic:
+// every term renders the same "${labelFor("quota")}n/a" body (the
+// `(label)` tail is gone; valueOnly drops the prefix):
+//   - normal    → "quota: n/a"
+//   - valueOnly → "n/a"
 function placeholderQuota(
   params: Record<string, ResolvedValue>,
   ctx: RenderContext,
 ): string {
-  const prefix = labelFor("quota");
-  return placeholderTermLabel(params, ctx, (label) =>
-    // vX.X.X+ — shape aligned with the live body: label lives
-    // at the tail, the gap marker is `n/a` (no `--:` pair).
-    //   short / mid / long → "${prefix}n/a(<label>)"
-    //     e.g. "quota:n/a(5h)", "quota:n/a(7d)", "quota:n/a(30d)"
-    `${prefix}n/a(${label})`,
-  );
+  // vX.X.X+ — `(label)` tail is gone; valueOnly drops the prefix.
+  //   normal    → "quota: n/a"
+  //   valueOnly → "n/a"
+  const valueOnly = params.valueOnly === "true" || ctx.passThrough?.valueOnly === "true";
+  const prefix = valueOnly ? "" : labelFor("quota");
+  return `${prefix}n/a`;
 }
 
 // gauge placeholder body: returns PLAIN text (no SGR). The
@@ -5651,7 +5639,7 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   // param; the renderer just reads params.color and applies it.
   m_windowQuota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_countdown: { named: { ...COLOR_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  m_quota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named } },
+  m_quota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_balance: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_age: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_version: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
@@ -6206,9 +6194,9 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return wrapPlainDefault("m_countdown", body, params.color as string | undefined);
   },
   m_quota: (params, ctx) => {
-    // v0.9.0+ — NEW module. vX.X.X+ — label moved to the tail,
-    // so the shape is now `<labelQuota><axis>/<limit>(<interval.label>)`
-    // (placeholder: `<labelQuota>n/a(<interval.label>)`).
+    // v0.9.0+ — NEW module. vX.X.X+ — `(label)` tail dropped, so
+    // the shape is now `<labelQuota><axis>/<limit>`
+    // (placeholder: `<labelQuota>n/a`).
     // `term` arg same shape as `m_windowQuota` / `m_countdown`
     // (v0.9.4+ open-ended dict lookup).
     // vX.X.X+ — `display` inline arg swaps the rendered axis:
@@ -6220,7 +6208,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const mode = (params.display as DisplayMode | undefined) ?? ctx.mode;
     const parts = renderQuotaParts(iv, mode);
     if (!parts) return placeholderWithColor("m_quota", params, ctx);
-    return wrapQuotaBody(parts, mode, params.color as string | undefined);
+    return wrapQuotaBody(parts, mode, params.color as string | undefined, passThroughOr(params, ctx, "valueOnly") === "true");
   },
   m_balance: (params, ctx) => {
     // v6.x: missing balance → "balance:n/a" placeholder (was:
@@ -7683,7 +7671,7 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
         inline = expandInlineToken(tok, "m_countdown", 12, ctx);
       } else if (tok.startsWith("m_quota|")) {
         // v0.9.0+ — new quota module. Renders the quota group as
-        // `${labelQuota}(<interval.label>):used/limit`. Same `term`
+        // `${labelQuota}<used>/<limit>`. Same `term`
         // arg as m_windowQuota / m_countdown. Skip "m_quota|" (length 8).
         inline = expandInlineToken(tok, "m_quota", 8, ctx);
       } else if (tok.startsWith("m_balance|")) {

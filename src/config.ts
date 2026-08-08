@@ -346,9 +346,10 @@ const DEFAULT_CONFIG: {
     // Default "end:" mirrors the startTime default.
     labelEndTime: string;
     // v0.9.0+ — quota module prefix. Read by `m_quota` (per-term
-    // via the new `|term|short|mid|long` inline arg). Default
-    // `"quota:"` preserves a clean axis to override via
-    // config.json. Renders as e.g. `quota(5h):123/500`.
+    // via the `|term|short|mid|long` inline arg). Default
+    // `"quota: "` (trailing space) renders as e.g. `quota: 123/500`
+    // (the `(label)` tail is gone in vX.X.X+). valueOnly drops the
+    // prefix entirely. Override via config.json.
     labelQuota: string;
     // vX.X.X+ — token cost module prefix. Read by m_tokenCost /
     // m_accTokenCost / m_sumTokenCost. Default "cost:" preserves
@@ -514,10 +515,9 @@ const DEFAULT_CONFIG: {
     // pure v0.8.24 conventions.
     labelStartTime: "start:",
     labelEndTime: "end:",
-    // v0.9.0+ — quota module prefix default. Matches the
-    // v0.8.x "labelFoo:" convention (trailing colon included
-    // so the renderer can concat without a separator).
-    labelQuota: "quota:",
+    // v0.9.0+ — quota module prefix default. vX.X.X+ — "quota: "
+    // (trailing space) so the concat reads "quota: 123/500".
+    labelQuota: "quota: ",
     // vX.X.X+ — token cost module prefix default. Matches the
     // existing "labelFoo:" convention (trailing colon included
     // so the renderer can concat without a separator).
@@ -1157,7 +1157,7 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
         "labelStartTime",
         "labelEndTime",
         // v0.9.0+ — quota module prefix. Net-new axis; default
-        // "quota:" preserved (see DEFAULT_CONFIG.labels above).
+        // "quota: " (trailing space; see DEFAULT_CONFIG.labels above).
         "labelQuota",
         // vX.X.X+ — token cost module prefix.
         "labelTokenCost",
