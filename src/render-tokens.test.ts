@@ -6638,7 +6638,10 @@ describe("render — m_cacheTtlStatus (v0.9.x +fixed-second suffix, +active-prov
       ttlMs: 60_000,
     });
     const out = renderTemplate(["m_cacheTtlStatus"], ctxWithProvider()).join("");
-    assert.equal(strip(out), "▄ 30s");
+    // Backdate sets ageMs ≈ 30s at setup; the few ms until render
+    // flip Math.floor to 29s/30s. Tolerate the range (same pattern as
+    // the fresh-path tests) — the ▄ char + yellow band are stable.
+    assert.match(strip(out), /^▄ (29|30)s$/);
     assert.ok(out.includes(YELLOW), `expected yellow SGR, got: ${JSON.stringify(out)}`);
   });
 
@@ -6751,7 +6754,10 @@ describe("render — m_statTtlStatus (v0.9.x +fixed-second suffix)", () => {
     // the entry alone produces the expected ageMs).
     setStatCacheAtForTest("stat:all:5h:true", Date.now() - 150_000);
     const out = renderTemplate(["m_statTtlStatus"], ctxFor(fakeSnapshot())).join("");
-    assert.equal(strip(out), "▄ 150s");
+    // Backdate sets ageMs ≈ 150s at setup; the few ms until render
+    // flip Math.floor to 149s/150s. Tolerate the range (bar char +
+    // yellow band stay put across that jitter).
+    assert.match(strip(out), /^▄ 1(49|50)s$/);
     assert.ok(out.includes(YELLOW), `expected yellow SGR, got: ${JSON.stringify(out)}`);
   });
 
@@ -6862,7 +6868,9 @@ describe("render — m_sumTtlStatus (v0.9.8+ per-filter TTL gauge)", () => {
       ["m_sumTtlStatus|term:short|model:active"],
       sumCtx(),
     ).join("");
-    assert.equal(strip(out), "▄ 150s");
+    // Same boundary tolerance as the m_statTtlStatus half-aged test:
+    // ageMs ≈ 150s at setup, render a few ms later → floor 149s/150s.
+    assert.match(strip(out), /^▄ 1(49|50)s$/);
     assert.ok(out.includes(YELLOW), `expected yellow SGR, got: ${JSON.stringify(out)}`);
   });
 
