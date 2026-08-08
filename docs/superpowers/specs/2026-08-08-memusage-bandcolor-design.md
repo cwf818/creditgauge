@@ -26,11 +26,11 @@
 ### m_memUsage 双色渲染
 
 未指定 `|color|` 时,输出由"整行 cyan"改为:
-`<cyan>Mem:</cyan><bandColor>2.3G</bandColor><cyan>/8.0G</cyan>`
+`<cyan>Mem:</cyan><bandColor>2.3G</bandColor>/<cyan>8.0G</cyan>`
 
 - used 段( `/` 左侧)颜色 = `colorFor(pct, "used")`,`pct = (m.used / m.total) * 100`,走 `thresholds.percentBands`(默认 `[60,70,80,90]`)。
 - **固定 `mode="used"` 传给 `colorFor`**:bytes 显示没有 used/remaining 语义,危险轴永远是"RAM 用了多少",不跟随 `c.mode`(与 `m_windowMemUsage` 的颜色语义一致——剩余模式也会被 `colorFor` 翻回 usedPct)。
-- prefix、`/`、total 三处用模块默认色(`DEFAULT_COLORS.m_memUsage`,cyan)。
+- prefix 和 total 用模块默认色(`DEFAULT_COLORS.m_memUsage`,cyan);`/` 是普通分隔符(plain),在 band-colored used 段的 RESET 之后、cyan total 之前。
 - `|color:<c>|` 覆盖 → 整行包用户色(override 永远赢,与 `wrapPlainDefault` 契约一致)。
 - placeholder 路径不变。
 

@@ -1948,6 +1948,35 @@ function placeholderAcc(
   return `${STALE_COLOR}${body}${RESET}`;
 }
 
+// vX.X.X+ — build the m_memUsage body as a two-tone string. With the
+// user's |color|<c>, the whole "<prefix><used>/<total>" line is wrapped
+// in that color (override always wins, same contract as
+// wrapPlainDefault). With NO color, the used chunk (left of "/") gets
+// band color via colorFor(pct, "used") — thresholds.percentBands
+// (default [60,70,80,90]) — and prefix and total keep the module's
+// DEFAULT_COLORS entry (bright cyan); the "/" is a plain separator
+// between the band-colored used chunk and the cyan total. mode is pinned
+// to "used" because
+// a RAM-bytes display has no used/remaining semantics: the danger axis
+// is always "how much RAM is spent", so the color always indexes by
+// usedPct (mirrors m_windowMemUsage's color rule).
+function renderMemUsageBody(
+  prefix: string,
+  used: number,
+  total: number,
+  paramsColor: string | undefined,
+): string {
+  const usedStr = formatMemBytes(used);
+  const totalStr = formatMemBytes(total);
+  if (paramsColor) return `${paramsColor}${prefix}${usedStr}/${totalStr}${RESET}`;
+  const pct = total > 0 ? (used / total) * 100 : 0;
+  const usedColor = colorFor(pct, "used");
+  const restColor = DEFAULT_COLORS.m_memUsage;
+  const wrap = (s: string) => (restColor ? `${restColor}${s}${RESET}` : s);
+  const prefixSpan = prefix ? wrap(prefix) : "";
+  return `${prefixSpan}${usedColor}${usedStr}${RESET}/${wrap(totalStr)}`;
+}
+
 const MODULES: Record<string, Module> = {
   // v0.4.x — body routes on ctx.providerType. providerType === "balance"
   // gets the dedicated Balance label; providerType === "quota" or
@@ -3210,19 +3239,16 @@ m_quota: Object.assign(
   // matches ccstatusline's "Mem:15.9G/63.7G" shape. query failure
   // → "Mem:n/a" placeholder wrapped in STALE_COLOR. value=0 is
   // impossible (os.totalmem is always > 0 on a real machine),
-  // so the value-zero rule does not apply here. wrapPlainDefault
-  // (not wrapValueDefault) because the body is a string, not a
-  // numeric value that needs the value-zero/--branching.
+  // so the value-zero rule does not apply here. The two-tone body
+  // (band-colored used chunk + cyan prefix/total) is built by
+  // renderMemUsageBody — the body is a string, not a numeric value
+  // that needs the value-zero/--branching.
   m_memUsage: (c) => {
     // vX.X.X+ — |valueOnly|true drops the "Mem:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("memUsage");
     const m = getMemUsage();
     if (!m) return placeholderBare("m_memUsage", c);
-    return wrapPlainDefault(
-      "m_memUsage",
-      `${prefix}${formatMemBytes(m.used)}/${formatMemBytes(m.total)}`,
-      undefined,
-    );
+    return renderMemUsageBody(prefix, m.used, m.total, undefined);
   },
   // v0.8.36+ — system RAM used bar + 5-band-colored percentage.
   // Parallel of m_windowContext (which renders the context-window
@@ -4024,8 +4050,8 @@ const DEFAULT_COLORS: Record<string, string> = {
   // a familiar color until they override.
   m_memUsage: NAMED_PALETTE.cyan,
   m_memUsed: NAMED_PALETTE.cyan,
-m_memTotal: NAMED_PALETTE.cyan,
-// v0.8.36+ — m_windowMemUsage. Moot for the value tint (the
+  m_memTotal: NAMED_PALETTE.cyan,
+  // v0.8.36+ — m_windowMemUsage. Moot for the value tint (the
   // renderer uses colorFor(pct, "used") not wrapPlainDefault),
   // but kept so the dispatcher doesn't warn on bare-form paths
   // that defensively index DEFAULT_COLORS. Mirrors m_memUsage
@@ -4558,7 +4584,7 @@ const ABS_PARAM = {
 
 // vX.X.X+ — boolean toggle that strips the leading label prefix
 // from the rendered body. Applies to every label-using m_* module
-// (~36 modules: the per-turn / m_acc* / m_sum* / m_memUsage
+// (~38 modules: the per-turn / m_acc* / m_sum* / m_memUsage
 // families). Default `false` so v0.8.x renders stay
 // byte-identical after upgrade. When `true`, the leading
 // `labelFor(axis)` prefix is dropped from BOTH the live render
@@ -4941,8 +4967,8 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   // override (renaming the label renames the placeholder too).
   m_memUsage: placeholderLabelOr("memUsage"),
   m_memUsed: placeholderLabelOr("memUsed"),
-m_memTotal: placeholderLabelOr("memTotal"),
-// v0.8.36+ — m_windowMemUsage placeholder mirrors m_windowContext:
+  m_memTotal: placeholderLabelOr("memTotal"),
+  // v0.8.36+ — m_windowMemUsage placeholder mirrors m_windowContext:
   // a gray gauge (filled-bar "100%" in remaining mode, empty-bar
   // "0%" in used mode). Color is STALE_COLOR.
   m_windowMemUsage: placeholderGauge,
@@ -5624,15 +5650,15 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_cacheTtlStatus: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_statTtlStatus: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   // v0.8.17+ — system RAM usage inline-args. Same shape as the rest
-  // of the named-args family (color + nulldrop). No scale / band
-  // color for the value itself: the body is a string ("X.XG/Y.YG")
-  // and the per-module DEFAULT_COLORS tint applies by default.
+  // of the named-args family (color + nulldrop). |color|<c> overrides
+  // the whole two-tone body; with no color, the used chunk is
+  // band-colored internally (colorFor) and prefix + total stay cyan.
   m_memUsage: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   // vX.X.X+ — m_memUsed / m_memTotal inline-args. Same shape as
-// m_memUsage: color + nulldrop + valueOnly.
-m_memUsed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-m_memTotal: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-// v0.8.36+ — m_windowMemUsage inline-args. Same shape as
+  // m_memUsage: color + nulldrop + valueOnly.
+  m_memUsed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_memTotal: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
+  // v0.8.36+ — m_windowMemUsage inline-args. Same shape as
   // m_windowContext: color + display + nulldrop. |color|<c>
   // overrides the 5-band percentBands color; |display|<used|
   // remaining> selects which side of the bar is colored and
@@ -7058,8 +7084,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (!m) return placeholderWithColor("m_memUsage", params, ctx);
     // vX.X.X+ — |valueOnly|true drops the "Mem:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("memUsage");
-    const body = `${prefix}${formatMemBytes(m.used)}/${formatMemBytes(m.total)}`;
-    return wrapPlainDefault("m_memUsage", body, params.color as string | undefined);
+    return renderMemUsageBody(prefix, m.used, m.total, params.color as string | undefined);
   },
   // vX.X.X+ — system RAM used bytes inline form. Mirrors the bare
   // MODULES entry but with the user's |color|<c> override.
@@ -7693,7 +7718,7 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
         inline = expandInlineToken(tok, "m_memUsed", 10, ctx);
       } else if (tok.startsWith("m_memTotal|")) {
         // m_memTotal → 10 chars + "|" = 11 skipLen.
-        inline = expandInlineToken(tok, "m_memTotal", 12, ctx);
+        inline = expandInlineToken(tok, "m_memTotal", 11, ctx);
       }
       // Parse failure (bad |color|, unknown param, odd segment count)
 // → warn + drop. Renderer returning null for valid args (e.g.

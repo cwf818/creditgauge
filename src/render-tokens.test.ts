@@ -167,6 +167,16 @@ const ctxFor = (
   passThrough: undefined as Record<string, string | number> | undefined,
 });
 
+// Hoisted to module scope (was inside the v0.8.0+ labels describe) so
+// sibling describes — including the m_memUsed / m_memTotal block — can
+// reuse it via closure. Same semantics: __resetForTest with a partial
+// labels override, reset afterwards (the file-level beforeEach at
+// line 106 also calls configStore.__resetForTest()).
+function withLabels(labels: Partial<Config["labels"]>, fn: () => void) {
+  __resetForTest({ labels: { ...configStore.get().labels, ...labels } });
+  try { fn(); } finally { __resetForTest(); }
+}
+
 // v0.8.21+ — quoteBodies-injecting ctx factory. Mirrors ctxFor but
 // attaches a pre-fetched body map so m_quote|address|… tests can
 // exercise the renderer without spinning an HTTP server (the fetch
@@ -5528,13 +5538,7 @@ describe("renderTemplate — v0.8.0+ labels.* config customization", () => {
   // Apply a custom labels override to configStore for these tests,
   // then reset in the next beforeEach (the file-level beforeEach
   // at line 106 already calls configStore.__resetForTest()).
-  // Helpers below reach into configStore via __resetForTest with a
-  // partial override — that's the documented test path.
-  function withLabels(labels: Partial<Config["labels"]>, fn: () => void) {
-    __resetForTest({ labels: { ...configStore.get().labels, ...labels } });
-    try { fn(); } finally { __resetForTest(); }
-  }
-
+  // withLabels (the shared helper) now lives at module scope.
   it("labelTokenIn override reaches per-turn m_tokenInTotal and m_tokenTotalIn", () => {
     withLabels({ labelTokenIn: "Δ:" }, () => {
       const a = renderTemplate(["m_tokenInTotal"], ctxFor(fakeSnapshot())).join("\n");
@@ -5897,6 +5901,17 @@ describe("renderTemplate — v0.8.0+ labels.* config customization", () => {
     assert.match(out, /\x1b\[(?:31|38;5;\d+)m/);
   });
 
+  it("m_memUsage| used chunk band-colored; prefix + /total stay cyan (no |color|)", () => {
+    const out = renderTemplate(["m_memUsage"], ctxFor(fakeSnapshot())).join("\n");
+    const s = strip(out);
+    if (/n\/a$/.test(s)) return; // placeholder path — no bytes to two-tone
+    assert.match(s, /^Mem:\d.*\/.*$/);
+    // used chunk is its own SGR segment, closed with RESET before "/".
+    assert.match(out, /\x1b\[0m\//);
+    // "Mem:" prefix carries the cyan default (bright cyan 38;5;51).
+    assert.match(out, /\x1b\[38;5;51mMem:/);
+  });
+
   // v0.8.36+ — m_windowMemUsage bar + 5-band-colored percentage,
   // parallel of m_windowContext. The renderer reads getMemUsage()
   // and emits a bar+percent chunk via formatOneChunk — NO label
@@ -5968,6 +5983,87 @@ describe("renderTemplate — v0.8.0+ labels.* config customization", () => {
       ctxFor(fakeSnapshot()),
     ).join("\n");
     assert.doesNotMatch(strip(out), /n\/a/);
+  });
+});
+
+// vX.X.X+ — m_memUsed / m_memTotal standalone byte modules. Both read
+// getMemUsage() (same source as m_memUsage) and render a single labeled
+// byte value. Byte values are host-dependent → prefix/shape-only asserts.
+describe("renderTemplate — m_memUsed / m_memTotal (vX.X.X+)", () => {
+  it("m_memTotal|valueOnly|true renders (inline skipLen = key.length + 1)", () => {
+    // The inline dispatcher consumes key.length + 1 chars (11 for
+    // m_memTotal). A too-large skipLen (12) slices one char off the
+    // first arg → parseInlineArgs sees "alueOnly:true" → badarg → the
+    // whole chunk drops (empty output). Both the value path ("8.0G")
+    // and the placeholder path ("n/a") produce NON-empty output when
+    // args parse, so asserting non-empty output pins the skipLen.
+    const out = renderTemplate(
+      ["m_memTotal|valueOnly:true"],
+      ctxFor(fakeSnapshot()),
+    ).join("\n");
+    assert.notEqual(strip(out), "");
+  });
+
+  it("m_memUsed renders 'used:<bytes>'", () => {
+    const out = renderTemplate(["m_memUsed"], ctxFor(fakeSnapshot())).join("\n");
+    assert.match(strip(out), /^used:(n\/a|\d.*)$/);
+  });
+
+  it("m_memTotal renders 'total:<bytes>'", () => {
+    const out = renderTemplate(["m_memTotal"], ctxFor(fakeSnapshot())).join("\n");
+    assert.match(strip(out), /^total:(n\/a|\d.*)$/);
+  });
+
+  it("labelMemUsed override reaches m_memUsed prefix", () => {
+    withLabels({ labelMemUsed: "RAM:" }, () => {
+      const out = renderTemplate(["m_memUsed"], ctxFor(fakeSnapshot())).join("\n");
+      assert.match(strip(out), /^RAM:(n\/a|\d.*)$/);
+    });
+  });
+
+  it("labelMemTotal override reaches m_memTotal prefix", () => {
+    withLabels({ labelMemTotal: "RAM:" }, () => {
+      const out = renderTemplate(["m_memTotal"], ctxFor(fakeSnapshot())).join("\n");
+      assert.match(strip(out), /^RAM:(n\/a|\d.*)$/);
+    });
+  });
+
+  it("m_memUsed|nulldrop|true drops the placeholder on a null result", () => {
+    const out = renderTemplate(
+      ["m_memUsed|nulldrop:true"],
+      ctxFor(fakeSnapshot()),
+    ).join("\n");
+    assert.doesNotMatch(strip(out), /n\/a/);
+  });
+
+  it("m_memTotal|nulldrop|true drops the placeholder on a null result", () => {
+    const out = renderTemplate(
+      ["m_memTotal|nulldrop:true"],
+      ctxFor(fakeSnapshot()),
+    ).join("\n");
+    assert.doesNotMatch(strip(out), /n\/a/);
+  });
+
+  it("m_memUsed|color|red override applies the user's SGR", () => {
+    const out = renderTemplate(
+      ["m_memUsed|color:red"],
+      ctxFor(fakeSnapshot()),
+    ).join("\n");
+    const s = strip(out);
+    if (/n\/a$/.test(s)) return; // placeholder — no live value to color
+    assert.match(s, /^used:/);
+    assert.match(out, /\x1b\[(?:31|38;5;\d+)m/);
+  });
+
+  it("m_memTotal|color|red override applies the user's SGR", () => {
+    const out = renderTemplate(
+      ["m_memTotal|color:red"],
+      ctxFor(fakeSnapshot()),
+    ).join("\n");
+    const s = strip(out);
+    if (/n\/a$/.test(s)) return; // placeholder — no live value to color
+    assert.match(s, /^total:/);
+    assert.match(out, /\x1b\[(?:31|38;5;\d+)m/);
   });
 });
 
