@@ -63,7 +63,7 @@ const DEFAULT_LINE_TEMPLATE: {
     "s_dot|wrap:true",
     "m_windowQuota|term:long",
     "m_countdown|term:long|valueOnly:true",
-    "m_quota|term:long|display:remaining|valueOnly:true|nulldrop:true"
+    "m_quota|term:long|display:remaining|nulldrop:true"
   ],
   balance: ["m_modeLabel|color:yellow", "m_balance", "m_age"],
 };
@@ -318,7 +318,7 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
 
     "m_label|🗪 : |color:orange",
     "m_template|scopeline|scope:session",
-    "s_move|pos:51",
+    "s_move|pos:45",
     "s_pipe",
     "m_label|⌛5h: |color:yellow",
     "m_template|periodline|window:5h",
@@ -326,7 +326,7 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
 
     "m_label|📦: |color:orange",
     "m_template|scopeline|scope:project",
-    "s_move|pos:51",
+    "s_move|pos:45",
     "s_pipe",
     "m_label|⌛7d: |color:yellow",
     "m_template|periodline|window:7d",
