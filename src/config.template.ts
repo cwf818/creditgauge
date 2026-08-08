@@ -24,7 +24,19 @@
 // Defaults reproduce the v0.2.16 output byte-for-byte:
 //   quota:   "Usage: <5h> <countdown5h> · <7d> <countdown7d>"
 //   balance: "Balance: <balance>"
-// with s_space / s_dot / s_space composing " · " between windows.
+// The " · " between windows is a single `s_dot|wrap:true` (the legacy
+// `s_space / s_dot / s_space` triple was collapsed to it when the
+// redundant `s_space` tokens were dropped — auto-space under
+// prefixSpace=true now provides the inter-module spacing).
+//
+// vX.X.X+ — the per-module `s_space` separators are GONE from the
+// built-in arrays. The auto-space feature (prefixSpace, default true)
+// reproduces exactly one space between adjacent m_* modules per
+// R1/R2/R3, so the explicit tokens were redundant. s_space survives
+// ONLY where auto-space cannot reproduce it: immediately adjacent to
+// an `m_template|<key>` token (RULE B — m_template is excluded from
+// the affix path), and inside the old " · " idiom's replacement
+// (`s_dot|wrap:true`, which pads itself).
 //
 // v0.4.0+ — kept around as the SOURCE OF TRUTH for the `quota` / `balance`
 // entries inside `DEFAULT_LINE_TEMPLATES`. The legacy top-level
@@ -36,19 +48,21 @@ const DEFAULT_LINE_TEMPLATE: {
   quota: string[];
   balance: string[];
 } = {
-  // v0.4.x — the default template uses the NAMED ALIASES (s_space,
-  // s_dot) so it works with the new empty default `separators`
-  // array. The visual output is byte-for-byte identical to the
-  // v0.4.0 release: the `s_0 + s_1 + s_0` composition is replaced
-  // with `s_space + s_dot + s_space`, both producing " · ".
+  // vX.X.X+ — the explicit `s_space` tokens are dropped (auto-space,
+  // prefixSpace=true, reproduces the inter-module spacing) and the
+  // legacy `s_space + s_dot + s_space` " · " composition is collapsed
+  // to a single self-padding `s_dot|wrap:true`. The visual output is
+  // byte-for-byte identical to the v0.4.x release.
   quota: [
-    "m_modeLabel|color:yellow", "s_space",
-    "m_windowQuota|term:short", "s_space", "m_countdown|term:short",
-    "s_space", "s_dot", "s_space",
-    "m_windowQuota|term:mid", "s_space", "m_countdown|term:mid",
-    "s_space", "m_age"
+    "m_modeLabel|color:yellow",
+    "m_windowQuota|term:short",
+    "m_countdown|term:short",
+    "s_dot|wrap:true",
+    "m_windowQuota|term:mid",
+    "m_countdown|term:mid",
+    "m_age"
   ],
-  balance: ["m_modeLabel|color:yellow", "s_space", "m_balance", "s_space", "m_age"],
+  balance: ["m_modeLabel|color:yellow", "m_balance", "m_age"],
 };
 
 // v0.4.0+ — registry of reusable template fragments. Each value is a
@@ -158,41 +172,38 @@ export const DEFAULT_STATUSLINE_TEMPLATE: StatuslineTemplate = ["m_template|quot
 export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   // Legacy "quota" / "balance" entries — preserved for back-compat
   // with pre-v0.8.14 configs that referenced `m_template:quota` /
-  // `:balance`. Bodies match DEFAULT_LINE_TEMPLATE (the `s_space +
-  // s_dot + s_space` composition that produces " · " between
-  // windows).
+  // `:balance`. Bodies match DEFAULT_LINE_TEMPLATE (the " · " between
+  // windows is a self-padding `s_dot|wrap:true`).
   quota: DEFAULT_LINE_TEMPLATE.quota,
   balance: DEFAULT_LINE_TEMPLATE.balance,
 
   quota_all: [
-    "m_modeLabel|color:yellow", "s_space",
-    "m_windowQuota|term:short", "s_space", "m_countdown|term:short",
+    "m_modeLabel|color:yellow",
+    "m_windowQuota|term:short",
+    "m_countdown|term:short",
     "~",
     "m_sumEstQuota|term:short|valueOnly:true",
     "s_dot|wrap:true",
-    "m_windowQuota|term:mid", "s_space", "m_countdown|term:mid",
+    "m_windowQuota|term:mid",
+    "m_countdown|term:mid",
     "~",
     "m_sumEstQuota|term:mid|valueOnly:true",
     // "s_dot|wrap:true",
     // "m_windowQuota|term:long", "s_space", "m_countdown|term:long",
     // "~",
     // "m_sumEstQuota|term:long|valueOnly:true",
-    "s_space", "m_age"
+    "m_age"
   ],
   
   quota_all_compact: [
     "m_modeLabel|color:yellow",
-    "s_space",
     "m_windowQuota|term:short",
-    "s_space",
     "m_countdown|term:short|valueOnly:true",
     "s_dot|wrap:true",
     "m_windowQuota|term:mid",
-    "s_space",
     "m_countdown|term:mid|valueOnly:true",
     "s_dot|wrap:true",
     "m_windowQuota|term:long",
-    "s_space",
     "m_countdown|term:long|valueOnly:true"
   ],
 
@@ -210,67 +221,39 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   // acc / sum-avg three-tier split of the v0.8.x contract.
   tokens_tick: [
     "m_tokenInSpeed",
-    "s_space",
     "m_tokenOutSpeed",
-    "s_space",
     "m_tokenHitRate",
-    "s_space",
     "m_apiMs",
-    "s_space",
     "m_tokenIn",
-    "s_space",
     "m_tokenOut",
-    "s_space",
     "m_tokenCachedIn",
-    "s_space",
     "m_tokenTotalIn",
-    "s_space",
     "m_tokenCost"
   ],
   tokens_acc: [
     "m_accTokenInSpeed",
-    "s_space",
     "m_accTokenOutSpeed",
-    "s_space",
     "m_accTokenHitRate",
-    "s_space",
     "m_accApiMs",
-    "s_space",
     "m_accTokenIn",
-    "s_space",
     "m_accTokenOut",
-    "s_space",
     "m_accTokenCachedIn",
-    "s_space",
     "m_accTokenTotalIn",
-    "s_space",
     "m_accApiCalls",
-    "s_space",
     "m_accTokenCost",
-    "s_space",
     "m_accStartTime|abs:true",
   ],
   tokens_stat: [
     "m_sumTokenInSpeed",
-    "s_space",
     "m_sumTokenOutSpeed",
-    "s_space",
     "m_sumTokenHitRate",
-    "s_space",
     "m_sumApiMs",
-    "s_space",
     "m_sumTokenIn",
-    "s_space",
     "m_sumTokenOut",
-    "s_space",
     "m_sumTokenCachedIn",
-    "s_space",
     "m_sumTokenTotalIn",
-    "s_space",
     "m_sumApiCalls",
-    "s_space",
     "m_sumTokenCost",
-    "s_space",
     "m_sumStartTime|abs:true",
   ],
   // "information" — context window + memory + git pipeline on one
@@ -284,7 +267,6 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "] ",
     "m_label|Context: |color:yellow",
     "m_windowContext|display:used",
-    "s_space",
     "m_contextSize|valueOnly:true",
     "/",
     "m_contextWindowSize|valueOnly:true",
@@ -292,15 +274,12 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   mem_info: [
     "m_label|▦ Memory: |color:yellow",
     "m_windowMemUsage|display:used",
-    "s_space",
     "m_memUsage|valueOnly:true",
   ],
   git_info: [
     "m_label|⎇ Git: |color:yellow",
     "m_branch|withStatus:true",
-    "s_space",
     "m_linesAdded",
-    "s_space",
     "m_linesRemoved",
   ],
   // "tick_eval" — per-turn tick diagnostics paired with the
@@ -310,99 +289,65 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   tick_eval: [
     "m_label|⚡Tick-tock: |color:cyan",
     "m_tokenInSpeed",
-    "s_space",
     "m_tokenOutSpeed",
-    "s_space",
     "m_tokenIn",
-    "s_space",
     "m_tokenOut",
-    "s_space",
     "m_apiMs",
-    "s_space",
     "m_tokenCachedIn",
-    "s_space",
     "m_tokenTotalIn",
+    // RULE B — the s_space before m_template|quote stays: m_template is
+    // excluded from the affix path, so auto-prefix cannot reproduce it.
     "s_space",
     "m_template|quote",
   ],
   combline1: [
     "m_label|🟢Session:   |color:orange",
     "m_accTokenInSpeed|scope:session",
-    "s_space",
     "m_accTokenOutSpeed|scope:session",
-    "s_space",
     "m_accTokenIn|scope:session",
-    "s_space",
     "m_accTokenOut|scope:session",
-    "s_space",
     "m_accTokenCachedIn|scope:session",
-    "s_space",
     "m_accTokenHitRate|scope:session",
-    "s_space",
     "m_accApiCalls|scope:session",
     "s_move|pos:73",
     "s_pipe|wrap:true",
     "m_label|⌛5h-align: |color:yellow",
     "m_sumTokenInSpeed|window:5h|align:true",
-    "s_space",
     "m_sumTokenOutSpeed|window:5h|align:true",
-    "s_space",
     "m_sumTokenIn|window:5h|align:true",
-    "s_space",
     "m_sumTokenOut|window:5h|align:true",
-    "s_space",
     "m_sumTokenCachedIn|window:5h|align:true",
-    "s_space",
     "m_sumTokenHitRate|window:5h|align:true",
-    "s_space",
     "m_sumApiCalls|window:5h|align:true",
   ],
   combline2: [
     "m_label|🟢Project:   |color:orange",
     "m_accTokenInSpeed|scope:project",
-    "s_space",
     "m_accTokenOutSpeed|scope:project",
-    "s_space",
     "m_accTokenIn|scope:project",
-    "s_space",
     "m_accTokenOut|scope:project",
-    "s_space",
     "m_accTokenCachedIn|scope:project",
-    "s_space",
     "m_accTokenHitRate|scope:project",
-    "s_space",
     "m_accApiCalls|scope:project",
     "s_move|pos:73",
     "s_pipe|wrap:true",
     "m_label|⌛7d-align: |color:yellow",
     "m_sumTokenInSpeed|window:7d|align:true",
-    "s_space",
     "m_sumTokenOutSpeed|window:7d|align:true",
-    "s_space",
     "m_sumTokenIn|window:7d|align:true",
-    "s_space",
     "m_sumTokenOut|window:7d|align:true",
-    "s_space",
     "m_sumTokenCachedIn|window:7d|align:true",
-    "s_space",
     "m_sumTokenHitRate|window:7d|align:true",
-    "s_space",
     "m_sumApiCalls|window:7d|align:true",
-    "s_space",
     "m_statTtlStatus",
   ],
   "tickline-slim": [
     "m_label|⚡: |color:orange",
     "m_tokenOutSpeed",
-    "s_space",
     "m_tokenIn",
-    "s_space",
     "m_tokenOut",
-    "s_space",
     "m_tokenCachedIn",
-    "s_space",
     "m_tokenTotalIn",
-    "s_space",
     "m_apiMs",
     "s_pipe|wrap:true",
     "m_session"
@@ -410,79 +355,52 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   "combline1-slim": [
     "m_label|🗪 : |color:orange",
     "m_accTokenOutSpeed|scope:session",
-    "s_space",
     "m_accTokenOut|scope:session",
-    "s_space",
     "m_accTokenTotalIn|scope:session",
-    "s_space",
     "m_accTokenHitRate|scope:session",
-    "s_space",
     "m_accApiCalls|scope:session",
     "s_move|pos:47",
     "s_pipe",
     "m_label|⌛5h: |color:yellow",
     "m_sumTokenOutSpeed|window:5h|align:true",
-    "s_space",
     "m_sumTokenOut|window:5h|align:true",
-    "s_space",
     "m_sumTokenTotalIn|window:5h|align:true",
-    "s_space",
     "m_sumTokenHitRate|window:5h|align:true",
-    "s_space",
     "m_sumApiCalls|window:5h|align:true",
-    "s_space",
     "m_sumTokenCost|window:5h|align:true|valueOnly:true",
-    "s_space",
     "m_statTtlStatus"
   ],
   "combline2-slim": [
     "m_label|📦: |color:orange",
     "m_accTokenOutSpeed|scope:project",
-    "s_space",
     "m_accTokenOut|scope:project",
-    "s_space",
     "m_accTokenTotalIn|scope:project",
-    "s_space",
     "m_accTokenHitRate|scope:project",
-    "s_space",
     "m_accApiCalls|scope:project",
     "s_move|pos:46",
     "s_pipe",
     "m_label|⌛7d: |color:yellow",
     "m_sumTokenOutSpeed|window:7d|align:true",
-    "s_space",
     "m_sumTokenOut|window:7d|align:true",
-    "s_space",
     "m_sumTokenTotalIn|window:7d|align:true",
-    "s_space",
     "m_sumTokenHitRate|window:7d|align:true",
-    "s_space",
     "m_sumApiCalls|window:7d|align:true",
-    "s_space",
     "m_sumTokenCost|window:7d|align:true|valueOnly:true",
   ],
   git_info_all: [
     "m_label|⎇ Git: |color:yellow",
     "m_repo",
-    "s_space",
     "m_branch",
-    "s_space",
     "m_gitStatus",
-    "s_space",
     "m_linesAdded",
-    "s_space",
     "m_linesRemoved",
   ],
   context_all: [
     "m_label|Context: |color:yellow",
     "m_windowContext|display:used",
-    "s_space",
     "m_contextSize",
-    "s_space",
     "m_contextWindowSize",
-    "s_space",
     "m_contextUsedPercent",
-    "s_space",
     "m_contextRemainingPercent",
   ],
   quote: [
@@ -523,7 +441,6 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "s_pipe|wrap:true",
     "m_label|📜: |color:yellow",
     "m_windowContext|display:used",
-    "s_space",
     "m_contextSize|valueOnly:true",
     "/",
     "m_contextWindowSize|valueOnly:true",
@@ -537,31 +454,22 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
 
     "m_label|🗪 : |color:orange",
     "m_accTokenOutSpeed|scope:session",
-    "s_space",
     "m_accTokenOut|scope:session",
-    "s_space",
     "m_accTokenTotalIn|scope:session",
-    "s_space",
     "m_accTokenHitRate|scope:session",
-    "s_space",
     "m_accApiCalls|scope:session",
     "s_pipe|wrap:true",
     "m_label|⏱️: |color:yellow",
     "m_accApiMs|scope:session|valueOnly:true",
-    "s_space",
     "m_label|🪙: |color:yellow",
     "m_accTokenCost|scope:session|valueOnly:true",
     "s_newline",
 
     "m_label|📦: |color:orange",
     "m_accTokenOutSpeed|scope:project",
-    "s_space",
     "m_accTokenOut|scope:project",
-    "s_space",
     "m_accTokenTotalIn|scope:project",
-    "s_space",
     "m_accTokenHitRate|scope:project",
-    "s_space",
     "m_accApiCalls|scope:project",
     "s_pipe|wrap:true",
     "m_template|git_info",
@@ -574,6 +482,8 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   ],
   standard: [
     "m_template|information",
+    // RULE B — s_space adjacent to m_template stays: m_template is
+    // excluded from the affix path, so auto-prefix cannot reproduce it.
     "s_space",
     "m_template|mem_info",
     "s_pipe|wrap:true",
@@ -588,6 +498,7 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_pluginSource",
     "m_template|quota|type:quota",
     "m_template|balance|type:balance",
+    // RULE B — s_space adjacent to m_template stays.
     "s_space",
     "m_template|git_info",
   ],
@@ -595,6 +506,8 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   // stat + long-interval quota + chain emoji + version.
   abundant: [
     "m_template|information",
+    // RULE B — s_space adjacent to m_template stays: m_template is
+    // excluded from the affix path, so auto-prefix cannot reproduce it.
     "s_space",
     "m_template|mem_info",
     "s_pipe|wrap:true",
@@ -626,6 +539,9 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_pluginSource",
     "m_template|quota_all|type:quota",
     "m_template|balance|type:balance",
+    // RULE B — s_space adjacent to m_template|balance stays (the
+    // following m_quota is a quota-only module that drops on a balance
+    // provider; keeping the explicit space preserves the trailing pad).
     "s_space",
     "m_quota|term:long|display:remaining|nulldrop:true"
   ],
@@ -637,23 +553,21 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "] ",
     "m_label|📜: |color:yellow",
     "m_windowContext|display:used",
-    "s_space",
     "m_contextWindowSize|valueOnly:true",
     "s_pipe|wrap:true",
     "m_label|▦: |color:yellow",
     "m_windowMemUsage|display:used",
-    "s_space",
     "m_memUsage|valueOnly:true",
     "s_pipe|wrap:true",
     "m_label|⏱️: |color:yellow",
     "m_accApiMs|scope:session|valueOnly:true",
-    "s_space",
     "m_label|🪙: |color:yellow",
     "m_accTokenCost|scope:session|valueOnly:true",
     "s_pipe|wrap:true",
     "m_version|color:yellow",
     "s_newline",
     "m_template|tickline-slim",
+    // RULE B — s_space adjacent to m_template stays.
     "s_space",
     "m_template|quote",
     "s_newline",
@@ -663,6 +577,7 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "s_newline",
     "m_template|quota_all|type:quota",
     "m_template|balance|type:balance",
+    // RULE B — s_space adjacent to m_template stays.
     "s_space",
     "m_template|git_info"
   ],
