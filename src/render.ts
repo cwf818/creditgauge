@@ -37,6 +37,8 @@ import * as cache from "./cache.ts";
 // m_memUsage data source: Darwin shells out to `vm_stat`, others use os.*.
 import * as os from "node:os";
 import { execSync } from "node:child_process";
+// m_dirName derives its body from stdin.cwd via path.basename.
+import * as path from "node:path";
 export type { PrevTickSnapshot, AvgSnapshot };
 
 type Window = {
@@ -2027,6 +2029,16 @@ m_quota: Object.assign(
     );
     return parts.length > 0 ? wrapPlainDefault("m_repo", parts.join("/"), undefined) : placeholderBare("m_repo", c);
   },
+  // Repo name only (stdin.workspace.repo.name); missing/empty → "n/a".
+  m_gitName: (c) => {
+    const n = c.tokens?.repo?.name;
+    return n != null && n.length > 0 ? wrapPlainDefault("m_gitName", n, undefined) : placeholderBare("m_gitName", c);
+  },
+  // Current directory basename (stdin.cwd); missing or root → "n/a".
+  m_dirName: (c) => {
+    const n = c.tokens?.cwd ? path.basename(c.tokens.cwd) : "";
+    return n.length > 0 ? wrapPlainDefault("m_dirName", n, undefined) : placeholderBare("m_dirName", c);
+  },
   // Claude Code CLI version (stdin.version); missing → "n/a".
   m_ccVersion: (c) => c.tokens?.ccversion ? wrapPlainDefault("m_ccVersion", c.tokens.ccversion, undefined) : placeholderBare("m_ccVersion", c),
   // Current git branch; missing git info → "branch:n/a" placeholder.
@@ -2794,6 +2806,8 @@ const DEFAULT_COLORS: Record<string, string> = {
   m_provider: configStore.get().colors.yellow,
   m_effort: NAMED_PALETTE.magenta,
   m_repo: NAMED_PALETTE.blue,
+  m_gitName: NAMED_PALETTE.magenta,
+  m_dirName: NAMED_PALETTE.magenta,
   m_branch: NAMED_PALETTE.teal,
   // m_gitStatus is NOT in DEFAULT_COLORS — its color is value-dependent
   // (dirty → brown, clean → bright green) and set inline in the render
@@ -3503,6 +3517,8 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   m_provider: placeholderNA(""),
   m_effort: placeholderNA(""),
   m_repo: placeholderNA(""),
+  m_gitName: placeholderNA(""),
+  m_dirName: placeholderNA(""),
   m_branch: placeholderNA("branch:"),
   m_gitStatus: placeholderNA("git:"),
   m_ccVersion: placeholderNA(""),
@@ -4084,6 +4100,8 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_provider: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_effort: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_repo: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
+  m_gitName: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
+  m_dirName: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_branch: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WITHSTATUS_PARAM.named } },
   m_gitStatus: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_ccVersion: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
@@ -5028,6 +5046,16 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (parts.length === 0) return placeholderWithColor("m_repo", params, ctx);
     return wrapPlainDefault("m_repo", parts.join("/"), params.color as string | undefined);
   },
+  m_gitName: (params, ctx) => {
+    const n = ctx.tokens?.repo?.name;
+    if (n == null || n.length === 0) return placeholderWithColor("m_gitName", params, ctx);
+    return wrapPlainDefault("m_gitName", n, params.color as string | undefined);
+  },
+  m_dirName: (params, ctx) => {
+    const n = ctx.tokens?.cwd ? path.basename(ctx.tokens.cwd) : "";
+    if (n.length === 0) return placeholderWithColor("m_dirName", params, ctx);
+    return wrapPlainDefault("m_dirName", n, params.color as string | undefined);
+  },
   m_branch: (params, ctx) => {
     const info = readGitInfo(ctx.tokens?.cwd);
     if (info?.branch == null) return placeholderWithColor("m_branch", params, ctx);
@@ -5734,6 +5762,12 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       } else if (tok.startsWith("m_gitStatus|")) {
         // Skip "m_gitStatus|" (length 12).
         inline = expandInlineToken(tok, "m_gitStatus", 12, ctx);
+      } else if (tok.startsWith("m_gitName|")) {
+        // Skip "m_gitName|" (length 10).
+        inline = expandInlineToken(tok, "m_gitName", 10, ctx);
+      } else if (tok.startsWith("m_dirName|")) {
+        // Skip "m_dirName|" (length 10).
+        inline = expandInlineToken(tok, "m_dirName", 10, ctx);
       } else if (tok.startsWith("m_ccVersion|")) {
         // Skip "m_ccVersion|" (length 12).
         inline = expandInlineToken(tok, "m_ccVersion", 12, ctx);

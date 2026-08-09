@@ -2234,6 +2234,50 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     assert.equal(strip(out), "n/a");
   });
 
+  it("m_gitName| bare renders the repo name from stdin", () => {
+    const out = renderTemplate(["m_gitName"], ctxFor(fakeSnapshot())).join("\n");
+    assert.equal(strip(out), "creditgauge");
+  });
+
+  it("m_gitName| default tint is magenta (玫红)", () => {
+    const out = renderTemplate(["m_gitName"], ctxFor(fakeSnapshot())).join("\n");
+    assert.ok(out.includes("\x1b[38;5;201m"), `got: ${JSON.stringify(out)}`);
+  });
+
+  it("m_gitName| emits 'n/a' when repo is missing (v6.x placeholder)", () => {
+    const out = renderTemplate(["m_gitName"], ctxFor(fakeSnapshot({ repo: null }))).join("\n");
+    assert.equal(strip(out), "n/a");
+  });
+
+  it("m_gitName| emits 'n/a' when repo.name is empty", () => {
+    const out = renderTemplate(
+      ["m_gitName"],
+      ctxFor(fakeSnapshot({ repo: { host: "github.com", owner: "cwf818", name: "" } })),
+    ).join("\n");
+    assert.equal(strip(out), "n/a");
+  });
+
+  it("m_dirName| bare renders the current directory basename", () => {
+    const out = renderTemplate(
+      ["m_dirName"],
+      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
+    ).join("\n");
+    assert.equal(strip(out), "creditgauge");
+  });
+
+  it("m_dirName| default tint is magenta (玫红)", () => {
+    const out = renderTemplate(
+      ["m_dirName"],
+      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
+    ).join("\n");
+    assert.ok(out.includes("\x1b[38;5;201m"), `got: ${JSON.stringify(out)}`);
+  });
+
+  it("m_dirName| emits 'n/a' when cwd is missing (v6.x placeholder)", () => {
+    const out = renderTemplate(["m_dirName"], ctxFor(fakeSnapshot({ cwd: null }))).join("\n");
+    assert.equal(strip(out), "n/a");
+  });
+
   it("m_ccVersion| bare '2.1.191'", () => {
     const out = renderTemplate(["m_ccVersion"], ctxFor(fakeSnapshot())).join("\n");
     assert.equal(strip(out), "2.1.191");
@@ -2987,6 +3031,35 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
     const out = renderTemplate(
       ["m_repo|nulldrop:false"],
       ctxFor(fakeSnapshot({ repo: { host: null, owner: null, name: null } })),
+    ).join("\n");
+    assert.equal(strip(out), "n/a");
+  });
+
+  it("m_gitName|color|magenta wraps the repo name in magenta", () => {
+    const out = renderTemplate(["m_gitName|color:magenta"], ctxFor(fakeSnapshot())).join("\n");
+    assert.ok(out.includes("\x1b[38;5;201m"), `got: ${JSON.stringify(out)}`);
+  });
+
+  it("m_gitName|nulldrop|false renders 'n/a' when repo.name is null", () => {
+    const out = renderTemplate(
+      ["m_gitName|nulldrop:false"],
+      ctxFor(fakeSnapshot({ repo: { host: null, owner: null, name: null } })),
+    ).join("\n");
+    assert.equal(strip(out), "n/a");
+  });
+
+  it("m_dirName|color|magenta wraps the dir basename in magenta", () => {
+    const out = renderTemplate(
+      ["m_dirName|color:magenta"],
+      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
+    ).join("\n");
+    assert.ok(out.includes("\x1b[38;5;201m"), `got: ${JSON.stringify(out)}`);
+  });
+
+  it("m_dirName|nulldrop|false renders 'n/a' when cwd is null", () => {
+    const out = renderTemplate(
+      ["m_dirName|nulldrop:false"],
+      ctxFor(fakeSnapshot({ cwd: null })),
     ).join("\n");
     assert.equal(strip(out), "n/a");
   });
