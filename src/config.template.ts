@@ -109,7 +109,7 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   ],
   // "git_info" — git branch with clean/dirty status + line deltas.
   git_info: [
-    "m_label|⎇ Git: |color:yellow",
+    "m_label|⎇ : |color:yellow",
     "m_branch|withStatus:true",
     "m_linesAdded",
     "m_linesRemoved",
@@ -166,11 +166,11 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_template|plugin_info|type:unknown",
   ],
 
-  // Multi-line layout: header (provider/model + context + memory),
-  // per-turn ticks + git, session / project scopes with 5h/7d window
+  // Multi-line layout: header (git + context + memory), then provider/
+  // model + per-turn ticks, session / project scopes with 5h/7d window
   // rows, then the quota/balance + quote tail.
   compact: [
-    "m_template|model_info",
+    "m_template|git_info",
     "s_pipe|wrap:true",
     "m_template|context_info",
     "s_pipe|wrap:true",
@@ -178,18 +178,17 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_memUsage|valueOnly:true",
     "s_newline",
 
+    "m_template|model_info",
     "m_label|⚡: |color:orange",
     "m_template|tickline",
-    "s_dot|wrap:true",
-    "m_template|git_info",
     "s_newline",
 
     "m_label|🗪 : |color:orange",
     "m_template|scopeline|scope:session",
     "s_pipe|wrap:true",
-    "m_label|⏱️: |color:yellow",
+    "m_label|⏱️ |color:yellow",
     "m_accApiMs|scope:session|valueOnly:true",
-    "m_label|🪙: |color:yellow",
+    "m_label|🪙 |color:yellow",
     "m_accTokenCost|scope:session|valueOnly:true",
     "s_newline",
 
@@ -211,12 +210,12 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_template|quote"
   ],
 
-  // Full layout: header (provider/model + context + memory + version),
-  // per-turn ticks + git + per-session api/cost, then the session /
-  // project scope rows each aligned to a plan window (5h / 7d), and the
-  // quota/balance + pluginSource + quote tail.
+  // Full layout: header (git + context + memory + version), then
+  // provider/model + per-turn ticks + per-session api/cost, the session
+  // / project scope rows each aligned to a plan window (5h / 7d), and
+  // the quota/balance + pluginSource + quote tail.
   standard: [
-    "m_template|model_info",
+    "m_template|git_info",
     "s_pipe|wrap:true",
     "m_template|context_info",
     "s_pipe|wrap:true",
@@ -225,14 +224,13 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_version|color:orange",
     "s_newline",
 
+    "m_template|model_info",
     "m_label|⚡: |color:orange",
     "m_template|tickline",
     "s_dot|wrap:true",
-    "m_template|git_info",
-    "s_dot|wrap:true",
-    "m_label|⏱️: |color:yellow",
+    "m_label|⏱️ |color:yellow",
     "m_accApiMs|scope:session|valueOnly:true",
-    "m_label|🪙: |color:yellow",
+    "m_label|🪙 |color:yellow",
     "m_accTokenCost|scope:session|valueOnly:true",
     "s_newline",
 

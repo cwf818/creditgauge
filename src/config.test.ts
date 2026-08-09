@@ -85,15 +85,15 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
   });
 
   it('"standard" resolves to the standard preset body', async () => {
-    // The redesigned `standard` preset composes the new fragment
-    // library: model_info + mem_info on line 1, tickline + git_info
-    // on line 2, and the session/project scopelines paired with
-    // per-window periodlines (5h / 7d) on lines 3-4, then the
-    // quota/balance dispatch, and pluginSource + quote on the last
+    // The `standard` preset composes the fragment library: git_info +
+    // context_info + mem_info + version on line 1, model_info + tickline
+    // (+ per-session api/cost) on line 2, the session/project scopelines
+    // paired with per-window periodlines (5h / 7d) on lines 3-4, then
+    // the quota/balance dispatch, and pluginSource + quote on the last
     // line.
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "standard" }));
     const cfg = await loadConfig();
-    assert.ok(cfg.statuslineTemplate[0].startsWith("m_template|model_info"));
+    assert.ok(cfg.statuslineTemplate[0].startsWith("m_template|git_info"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|tickline"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|scopeline|scope:session"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|periodline|window:5h"));
@@ -104,20 +104,23 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
   });
 
   it('"compact" resolves to the compact preset body', async () => {
-    // Lock the current compact body shape: 6 lines — model_info
-    // fragment (provider/model + context bar) + ▦ memory, ⚡ tickline
-    // fragment, session scopeline + ⏱️/🪙, project scopeline + git_info
-    // (⎇), quota/balance dispatch (⚖️), quote (~). No information /
-    // tick_eval / combline* / per-window stat fragments (those belong
-    // to `standard`). If a future refactor re-points `compact` at a
-    // different layout, this test breaks loudly so we don't silently
-    // swap a 1-line `simple` body into a 6-line slot or vice-versa.
+    // Lock the current compact body shape: 6 lines — git_info fragment
+    // (⎇) + context bar + ▦ memory, model_info (provider/model) + ⚡
+    // tickline fragment, session scopeline + ⏱️/🪙, project scopeline +
+    // ⌛5h/⌛7d window rows, quota/balance dispatch (⚖️), quote (~). No
+    // information / tick_eval / combline* / per-window stat fragments
+    // (those belong to `standard`). If a future refactor re-points
+    // `compact` at a different layout, this test breaks loudly so we
+    // don't silently swap a 1-line `simple` body into a 6-line slot or
+    // vice-versa.
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "compact" }));
     const cfg = await loadConfig();
-    // L1 opens with the model_info fragment (provider/model + context).
-    assert.equal(cfg.statuslineTemplate[0], "m_template|model_info");
+    // L1 opens with the git_info fragment (branch + status).
+    assert.equal(cfg.statuslineTemplate[0], "m_template|git_info");
     assert.ok(cfg.statuslineTemplate.includes("m_memUsage|valueOnly:true"));
-    // L2 tick diagnostics via the tickline fragment.
+    // L2 provider/model + tick diagnostics via the model_info + tickline
+    // fragments.
+    assert.ok(cfg.statuslineTemplate.includes("m_template|model_info"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|tickline"));
     // The tickline fragment itself carries the per-turn token family.
     const tickline = DEFAULT_LINE_TEMPLATES["tickline"];
@@ -128,9 +131,12 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     assert.ok(cfg.statuslineTemplate.includes("m_template|scopeline|scope:session"));
     assert.ok(cfg.statuslineTemplate.includes("m_accApiMs|scope:session|valueOnly:true"));
     assert.ok(cfg.statuslineTemplate.includes("m_accTokenCost|scope:session|valueOnly:true"));
-    // L4 project acc + git footer.
+    // L4 project acc + ⌛5h/⌛7d aligned window rows.
     assert.ok(cfg.statuslineTemplate.includes("m_template|scopeline|scope:project"));
-    assert.ok(cfg.statuslineTemplate.includes("m_template|git_info"));
+    assert.ok(cfg.statuslineTemplate.includes("m_sumTokenTotalIn|align:true|window:5h"));
+    assert.ok(cfg.statuslineTemplate.includes("m_sumApiCalls|align:true|window:5h"));
+    assert.ok(cfg.statuslineTemplate.includes("m_sumTokenTotalIn|align:true|window:7d"));
+    assert.ok(cfg.statuslineTemplate.includes("m_sumApiCalls|align:true|window:7d"));
     // L5 quota/balance dispatch — the quota half is the shared `quota`
     // fragment (3 windows + countdowns + remaining tail).
     assert.ok(cfg.statuslineTemplate.includes("m_template|quota|type:quota"));
