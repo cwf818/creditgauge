@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Fix
+
+- **Stale apiMs baseline no longer locks a project out permanently.** A raw
+  per-tick delta (`totalApiMs − prevTotalApiMs`) above `MAX_SAMPLE_API_MS`
+  (5 min) means the prev baseline is stale (a long statusline-invocation gap
+  while `cost.total_api_duration_ms` kept growing). Previously the tick was
+  rejected and — since `setPrevTick` only advances the baseline on valid
+  ticks — every subsequent tick repeated the bogus delta and stayed invalid
+  forever (`state.json` / sample JSONL / `acc*` scopes all froze, e.g.
+  yunbisai 2026-08-09). `normalizeTick` now back-derives `apiMs` from
+  `tokenOut` on a stale baseline so the tick is valid and the baseline
+  re-anchors to the current `totalApiMs`; the next tick computes a normal
+  delta. The pathological value never reaches the sample stream /
+  `accApiMs`. Tests: stale-baseline self-heal + next-tick re-anchor +
+  ceiling boundary updates (1187 total).
+
+### Feat
+
+- **`solo` preset** — standalone two-line layout: a compact header line
+  (git branch + status, context usage number only — no bars, no git
+  line-count deltas, no memory — then provider/model + per-turn token
+  deltas) over the `simple` tail (quota / balance / plugin_info dispatch).
+- **`m_provider` default color → yellow, `m_model` default color →
+  orange.** `DEFAULT_COLORS` now reads `colors.yellow` / `colors.orange`
+  (same config-driven pattern as the token modules); an explicit `|color|`
+  override still wins.
+
 ## v1.2.0 (2026-08-08)
 
 ### Feat

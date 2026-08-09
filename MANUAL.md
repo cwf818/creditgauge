@@ -419,7 +419,7 @@ Two accepted forms for the top-level `statuslineTemplate`:
 | Form         | Shape                       | Resolution                                                                                |
 |--------------|-----------------------------|--------------------------------------------------------------------------------------------|
 | **Array**    | `string[]` (raw token list) | Each token is `m_*`, `s_*`, or a literal. Tokens that don't match either emit verbatim.   |
-| **String**   | a preset name               | Looked up in `DEFAULT_STATUSLINE_PRESETS`. Valid names: `simple`, `compact`, `standard`. Unknown preset → warn + fall back to the array-form default. |
+| **String**   | a preset name               | Looked up in `DEFAULT_STATUSLINE_PRESETS`. Valid names: `simple`, `compact`, `standard`, `solo`. Unknown preset → warn + fall back to the array-form default. |
 
 Default: `["m_template|quota|type:quota", "m_template|balance|type:balance"]` — provider-type dispatch.
 
@@ -439,13 +439,14 @@ Nesting protection: `lineTemplates` entries cannot themselves contain `m_templat
 
 ## 6. Built-in presets
 
-Three presets ship in `DEFAULT_STATUSLINE_PRESETS` (`src/config.template.ts:160-259`). Set `"statuslineTemplate": "<name>"` in `config.json` to use one. To customize, copy the body into `lineTemplates.<your_key>` and reference it via `m_template|<your_key>`.
+Four presets ship in `DEFAULT_STATUSLINE_PRESETS` (`src/config.template.ts:141-265`). Set `"statuslineTemplate": "<name>"` in `config.json` to use one. To customize, copy the body into `lineTemplates.<your_key>` and reference it via `m_template|<your_key>`.
 
 | Key        | Lines | Use it when                                                                                         |
 |------------|-------|-----------------------------------------------------------------------------------------------------|
 | `simple`   | 1     | One-line provider-type dispatch: `m_template\|quota\|type:quota` + `m_template\|balance\|type:balance` + `m_template\|plugin_info\|type:unknown`. Minimal fallback. |
 | `compact`  | 6     | Condensed stack: git + context + memory header / provider·model + tickline / session scopes + api·cost / project scopes with ⌛5h + ⌛7d sums / quota·balance / quote. |
 | `standard` | 6     | `compact`'s header widened with `mem_info` + version, a combined tickline + per-session api/cost row, and a `m_pluginSource` + quote tail; the ⌛5h / ⌛7d rows use the `periodline` fragment. |
+| `solo`     | 2     | Standalone: a compact header (git branch + status, context usage number, provider/model + per-turn token deltas — no bars, no git deltas, no memory) over the `simple` tail. |
 
 Source bodies: `src/config.template.ts:DEFAULT_STATUSLINE_PRESETS`.
 
@@ -453,7 +454,7 @@ Source bodies: `src/config.template.ts:DEFAULT_STATUSLINE_PRESETS`.
 
 ## 7. Shipped fragments
 
-11 fragments ship in `DEFAULT_LINE_TEMPLATES` (`src/config.template.ts:78-148`). Each is a token array consumed via `m_template|<key>` from `statuslineTemplate` or from a preset body.
+11 fragments ship in `DEFAULT_LINE_TEMPLATES` (`src/config.template.ts:64-134`). Each is a token array consumed via `m_template|<key>` from `statuslineTemplate` or from a preset body.
 
 | Key            | Summary                                                                                                                  |
 |----------------|--------------------------------------------------------------------------------------------------------------------------|
@@ -539,7 +540,8 @@ Every module in this family also accepts `valueOnly` (per-turn / acc / sum alike
 | Module | Renders | Source | Inline args |
 | ------ | ------- | ------ | ----------- |
 | `m_session` | Session name, e.g. `fix-bar-color-regressions`. | `tokens.sessionName` | `color`, `nulldrop` |
-| `m_model` | Display name of active model, e.g. `MiniMax-M3`. | `tokens.modelDisplayName` | `color`, `nulldrop` |
+| `m_provider` | Provider id (matched provider name, else hostname from `ANTHROPIC_BASE_URL`). Default tint: yellow. | provider match / `ANTHROPIC_BASE_URL` | `color`, `nulldrop` |
+| `m_model` | Display name of active model, e.g. `MiniMax-M3`. Default tint: orange. | `tokens.modelDisplayName` | `color`, `nulldrop` |
 | `m_effort` | Effort level: `low` / `medium` / `high` / `max`. | `tokens.effort` | `color`, `nulldrop` |
 | `m_repo` | `host/owner/name`, e.g. `github.com/cwf818/creditgauge`. | `tokens.workspace.repo` | `color`, `nulldrop` |
 | `m_branch` | Current git branch. `\|withStatus:true` appends the clean / dirty glyph (`✅` / `🟠`, from `labels.labelGitClean` / `labels.labelGitDirty`). | git info from cwd | `color`, `nulldrop`, `withStatus` |
