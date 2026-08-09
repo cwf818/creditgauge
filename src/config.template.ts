@@ -191,6 +191,30 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_template|quote"
   ],
 
+  // Standalone two-line layout for self-contained use: line 1 is a
+  // compact header (git branch + status, context number only — no bars,
+  // no git line-count deltas, no memory — then provider/model +
+  // per-turn token deltas); line 2 is byte-identical to `simple`
+  // (quota/balance/plugin_info dispatch by provider type).
+  solo: [
+    "m_label|⎇ : |color:yellow",
+    "m_branch|withStatus:true",
+    "s_pipe|wrap:true",
+    "m_label|📜: |color:yellow",
+    "m_contextUsage|valueOnly:true",
+    "s_pipe|wrap:true",
+    "m_label|💳: |color:blue",
+    "m_provider",
+    "/",
+    "m_model",
+    "m_tokenIn",
+    "m_tokenOut",
+    "s_newline",
+    "m_template|quota|type:quota",
+    "m_template|balance|type:balance",
+    "m_template|plugin_info|type:unknown",
+  ],
+
   // Full layout: header (git + context + memory + version), then
   // provider/model + per-turn ticks + per-session api/cost, the session
   // / project scope rows each aligned to a plan window (5h / 7d), and

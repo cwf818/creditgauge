@@ -174,6 +174,39 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_pluginSource")));
   });
 
+  it('"solo" resolves to the solo preset body (compact header line + simple tail)', async () => {
+    // Standalone two-line preset: line 1 is a compact header (git branch
+    // + status, context/mem numbers only — no bars, no git line-count
+    // deltas — then provider/model + per-turn token deltas); line 2 is
+    // byte-identical to the `simple` preset (quota/balance/plugin
+    // dispatch by provider type).
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "solo" }));
+    const cfg = await loadConfig();
+    // L1 opens with git branch + status.
+    assert.equal(cfg.statuslineTemplate[0], "m_label|⎇ : |color:yellow");
+    assert.ok(cfg.statuslineTemplate.includes("m_branch|withStatus:true"));
+    // No git line-count deltas (compact header).
+    assert.ok(!cfg.statuslineTemplate.includes("m_linesAdded"));
+    assert.ok(!cfg.statuslineTemplate.includes("m_linesRemoved"));
+    // Context is number-only (no progress bar); memory is dropped from
+    // the solo header (no m_memUsage / m_windowMemUsage tokens).
+    assert.ok(cfg.statuslineTemplate.includes("m_contextUsage|valueOnly:true"));
+    assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_memUsage")));
+    assert.ok(!cfg.statuslineTemplate.some((t) => t.startsWith("m_windowMemUsage")));
+    // Provider/model + per-turn token deltas.
+    assert.ok(cfg.statuslineTemplate.includes("m_provider"));
+    assert.ok(cfg.statuslineTemplate.includes("m_model"));
+    assert.ok(cfg.statuslineTemplate.includes("m_tokenIn"));
+    assert.ok(cfg.statuslineTemplate.includes("m_tokenOut"));
+    // L2 = the simple tail (quota/balance/plugin dispatch).
+    assert.ok(cfg.statuslineTemplate.includes("m_template|quota|type:quota"));
+    assert.ok(cfg.statuslineTemplate.includes("m_template|balance|type:balance"));
+    assert.ok(cfg.statuslineTemplate.includes("m_template|plugin_info|type:unknown"));
+    // 2 logical lines = 1 newline in the array.
+    const newlines = cfg.statuslineTemplate.filter((t) => t === "s_newline").length;
+    assert.equal(newlines, 1, `expected 1 s_newline (2-line layout), got ${newlines}`);
+  });
+
   it("unknown string falls back to DEFAULT_STATUSLINE_TEMPLATE with one warn", async () => {
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "bogus" }));
     const cfg = await loadConfig();
