@@ -274,6 +274,8 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
 
     "m_label|⚡: |color:orange",
     "m_template|tickline",
+    "s_dot|wrap:true",
+    "m_template|git_info",
     "s_newline",
 
     "m_label|🗪 : |color:orange",
@@ -288,7 +290,13 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_label|📦: |color:orange",
     "m_template|scopeline|scope:project",
     "s_pipe|wrap:true",
-    "m_template|git_info",
+    "m_label|⌛5h: |color:yellow",
+    "m_sumTokenTotalIn|align:true|window:5h",
+    "m_sumApiCalls|align:true|window:5h",
+    "s_pipe|wrap:true",
+    "m_label|⌛7d: |color:yellow",
+    "m_sumTokenTotalIn|align:true|window:7d",
+    "m_sumApiCalls|align:true|window:7d",
     "s_newline",
 
     "m_template|quota|type:quota",
