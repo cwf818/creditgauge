@@ -187,11 +187,12 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
     "m_label|💳: |color:blue",
     "m_provider",
     "/",
-    "m_model",
-    "s_pipe|wrap:true",
+    "m_model"
+  ],
+  context_info: [
     "m_label|📜: |color:yellow",
     "m_windowContext|display:used",
-    "m_contextUsage|valueOnly:true",
+    "m_contextUsage|valueOnly:true"
   ],
   plugin_info: [
     "m_label|CreditGauge |color:yellow",
@@ -268,6 +269,8 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   compact: [
     "m_template|model_info",
     "s_pipe|wrap:true",
+    "m_template|context_info",
+    "s_pipe|wrap:true",
     "m_label|▦: |color:yellow",
     "m_memUsage|valueOnly:true",
     "s_newline",
@@ -307,6 +310,8 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
 
   standard: [
     "m_template|model_info",
+    "s_pipe|wrap:true",
+    "m_template|context_info",
     "s_pipe|wrap:true",
     "m_template|mem_info",
     "s_pipe|wrap:true",
