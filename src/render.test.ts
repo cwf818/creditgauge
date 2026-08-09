@@ -371,9 +371,9 @@ describe("renderQuotaLine — mode='used' (default)", () => {
     // Bar: 6 plain ░ + 2 colored ▓
     assert.ok(line.includes(`░░░░░░${YELLOW}▓▓${RESET} ${YELLOW}25%${RESET}`),
       `got: ${line}`);
-    // No resetAt → the valueOnly countdown drops (no arrow / label /
-    // parens). The three windows are still joined by ' · ' (the only
-    // parens in the line are the 30d placeholder's "--·30d" tail).
+    // No resetAt anywhere → every valueOnly countdown nulldrops (no
+    // arrow / label / parens). The three windows are still joined by
+    // ' · ', with no placeholder tail at all.
     const cleanR = strip(line);
     assert.ok(cleanR.includes(" · "), `got: ${cleanR}`);
     assert.ok(!cleanR.includes("🕛"), `got: ${cleanR}`);
@@ -407,9 +407,9 @@ describe("renderQuotaLine — mode='used'", () => {
     // Bar: 6 colored ▓ (LEFT) + 2 plain ░ (RIGHT)
     assert.ok(line.includes(`${YELLOW}▓▓▓▓▓▓${RESET}░░ ${YELLOW}75%${RESET}`),
       `got: ${line}`);
-    // No resetAt → the valueOnly countdown drops (no arrow / label /
-    // parens). The three windows are still joined by ' · ' (the only
-    // parens in the line are the 30d placeholder's "--·30d" tail).
+    // No resetAt anywhere → every valueOnly countdown nulldrops (no
+    // arrow / label / parens). The three windows are still joined by
+    // ' · ', with no placeholder tail at all.
     const cleanU = strip(line);
     assert.ok(cleanU.includes(" · "), `got: ${cleanU}`);
     assert.ok(!cleanU.includes("🕛"), `got: ${cleanU}`);
@@ -440,10 +440,11 @@ describe("renderQuotaLine — mode='used'", () => {
       `got: ${clean}`
     );
     // Mode label once at the front, ' · ' between windows, and the
-    // third (30d) window renders its placeholder countdown.
+    // third (30d) window has no resetAt → its valueOnly countdown
+    // nulldrops (no "--·30d" placeholder tail).
     assert.ok(clean.startsWith("Usage: "), `got: ${clean}`);
     assert.ok(clean.includes(" · "));
-    assert.ok(clean.includes("--·30d"), `got: ${clean}`);
+    assert.ok(!clean.includes("--·30d"), `got: ${clean}`);
     // The valueOnly countdown renders the arrow first, tight against
     // the countdown — no "(... 🕛 5h)" parens wrapper.
     assert.ok(!clean.includes("🕛 5h"), `got: ${clean}`);
@@ -475,8 +476,9 @@ describe("renderQuotaLine — reset suffix integration", () => {
     const clean = strip(line);
     assert.ok(!clean.includes("🕛"), `got: ${clean}`);
     // valueOnly countdowns never emit the window label (no
-    // "<arrow><countdown>·<label>" full-form either — the only `·`
-    // in the line comes from the 30d placeholder "--·30d").
+    // "<arrow><countdown>·<label>" full-form either — and with no
+    // resetAt anywhere every countdown nulldrops, so no placeholder
+    // tail like "--·30d" appears).
     assert.ok(!clean.includes("5h"), `got: ${clean}`);
     assert.ok(!clean.includes("7d"), `got: ${clean}`);
     // The three windows are still joined by ' · '.

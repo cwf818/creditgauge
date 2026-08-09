@@ -35,7 +35,7 @@ const DEFAULT_LINE_TEMPLATE: {
     "m_countdown|term:mid|valueOnly:true|nulldrop:true",
     "s_dot|wrap:true",
     "m_windowQuota|term:long",
-    "m_countdown|term:long|valueOnly:true",
+    "m_countdown|term:long|valueOnly:true|nulldrop:true",
     "m_quota|term:long|display:remaining|nulldrop:true"
   ],
   balance: ["m_modeLabel|color:yellow", "m_balance", "m_age"],
