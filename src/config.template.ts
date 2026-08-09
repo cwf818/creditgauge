@@ -96,9 +96,11 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   // "git_info" — git branch with clean/dirty status + line deltas.
   git_info: [
     "m_label|⎇ : |color:yellow",
+    "m_dirName",
+    ":",
     "m_branch|withStatus:true",
     "m_linesAdded",
-    "m_linesRemoved",
+    "m_linesRemoved"
   ],
   // "tickline" — per-turn tick diagnostics (stdin-only modules).
   "tickline": [
@@ -225,8 +227,6 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_template|context_info",
     "s_pipe|wrap:true",
     "m_template|mem_info",
-    "s_pipe|wrap:true",
-    "m_version|color:orange",
     "s_newline",
 
     "m_template|model_info",
@@ -260,6 +260,8 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "s_newline",
     "m_pluginSource",
     "s_space",
-    "m_template|quote"
+    "m_template|quote",
+    "s_pipe|wrap:true",
+    "m_version|color:orange"
   ],
 };
