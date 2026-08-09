@@ -1,25 +1,16 @@
-// Provider discriminated union. A single `ANTHROPIC_BASE_URL` selects exactly
-// one provider at runtime; `null` means "no provider — render nothing".
-//
-// v0.2.21: Provider widened to `string | null` — providers are now
-// data-driven via the `providers` config block (see src/config.ts and
-// src/providers.ts). Adding a provider requires a config entry and a
-// plugin module, but does not require editing this type union. The TYPE
-// discriminator drives the plugin output shape and renderer / fail-label
-// path.
-
+// Provider discriminated union. `ANTHROPIC_BASE_URL` selects one
+// provider; null = "render nothing". Providers are data-driven via the
+// `providers` config block — adding one needs a config entry + plugin,
+// not a type edit. TYPE drives the output shape / renderer path.
 export type Provider = string | null;
 
-// Closed enum for now. If a new TYPE is added, the fetcher / renderer /
-// template selection logic grows a new branch — data shape changes
-// cannot be made data-driven (they need code to interpret them).
+// Closed enum — a new TYPE grows a new fetcher/renderer branch (data
+// shape changes need code, they can't be data-driven).
 export type ProviderType = "QUOTA" | "BALANCE";
 
 export type CompareMethod = "EXACT" | "INCLUDE" | "STARTWITH";
 
-// vX.X.X+ — per-model token price entry. Shared between config.ts
-// (config.tokenPrices.json), provider overrides, and render.ts
-// (cost formatting). Previously a local type in render.ts.
+// Per-model token price, shared across config.ts / provider overrides / render.ts.
 export type TokenPriceEntry = {
   in: number;       // price per 1M input tokens
   out: number;      // price per 1M output tokens
@@ -27,168 +18,78 @@ export type TokenPriceEntry = {
   currency: string; // e.g. "USD", "CNY"
 };
 
-// vX.X.X+ — per-provider price block in config.tokenPrices.json.
-// A flat model→price dict with an optional `default` fallback.
-// The index value includes `undefined` so `default` is a compatible
-// named property (TypeScript requires named properties to be
-// assignable to the index signature's value type).
+// Per-provider price block: flat model→price dict with optional
+// `default` fallback. The `undefined` index value keeps `default` a
+// valid named property for the index signature.
 export type TokenPricesProviderBlock = {
   default?: TokenPriceEntry;
   [modelId: string]: TokenPriceEntry | undefined;
 };
 
-// vX.X.X+ — config.tokenPrices.json shape. Nested provider→model
-// dict with `default` fallback at each level.
-//   default          → global fallback (any provider, any model)
-//   <provider>.default → provider-level fallback
+// config.tokenPrices.json shape — nested provider→model dict with
+// `default` fallback at each level:
+//   default → global fallback; <provider>.default → provider-level;
 //   <provider>.<model> → specific model price
 export type TokenPricesFile = {
   default?: TokenPriceEntry;
   [providerId: string]: TokenPricesProviderBlock | TokenPriceEntry | undefined;
 };
 
-// vX.X.X+ — provider-scoped override from config.json
-// providers.<provider>.config.tokenPrices. Flat model→price dict
-// (no provider key needed — already scoped to the active provider).
-// `default` key = provider-level fallback.
+// Provider-scoped override (config.json providers.<p>.config.tokenPrices):
+// flat model→price dict, already scoped; `default` = provider fallback.
 export type TokenPricesOverride = {
   default?: TokenPriceEntry;
   [modelId: string]: TokenPriceEntry | undefined;
 } | null;
 
-// ----- v0.4.0+ token-usage module ---------------------------------------
-//
-// One row appended per statusline tick. Source = stdin (per probe schema
-// captured 2026-06-27). Persisted to disk so m_token5h/m_token7d can
-// query "how many tokens in the last N hours" across ticks.
-//
-// `at` is the wall-clock timestamp (Unix ms) when this tick fired.
-// `in`/`out` mirror `context_window.total_input_tokens` /
-// `total_output_tokens` — the per-tick cumulative numbers from Claude
-// Code. `ctx_*` mirror `context_window.current_usage.*` — the
-// post-turn context snapshot. `cwd` is the project working directory
-// from stdin, used to scope the on-disk path (see token-store.ts).
-// v0.8.0+ — TokenSample field rename. The previous names were
-// semantically backward (e.g. `in` actually held the session-cumulative
-// `totals.input`, while `ctx_in` held the per-turn delta). v0.8.0
-// aligns the field names with the module family they feed into:
-//
-//   totalIn        = session-cumulative input tokens (was `in`)
-//                      → m_tokenTotalIn, m_sumTokenTotalIn
-//   totalOut       = session-cumulative output tokens (was `out`)
-//                      → m_tokenTotalOut (v0.8.0+ rename from
-//                        m_tokenOutTotal), m_sumTokenOut
-//   in             = per-turn input delta (was `ctx_in`)
-//                      → m_tokenIn, m_sumTokenIn
-//   cacheIn        = per-turn cache_read_input_tokens (was `ctx_read`)
-//                      → m_tokenCachedIn, m_sumTokenCachedIn
-//   cacheCreation  = per-turn cache_creation_input_tokens (was `ctx_creation`)
-//                      → no module yet (reserved)
-//   totalApiMs     = session-cumulative cost.totalApiDurationMs (was `apiMs`)
-//                      → recorded for off-line audit; not consumed by
-//                        any module directly (m_accApiMs reads in-memory)
-//   apiMs          = per-tick delta of cost.totalApiDurationMs (was `deltaApiMs`)
-//                      → m_apiMs, m_sumApiMs
-//
-// v0.8.0 is still pre-release; this rename is not backward-compatible
-// with v0.4.x / v0.5.x / v0.6.x / v0.7.x jsonl rows. On-disk files
-// from those versions are NOT migrated — the next tick writes the
-// new schema and old rows are simply ignored by the v0.8.0 reader
-// (no `at`/`totalIn`/`totalOut` → skipped). This is consistent with
-// the v0.8.0 major-version bump and avoids a complex field-by-field
-// migration for stale state files.
+// ----- Token sample (one row per statusline tick) -----
+// Source = stdin (per probe schema 2026-06-27). Persisted to disk so
+// the cross-project sum/avg modules and cold-slot replay can query
+// history across ticks. `at` = tick wall-clock (Unix ms). `totalIn` /
+// `totalOut` are session-cumulative; `in`/`out`/`cacheIn`/`cacheCreation`
+// are per-turn deltas. Session + cwd are encoded in the on-disk path
+// (`state/<projectHash>/<sessionId>.jsonl`). Legacy rows (pre-v0.8.0)
+// carry the old field semantics and are NOT migrated — the reader
+// simply skips rows lacking at/totalIn/totalOut.
 export type TokenSample = {
   at: number;
-  // Required numeric fields — the reader drops rows that lack these
-  // (older v0.4.x–v0.7.x rows missing the renamed fields are skipped).
+  // Required — the reader drops rows lacking these (legacy rows are skipped).
   totalIn: number;
   totalOut: number;
-  // Per-turn deltas — sum of these over a window = m_sumTokenIn /
-  // m_sumTokenOut. Added in v0.8.0+; m_sumTokenOut was previously
-  // broken because it summed the cumulative `out` column. Now
-  // symmetric with `in` (also per-turn).
+  // Per-turn deltas — sum over a window = m_sumTokenIn / m_sumTokenOut.
   in: number;
   out: number;
   cacheIn: number;
   cacheCreation: number;
-  // vX.X.X+ — per-tick token cost computed at processTick time from
-  // stdin deltas × tokenPrices. Stored as a dict so multi-currency
-  // consumers can accumulate without currency-conversion ambiguity.
-  // undefined for legacy rows written before this field existed.
+  // Per-tick cost (stdin deltas × tokenPrices); undefined for legacy rows.
   cost?: { currency: string; value: string };
-  // v6.x — session+cwd are encoded in the path
-  // (`state/<projectHash>/<sessionId>.jsonl`), so the row no longer
-  // carries them. `model` and `totalApiMs` are stamped when
-  // totalApiDurationMs>0 so per-model splits are available to
-  // m_sumTokenIn:window:5h / m_sumTokenIn:window:7d consumers (the
-  // v0.8.0+ replacements for the v0.4.x m_token5h / m_token7d
-  // modules). `apiMs` (formerly `deltaApiMs`) is the per-tick
-  // increment of `cost.totalApiDurationMs` since the prior append
-  // (first tick assumes prior=0), so off-line consumers can
-  // reconstruct per-API-call latency without replaying the in-memory
-  // prev-tick cache. It also feeds the v0.8.0+ m_apiMs module and
-  // the m_sumApiMs aggregate. Older rows without these optional
-  // fields read as undefined.
+  // session+cwd live in the path, not the row. `model` (stdin.model.id)
+  // and `totalApiMs` are stamped so per-model splits / 5h-7d windows are
+  // available. `apiMs` = per-tick increment of cost.totalApiDurationMs
+  // (first tick assumes prior=0) for off-line latency reconstruction.
+  // Older rows read as undefined.
   model?: string;
-  // The ANTHROPIC_BASE_URL at write time — lets off-line consumers
-  // distinguish which provider's data is in this row. undefined for
-  // legacy rows.
+  // ANTHROPIC_BASE_URL at write time (provider split); undefined for legacy rows.
   base_url?: string;
   totalApiMs?: number;
   apiMs?: number;
-  // v0.8.x — the cached prev apiMs at write time. Lets off-line
-  // inspectors distinguish a real delta from a fallback path:
-  //   prevApiMs === null  → cache miss on first tick (no baseline);
-  //                          apiMs may be the fallback value (out/50*1000)
-  //                          or the full session total if totalApiMs > 0.
-  //   prevApiMs === 0     → cache hit but baseline was zero.
-  //   prevApiMs > 0       → normal case, apiMs = totalApiMs - prevApiMs.
-  // undefined for legacy rows written before this field existed.
+  // Cached prev apiMs at write time, letting inspectors tell a real
+  // delta from a fallback: null = no baseline (apiMs may be the out/50*1000
+  // fallback); 0 = baseline was zero; > 0 = normal (apiMs = totalApiMs - prev).
   prevApiMs?: number | null;
 };
 
-// What the renderer needs to know about a single tick. Built once in
-// src/index.ts (drains stdin, samples, appends to disk) and passed to
-// the renderer's `RenderContext` extension below.
-//
-// `current` = post-turn snapshot (used by m_tokenIn, m_tokenOut,
-//            m_tokenCachedIn, m_tokenHitRate, m_tokenInSpeed,
-//            m_tokenOutSpeed). `totals` = session cumulative (used by
-//            m_tokenInTotal, m_tokenTotalOut, m_tokenTotalIn).
-//            `cost` = stdin.cost block. `contextWindow` = context
-//            window size + used% (m_contextSize, m_contextUsedPercent,
-//            m_windowContext). The session-identity / metadata
-//            fields (sessionName, modelDisplayName, effort, repo,
-//            ccversion) feed the corresponding m_* modules verbatim.
-//
-// v0.8.0+ — semantic clarification:
-//   - `current.tokenIn` / `current.tokenOut` / `current.tokenCachedIn`
-//     are PER-TURN DELTAS (the contract formalized in
-//     [[per-turn-delta-contract]]). The user's invariant
-//     `total_input_tokens == input_tokens + cache_read_input_tokens`
-//     must hold; a diagnostics warning is emitted on violation.
-//   - `totals.tokenTotalIn` / `totals.tokenTotalOut` are session-cumulative.
-//
-// v0.9.x — module-keyed field naming. Each parse-time field is now
-// named for its primary reader module so the path from stdin to
-// renderer is one hop, no layer of indirection. The `current` group
-// still encodes "per-turn delta" (vs the `totals` group encoding
-// "session-cumulative") because the type-level invariant rides on
-// that distinction. Naming summary:
-//
-//   current.tokenIn         ← m_tokenIn,         stdin: current_usage.input_tokens
-//   current.tokenOut        ← m_tokenOut,        stdin: current_usage.output_tokens
-//   current.tokenCachedIn   ← m_tokenCachedIn,   stdin: current_usage.cache_read_input_tokens
-//   current.tokenCacheCreation ← (no module yet), stdin: current_usage.cache_creation_input_tokens
-//   totals.tokenTotalIn     ← m_tokenTotalIn / m_tokenInTotal / m_contextSize
-//                                  stdin: context_window.total_input_tokens
-//   totals.tokenTotalOut    ← m_tokenTotalOut,   stdin: context_window.total_output_tokens
-//   contextWindow.contextWindowSize        ← m_contextWindowSize (typo fixed),
-//                                                stdin: context_window.context_window_size
-//   contextWindow.contextUsedPercent       ← m_contextUsedPercent,
-//                                                stdin: context_window.used_percentage
-//   contextWindow.contextRemainingPercent  ← m_contextRemainingPercent,
-//                                                stdin: context_window.remaining_percentage
+// What the renderer needs to know about one tick (built in index.ts
+// from stdin). `current` = per-turn deltas (m_tokenIn / m_tokenOut /
+// m_tokenCachedIn / m_tokenHitRate / speeds); `totals` = session-
+// cumulative (m_tokenTotalIn / m_tokenTotalOut / m_contextSize);
+// `cost` = stdin.cost; `contextWindow` = size + used%/remaining%.
+// Contract: `current.tokenIn`/`tokenOut`/`tokenCachedIn` are PER-TURN
+// deltas, and the invariant `total_input_tokens == input_tokens +
+// cache_read_input_tokens` holds (violation → diagnostics warning).
+// Field names are module-keyed (current.tokenIn ← m_tokenIn,
+// totals.tokenTotalIn ← m_tokenTotalIn, contextWindow.contextWindowSize
+// ← m_contextWindowSize) so stdin → render is one hop.
 export type TokenSnapshot = {
   sessionId: string | null;
   cwd: string | null;
@@ -204,36 +105,25 @@ export type TokenSnapshot = {
   };
   cost: {
     totalDurationMs: number | null;
-    // v0.4.0+ — extended cost fields. Marked optional so older
-    // test fixtures (pre-v0.4.0) type-check; the parser always
+    // Optional so pre-v0.4.0 test fixtures type-check; parser always
     // populates them on the live path.
     totalApiDurationMs?: number | null;
     totalLinesAdded?: number | null;
     totalLinesRemoved?: number | null;
   };
-  // v0.4.0+ — session identity / metadata read from stdin root.
-  // Marked optional (with `?`) so existing test fixtures that
-  // construct a TokenSnapshot without the v0.4.0+ fields still
-  // type-check. The parser always populates them; the renderer
-  // null-checks each field before reading. Optional types better
-  // reflect the "missing is fine" contract at the renderer level.
+  // stdin-root metadata. Optional so fixtures without them type-check;
+  // the parser always populates them.
   sessionName?: string | null;
-  // v0.9.x — display name from stdin.model.display_name. Read by
-  // m_model (the human-readable label) and as the JSONL sample.model
-  // STAMP in older versions. Kept alongside modelId because the
-  // display axis and the id axis serve different purposes (label vs.
-  // identifier).
+  // stdin.model.display_name — human-readable label (m_model). Kept
+  // alongside modelId (label vs. identifier axes).
   modelDisplayName?: string | null;
-  // v0.9.x — model id from stdin.model.id. The canonical active-
-  // model identifier for tokenPrices lookup, the JSONL sample.model
-  // stamp, and the per-model accumulator slot key. Distinct from
-  // modelDisplayName so users can configure price by the stable id
-  // while m_model still surfaces the friendly display label.
+  // stdin.model.id — canonical id for tokenPrices lookup, sample.model
+  // stamp, and per-model accumulator key.
   modelId?: string | null;
   effort?: string | null;
   repo?: { host: string | null; owner: string | null; name: string | null } | null;
   ccversion?: string | null;
-  // v0.4.0+ — context window stats read from stdin.context_window.
+  // Context window stats from stdin.context_window.
   contextWindow?: {
     contextWindowSize: number | null;
     contextUsedPercent: number | null;
@@ -241,30 +131,13 @@ export type TokenSnapshot = {
   };
 };
 
-// v0.8.0+ — per-session / per-model / per-project accumulator
-// snapshot. Replaces the v0.4.x `AvgSnapshot` type (which used the
-// `sum*` prefix). The setAvg / peekAvg / __resetAvgForTest helpers in
-// src/render.ts return / consume this shape. Field semantics:
-//
-//   accTokenIn        — accumulated current.input across API calls
-//   accTokenOut       — accumulated current.output across API calls
-//   accTokenCachedIn  — accumulated current.cacheRead across API calls
-//                       (renamed from `accTokenCachedIn` so the name matches
-//                       the per-turn module `m_tokenCachedIn`)
-//   accApiMs          — accumulated cost.total_api_duration_ms across API
-//                       calls (cumulative, not per-tick delta — the
-//                       per-tick writeBack uses `apiMs` directly)
-//   accApiCalls       — count of valid API calls that produced
-//                       input tokens (see sumApiCount contract in
-//                       render.ts:computeTickAvg)
-//
-// The same shape is persisted at three slots in `status.json`:
-//   tickStatus             (project-wide, accumulating)
-//   tickStatus:<sessionId> (per-session, absolute since reset)
-//   tickStatus:<modelName> (per-model, accumulating)
-//
-// All three are kept in sync by setAvg's atomic three-slot write
-// (see render.ts:947-1035).
+// Per-session / per-model / per-project accumulator snapshot (setAvg
+// writes; peekAvg / readAccumulator read). acc fields accumulate the
+// per-turn deltas (accTokenCachedIn renamed from accCached to match
+// m_tokenCachedIn). Persisted at three slots in
+// state/<projectHash>/state.json — tickStatus:<sessionId> /
+// tickStatus:<projectHash> / tickStatus:<modelId> — kept in sync by
+// setAvg's atomic three-slot write.
 export type AccSnapshot = {
   accTokenIn: number;
   accTokenOut: number;
@@ -273,43 +146,24 @@ export type AccSnapshot = {
   accApiCalls: number;
 };
 
-// One provider's declarative config block. All fields are required;
-// the mergeConfig validator drops malformed entries (with a stderr
-// warn) rather than auto-filling them, so a typo can't silently
-// produce a half-configured provider.
-//
-// v0.4.0+ — added optional `config` block: a per-provider override
-// of any top-level Config field (cacheTtlMs, colors, timeFormat,
-// lineTemplate, etc.). Merged into the active Config at startup in
-// main() via configStore.applyProviderOverrides(provider). The
-// `providers` key is forbidden inside `config` to avoid recursion;
-// other top-level keys can be safely overridden on a per-provider
-// basis (e.g. "minimax needs fetchTimeoutMs=3000 because the API is
-// slow; deepseek uses the default 5000").
-//
-// v0.9.x — the per-provider `intervals` block (path-expression
-// mapping onto raw response fields) was REMOVED. Built-in and
-// user plugins own their own parsing via `fillQuota`/`fillBalance`
-// (they return canonical Quota/Balance objects directly), so
-// there's no host-side path-walker left to configure. Plugins
-// only see `{ providerId, type, signal? }`.
+// One provider's declarative config block. All fields required — the
+// mergeConfig validator drops malformed entries (with a stderr warn)
+// rather than auto-filling them. `config` (optional): per-provider
+// override of top-level Config fields, merged at startup via
+// configStore.applyProviderOverrides; a nested `providers` key is
+// forbidden (recursion). The per-provider `intervals` block was REMOVED
+// — plugins own their own parsing via fillQuota/fillBalance.
 export type ProviderEntry = {
   TYPE: ProviderType;
   BASE_URL_COMPARED_TO: string;
   COMPARE_METHOD: CompareMethod;
-  // Provider-specific Config overrides. Same shape as the top-level
-  // config.json (minus the `providers` key itself). Validated at
-  // config-load time: must be a plain object; unknown keys are
-  // forwarded to the existing per-field validators (same warn
-  // behavior as the top-level config).
+  // Config overrides, same shape as top-level config.json minus
+  // `providers`. Validated at load; unknown keys hit the same
+  // per-field validators/warns.
   config?: Record<string, unknown>;
-  // Provider-specific credential. It takes precedence over
-  // process.env.ANTHROPIC_AUTH_TOKEN and is passed to the plugin's
-  // fetchAccountCredit method.
+  // Provider credential — overrides process.env.ANTHROPIC_AUTH_TOKEN.
   AUTHENTICATION_KEY?: string;
-  // vX.X.X+ — accepted currency codes for cost calculation. When set,
-  // resolveTokenPrice skips price entries whose currency is not in
-  // this list, preventing accidental fallback to a different-currency
-  // global default. Absent/unset means no filter (accept any currency).
+  // Accepted currencies for cost calc; resolveTokenPrice skips entries
+  // outside it (avoids a wrong-currency fallback). Absent = no filter.
   CURRENCY?: string[];
 };

@@ -67,15 +67,10 @@ function legacyToIv(
   };
 }
 
-// v0.9.0+ — adapter from the legacy v0.8.x `Window` test fixture
-// shape (`{ pct, resetAt, resetStartAt, resetDurationMs }`) to the
-// new `Interval` shape (`{ windowId, label, startAt, endAt, ...}`).
-// The renderer-side `intervalToWindow` does the inverse projection
-// for live callers; this helper lets test fixtures stay readable
-// (`{ pct: 60, resetAt: null }`) while still feeding the new
-// `RenderContext` field shape. UsedPercent mirrors pct (no
-// `100 - remaining%` math here — tests already express the
-// rendered percentage directly).
+// v0.9.0+ — adapter from the legacy `Window` fixture shape
+// (`{ pct, resetAt, resetStartAt, resetDurationMs }`) to the
+// `Interval` shape. UsedPercent mirrors pct (tests already express
+// the rendered percentage directly).
 function winToIv(
   w: { pct: number; resetAt: string | null; resetStartAt?: string; resetDurationMs?: number } | null,
   label: "5h" | "7d" | "30d" = "5h",
@@ -95,11 +90,8 @@ function winToIv(
   };
 }
 
-// Local helper: collapse the 24 quota-line renderProviderLine("minimax", …)
-// call sites into a single positional-arg call. Mirrors the shape the
-// old `formatLine` shim used to forward — `formatLine` was dropped as
-// part of the v0.9.x dead-export cleanup; tests now thread the
-// reserved-slot dict directly via `renderProviderLine`.
+// Local helper: collapse the quota-line renderProviderLine("minimax", …)
+// call sites into a single positional-arg call.
 function renderQuotaLine(
   shortInterval: Interval | null,
   midInterval: Interval | null,
@@ -116,13 +108,8 @@ function renderQuotaLine(
   });
 }
 
-// Local helper: collapse the 9 available-balance renderProviderLine
-// call sites into a single positional-arg call. Mirrors the old
-// `formatBalanceLine` shim's available-branch — the unavailable
-// short-circuit (`Balance: not available!`) was dropped along with
-// the shim; those 3 tests now assert what `renderProviderLine`
-// actually emits via `m_balance` → `placeholderBare` (see the
-// "balance: " describe block below).
+// Local helper: collapse the balance renderProviderLine("deepseek", …)
+// call sites into a single positional-arg call.
 function renderBalanceLine(
   b: { isAvailable: boolean; entries: ReadonlyArray<{ currency: string; totalBalance: number }>; minValue: number | null },
   ageMs: number | null = null,
@@ -335,11 +322,8 @@ describe("resolveDisplayMode", () => {
 });
 
 describe("renderQuotaLine — mode='used' (default)", () => {
-  // Pin minUnit='m' for this suite — the tests pin time strings
-  // that depend on minute-grain truncation (e.g. "1h0m" stays
-  // "1h0m" rather than expanding to "1h0m0s" under the default
-  // minUnit='s'). Each test's intent is the time-formatting rule,
-  // not the new default.
+  // Pin minUnit='m' so the pinned time strings don't expand to
+  // second-grain ("1h0m0s") under the default minUnit='s'.
   beforeEach(() => {
     __resetForTest({ timeFormat: { minUnit: "m", maxUnitCount: 2 } });
   });
@@ -517,11 +501,8 @@ describe("renderQuotaLine — reset suffix integration", () => {
 
 describe("formatResetSuffix", () => {
   beforeEach(() => {
-    // Pin minUnit='m' for this suite — the tests pin exact strings
-    // (e.g. "5m" for 5min, "<1m" for sub-minute) that depend on
-    // minute-grain truncation. The default minUnit='s' would
-    // produce "5m0s" / "30s" instead, which is what the inner
-    // describe("minUnit='s' (second granularity)") tests cover.
+    // Pin minUnit='m' for the exact-string assertions; the default
+    // minUnit='s' ("5m0s" / "30s") is covered by the inner suite.
     __resetForTest({ timeFormat: { minUnit: "m", maxUnitCount: 2 } });
   });
   const NOW = Date.parse("2026-06-24T12:00:00Z");
@@ -606,10 +587,9 @@ describe("formatResetSuffix", () => {
     });
 
     it("exactly 1 minute → '1m0s' (unified algorithm keeps seconds when minUnit='s')", () => {
-      // v0.2.15: unified algorithm. allUnits = [0d,0h,1m,0s]. After
-      // dropping leading zeros: [1m, 0s]. Slice to maxUnitCount=2:
-      // "1m0s". The trailing 0s is internal-zero — kept on purpose
-      // because the user said "去掉前导0" (only LEADING zeros are dropped).
+      // v0.2.15 unified algorithm: [0d,0h,1m,0s] → drop leading zeros
+      // → [1m, 0s] → slice 2 → "1m0s" (internal zero kept — only
+      // LEADING zeros dropped).
       assert.equal(formatResetSuffix(at(60_000), NOW), "1m0s");
     });
 
@@ -626,9 +606,8 @@ describe("formatResetSuffix", () => {
     });
 
     it("maxUnitCount slices off trailing seconds (unified algorithm)", () => {
-      // maxUnitCount=2, minUnit="s". 2h3m45s → drop leading zeros (none
-      // to drop) → [2h, 3m, 45s] → slice to 2 → "2h3m". Seconds are
-      // dropped by the slice, NOT by minUnit (which kept them).
+      // 2h3m45s → [2h,3m,45s] → slice to 2 → "2h3m". Seconds are
+      // dropped by the slice, NOT by minUnit.
       assert.equal(formatResetSuffix(at(2 * 3_600_000 + 3 * 60_000 + 45_000), NOW), "2h3m");
     });
 
@@ -654,21 +633,14 @@ describe("formatResetSuffix", () => {
 
 describe("pickResetArrow (stale.resetArrows[] by remaining/total)", () => {
   // index = floor(remainingMs / resetDurationMs * length), clamped to
-  // [0, length-1]. Defaults are 12 clock-face emoji ordered by REMAINING
-  // TIME, ascending (few → many): 🕛(0), 🕚(1), 🕙(2), …, 🕐(11). So
-  // index 0 (🕛) is shown when the window is about to reset / just reset;
-  // the last index (🕐) is shown when the window is fresh. When the
-  // interval data is missing (DeepSeek, legacy, clock skew), falls back
-  // to index 0.
+  // [0, length-1]. Default 12 clock-face emoji ordered by REMAINING TIME
+  // ascending (🕛 few → 🕐 many); missing interval data (DeepSeek /
+  // legacy / clock skew) falls back to index 0.
   const NOW = Date.parse("2026-06-24T12:00:00Z");
 
-  // Helper: call renderQuotaLine so the rendered glyph is what the user sees.
-  // Builds a Window with the given remaining/total, sets nowMs via the
-  // 4th arg. Reads the arrow off the rendered line.
-  //
-  // The 5h segment renders first (`<bar> <pct>% <countdown><arrow> · …`),
-  // so the first clock-face emoji in the line is the 5h window's arrow
-  // (the 7d window always falls back to index 0 — it has no start/duration).
+  // Helper: render via renderQuotaLine and read the arrow off the line.
+  // The 5h segment renders first, so the first clock-face emoji is the
+  // 5h window's arrow (7d always falls back to index 0 — no start/duration).
   const arrow = (ratio: number, durMs: number = 5 * 3_600_000) => {
     const remaining = ratio * durMs;
     const startMs = NOW - (durMs - remaining);
@@ -1179,15 +1151,12 @@ describe("m_window5h/7d — stale coloring (v0.6.0+)", () => {
 });
 
 describe("m_countdown5h/7d — stale AND past-due renders '<arrow>n/a·5h' in STALE_COLOR (v0.7.x)", () => {
-  // The countdown module is the only one that swaps its body on
-  // the stale+past-due combination. The trigger is AND-combined:
-  //   - stale=true, future reset   → "<arrow>Xm·5h" default teal
-  //   - stale=false, past-due      → "<arrow>0m·5h" default teal
-  //   - stale=true, past-due       → "<arrow>n/a·5h" STALE_COLOR (this block)
-  //
-  // The body swap uses the n/a placeholder instead of "0m" so the
-  // user can distinguish "cached value already expired" from a
-  // fresh past-due tick that's about to roll forward.
+  // The countdown is the only module that swaps its body on the
+  // stale+past-due combination (AND-gated): stale+future → teal
+  // "<arrow>Xm·5h"; fresh+past-due → teal "<arrow>0m·5h";
+  // stale+past-due → STALE_COLOR "<arrow>n/a·5h". The n/a body
+  // distinguishes "cached value expired" from a fresh past-due tick
+  // about to roll forward.
 
   // Default teal used by wrapPlainDefault for m_countdown5h/7d.
   const TEAL_DEFAULT = "\x1b[38;5;80m";
@@ -1913,13 +1882,9 @@ describe("m_quota display arg (vX.X.X+)", () => {
   });
 });
 
-// vX.X.X+ — `m_quota` mirrors `m_windowQuota` / `m_windowContext`:
-// the displayed digit (the "metric of concern") carries the band
-// color (5 thresholds → brightGreen → red), the prefix / limit
-// tail stay plain. Inline `|color|<c>` overrides the band (same
-// precedence as every other inline module). When no usable ratio
-// can be derived (axisPct == null), the digit lands in
-// STALE_COLOR so the band doesn't pick a spurious hue.
+// vX.X.X+ — `m_quota` band color mirrors m_windowQuota: the digit
+// carries the 5-band color, prefix/limit stay plain, |color| overrides,
+// and no usable ratio (axisPct == null) → STALE_COLOR.
 describe("m_quota band color (vX.X.X+)", () => {
   const nowMs = Date.parse("2026-06-24T12:00:00Z");
 
@@ -2433,17 +2398,9 @@ describe("renderBalanceLine — stale suffix integration", () => {
   });
 });
 
-// v0.9.x — m_pluginSource module: visual indicator of which side
-// of the user-vs-builtin fence the active provider's plugin was
-// loaded from. 📌 for built-in (shipped-with-the-plugin), 🎨 for
-// user override (query_plugins/<id>/), ❗ for missing (matched
-// provider id has no plugin at all), drop (no-op) when no cache
-// row exists or the source is unrecognizable. No default tint —
-// the symbol carries the meaning on its own (per the user's
-// "user |color| override only" decision 2026-07-11). A 4th
-// branch 🔖 / "cc" is reserved for the future claude-官方 case
-// — the type axis + default glyph exist, but no dispatcher
-// arm reads it yet (CC 分支暂不做实现 2026-07-12).
+// v0.9.x — m_pluginSource: 📌 built-in, 🎨 user override, ❗ missing,
+// drop when no cache row. No default tint (user |color| only). A 4th
+// branch 🔖 is reserved for the future claude-官方 case (not wired).
 describe("m_pluginSource (v0.9.x)", () => {
   // The bar/window subtests above use `quotaLine(iv, template)`;
   // here we don't need interval data — the pluginSource glyph
@@ -2741,15 +2698,10 @@ describe("m_pluginSource (v0.9.x)", () => {
   });
 });
 
-// v0.9.x — cache.json row `<provider>:pluginSource` round-trip:
-//   index.ts writes the kind right after a successful
-//   pluginTransportWithKind call;
-//   dispatch.ts:peekPluginSource reads it back via cache.peek.
-// The disk-shadow guarantees the kind survives across ticks even
-// when the data row is still within TTL — important because the
-// side can change without the data changing (user adds/removes an
-// override file). TTL is checked but the read path uses cache.peek
-// (ignores TTL) so a stale data row doesn't hide a fresh kind.
+// v0.9.x — cache.json `<provider>:pluginSource` round-trip: index.ts
+// writes the kind after a successful pluginTransportWithKind; the
+// renderer reads it via cache.peek (TTL-ignoring) so an override
+// change reflects next tick even while the data row is within TTL.
 describe("pluginSource cache row (v0.9.x)", () => {
   // Stub HOME so cache.flushToDisk writes to a tmp file rather
   // than the real ~/.claude/plugins/creditgauge/state/cache.json.

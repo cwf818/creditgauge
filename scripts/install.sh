@@ -18,7 +18,7 @@
 #     (sibling of config.json) so the wrapper can invoke it as the upstream.
 #     This location is STABLE across /plugin install rolls — the per-version
 #     cache dir can come and go, but the state dir is permanent.
-#   - Settings are rewritten via scripts/lib/edit-settings.js, which preserves
+#   - Settings are rewritten via scripts/lib/edit-settings.mjs, which preserves
 #     the original line ending (CRLF on Windows, LF elsewhere).
 #
 # Portable: Linux, macOS, Git Bash on Windows.
@@ -313,12 +313,12 @@ if [ "$INSTALL_MODE" = "replace" ]; then
     {
       printf '#!/usr/bin/env bash\n'
       printf '# Original statusLine.command preserved by creditgauge install.sh\n'
-      printf '# Restored via: install.sh --uninstall\n'
+      printf '# Restored via: /creditgauge:uninstall (scripts/uninstall.sh)\n'
       printf 'exec %s\n' "$ORIGINAL_CMD"
     } > "$UPSTREAM_CMD_FILE"
     chmod +x "$UPSTREAM_CMD_FILE"
-    # Also write the bare original command (no shebang/comments) so --uninstall
-    # can re-embed it verbatim into statusLine.command.
+    # Also write the bare original command (no shebang/comments) so
+    # scripts/uninstall.sh can re-embed it verbatim into statusLine.command.
     printf '%s\n' "$ORIGINAL_CMD" > "$UPSTREAM_CMD_ONLY"
     echo "install.sh: preserved original command at ${UPSTREAM_CMD_FILE}"
   else

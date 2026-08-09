@@ -7,7 +7,7 @@
     {
       "name": "creditgauge",
       "source": "./",
-      "description": "Provider-agnostic Claude Code statusline plugin (CreditGauge) for token-plan usage and account balance. Picks the provider from ANTHROPIC_BASE_URL (currently MiniMax + DeepSeek); hides itself otherwise. Ships :install, :uninstall, :clean, and :clean-cache slash commands.",
+      "description": "Provider-agnostic Claude Code statusline plugin (CreditGauge) for token-plan usage and account balance. Picks the provider from ANTHROPIC_BASE_URL (currently MiniMax + DeepSeek); hides itself otherwise. Ships the :install, :uninstall, :clean, :clean-cache, :clean-journal, :reset, and :config slash commands.",
       "version": "1.2.0"
     }
   ],

@@ -81,11 +81,8 @@ const fakeSnapshot = (overrides: Partial<TokenSnapshot> = {}): TokenSnapshot => 
   // v0.4.0+ — session identity / metadata / context stats
   sessionName: "strip-diagnostics-display",
   modelDisplayName: "MiniMax-M3",
-  // v0.9.x — model id (stdin.model.id). Powers tokenPrices
-  // lookup, per-model slot key, JSONL sample.model stamp.
-  // Kept identical to modelDisplayName so the default fake
-  // snapshot is internally consistent (a fixture can override
-  // either or both independently).
+  // v0.9.x — model id (stdin.model.id): tokenPrices lookup / per-model
+  // slot key / sample.model stamp. Kept == modelDisplayName by default.
   modelId: "MiniMax-M3",
   effort: "high",
   repo: { host: "github.com", owner: "cwf818", name: "creditgauge" },
@@ -95,8 +92,7 @@ const fakeSnapshot = (overrides: Partial<TokenSnapshot> = {}): TokenSnapshot => 
 });
 
 // Bridge v0.8.x Window { pct, resetAt, resetStartAt, resetDurationMs }
-// literals used throughout this file to the v0.9.0 Interval shape.
-// Defaults windowId/label to "5h" so 7d callers pass it explicitly.
+// literals to the v0.9.0 Interval shape; defaults windowId/label to "5h".
 type LegacyWin = {
   pct: number;
   resetAt?: string | null;
@@ -105,11 +101,9 @@ type LegacyWin = {
 };
 function legacyToIv(
   w: LegacyWin | null | undefined,
-  // vX.X.X — widened from "5h" | "7d" | "30d" so tests can construct
-  // Intervals with a non-canonical windowId for the new
-  // declared-windowId resolution path (e.g. "5h-fake" to ensure
-  // `|window|2h` falls through to dhms instead of matching the
-  // declared ID).
+  // vX.X.X — label is a string so tests can build non-canonical
+  // windowIds (e.g. "5h-fake") for the declared-windowId resolution
+  // path (|window|2h then falls through to dhms).
   label: string = "5h",
 ): Interval | null {
   if (!w) return null;
@@ -148,39 +142,28 @@ const ctxFor = (
   stale: false,
   version: "0.4.0-dev0",
   tokens,
-  // v0.4.0+ — synthesized from tokens.contextWindow.contextUsedPercent.
-  // The renderProviderLine helper does this synthesis; tests build
-  // RenderContext directly so we mirror it here.
+  // v0.4.0+ — synthesized from contextUsedPercent (mirrors
+  // renderProviderLine's synthesis).
   contextWindow:
     tokens?.contextWindow?.contextUsedPercent != null
       ? { pct: tokens.contextWindow.contextUsedPercent }
       : null,
-  // v0.4.x — the provider TYPE discriminator. Tests that don't care
-  // about type filtering use the default "quota"; m_template coverage
-  // in §5.3 overrides this. Renamed from `providerModeKey` (v0.4.x-
-  // beta) to avoid collision with the display-mode field.
+  // v0.4.x — provider TYPE discriminator (default "quota").
   providerType,
-  // v0.8.7+ — passthrough from outer m_template. Tests that don't
-  // exercise passthrough leave this undefined; the m_template
-  // passthrough block at the end of the file mutates this field
-  // directly to verify non-leakage.
+  // v0.8.7+ — m_template passthrough; left undefined except by the
+  // passthrough tests at the end of the file.
   passThrough: undefined as Record<string, string | number> | undefined,
 });
 
-// Hoisted to module scope (was inside the v0.8.0+ labels describe) so
-// sibling describes — including the m_memUsed / m_memTotal block — can
-// reuse it via closure. Same semantics: __resetForTest with a partial
-// labels override, reset afterwards (the file-level beforeEach at
-// line 106 also calls configStore.__resetForTest()).
+// Module-scope labels-override helper (shared by the labels describes):
+// __resetForTest with a partial labels override, restored in finally.
 function withLabels(labels: Partial<Config["labels"]>, fn: () => void) {
   __resetForTest({ labels: { ...configStore.get().labels, ...labels } });
   try { fn(); } finally { __resetForTest(); }
 }
 
-// v0.8.21+ — quoteBodies-injecting ctx factory. Mirrors ctxFor but
-// attaches a pre-fetched body map so m_quote|address|… tests can
-// exercise the renderer without spinning an HTTP server (the fetch
-// + cache layer is covered separately in src/api.quote.ts tests).
+// v0.8.21+ — ctxFor + a pre-fetched body map so m_quote|address|…
+// tests skip the HTTP layer (covered in api.quote.ts tests).
 const ctxWithQuoteBodies = (
   bodies: Map<string, string>,
   tokens: TokenSnapshot | null = fakeSnapshot(),
@@ -189,47 +172,29 @@ const ctxWithQuoteBodies = (
   quoteBodies: bodies,
 });
 
-// v0.4.0+ — the speed/delta/avg cache helpers (peekPrevTick /
-// setPrevTick / peekAvg / setAvg) write to
-// ~/.claude/plugins/creditgauge/state/cache.json. Tests MUST
-// point that path at a tmp file so they don't leak to the user's
-// real cache between runs. Per-test tmp dir + clean teardown keeps
-// each test fully isolated.
+// v0.4.0+ — the cache/status helpers write to the real plugin state
+// dir; point every resolver at a per-test tmp dir so tests don't leak
+// to the user's cache.json / status.json / cache.stat.json.
 let _tmpDir: string;
 beforeEach(() => {
   __resetForTest();
   _tmpDir = mkdtempSync(join(tmpdir(), "creditgauge-render-tokens-"));
   setCachePathResolver(() => join(_tmpDir, "cache.json"));
-  // v0.4.x — per-tick state lives in status.json under the
-  // project dir; tests must point that resolver at a tmp file
-  // too so the cache module's leftover disk shadow doesn't leak
-  // across tests.
   setStatusPathResolver(() => join(_tmpDir, "status.json"));
-  // v0.8.16 — stat cache (m_sum* + m_statTtlStatus backing) lives
-  // in cache.stat.json; tests must point that resolver at a tmp
-  // file so the cache module's leftover disk shadow doesn't leak
-  // across tests.
   setStatCachePathResolver(() => join(_tmpDir, "cache.stat.json"));
   __resetStatCacheForTest();
-  resetCacheForTest(); // clears in-memory Map + lazy-load guard
-  resetStatusForTest(); // clears status-store in-memory cache
-  // v0.9.x — render functions now read/write through tick-state;
-  // tests that drive renderers directly must seed the per-tick
-  // state with beginTickForTest() before the first render call.
-  // null cwd means an empty in-memory store; null tokens means
-  // validation fails (commit() is a no-op), so tests that exercise
-  // the in-memory contract don't accidentally hit the disk.
+  resetCacheForTest();
+  resetStatusForTest();
+  // v0.9.x — seed an empty per-tick store (null cwd keeps it
+  // in-memory; null tokens makes commit() a no-op).
   resetTickStateForTest();
   beginTickForTest(null, null);
-  // v0.8.0+ — token-store's stateRoot hook needs an explicit
-  // reset between tests so sum/avg scans don't leak into a
-  // different test's tmp dir.
+  // v0.8.0+ — reset the stateRoot hook so sum/avg scans don't leak
+  // into a different test's tmp dir.
   resetStateRoot();
 });
-// afterEach would be cleaner, but node:test supports only beforeEach
-// in this file's existing pattern; we cleanup via the next beforeEach's
-// fresh tmp dir. The old _tmpDir becomes unreachable but the OS will
-// GC the temp dir eventually — acceptable for tests.
+// Cleanup happens via the next beforeEach's fresh tmp dir; the old
+// _tmpDir is left for the OS to GC — acceptable for tests.
 
 describe("formatCompactToken", () => {
   it("below thresholds[0] → raw integer", () => {
@@ -360,12 +325,10 @@ describe("cacheHitColor — 3-band picker", () => {
 });
 
 describe("getFieldByPath (v0.8.18+ m_quote field resolver)", () => {
-  // Walks a JSON value along a dot-separated path (m_quote's own
-  // local walker, NOT the deleted path-expr.ts — that host-side
-  // resolver was removed in v0.9.x). Each segment is either an
-  // object key or an array index; a string value is terminal
-  // regardless of remaining path (per the user's "如果拿到的已
-  // 经是字符串, 则忽略 field 参数" contract).
+  // Walks a JSON value along a dot-separated path (m_quote's local
+  // walker, not the removed host-side path-expr.ts). Each segment is
+  // an object key or array index; a string value terminates the path
+  // (per the user's "字符串即终点" contract).
 
   it("object key path", () => {
     assert.equal(
@@ -408,13 +371,7 @@ describe("getFieldByPath (v0.8.18+ m_quote field resolver)", () => {
   });
 
   it("plain string body (no field) → returns as-is", () => {
-    // Common case: endpoint returns a raw string. With empty
-    // field, the path is one empty segment which never touches
-    // cur, so the loop's final check returns the string.
-    // Actually: split("") returns [""], loop iterates once with
-    // seg = ""; on object the in check fails; on string the
-    // typeof-string branch returns cur. So for a plain string
-    // body + empty field, the result is the string itself.
+    // Empty field + string body → the walker returns the string.
     assert.equal(getFieldByPath("just a string", ""), "just a string");
   });
 
@@ -445,26 +402,13 @@ describe("getFieldByPath (v0.8.18+ m_quote field resolver)", () => {
 });
 
 describe("renderTemplate — m_quote address+field (v0.8.21+)", () => {
-  // v0.8.21+ — fetch lives in src/api.quote.ts (preFetchQuotes,
-  // Node 18+ native fetch, disk-shadowed cache, simple "quote"
-  // key shared across processes). Tests here exercise the
-  // sync renderer in src/render.ts:fetchQuoteFromAddress, which
-  // is a pure reader over ctx.quoteBodies. We inject the Map
-  // directly via ctxWithQuoteBodies — no HTTP server, no curl
-  // binary, no skip() gates.
+  // v0.8.21+ — the renderer reads a pure ctx.quoteBodies Map
+  // (preFetchQuotes lives in api.quote.ts); we inject bodies via
+  // ctxWithQuoteBodies, no HTTP/curl.
   //
-  // Arg shape: `m_quote|address:<url>|field:<single-path>`.
-  // `fields` (plural, comma list) was removed in v0.8.21 — the
-  // upgrade is strict; existing v0.8.19 configs need a manual
-  // `fields` → `field` rename and a hand-pick of one path.
-  //
-  // v0.9.x wrap redesign — char-pair instead of bool.
-  // `wrap` is a 2-char string when supplied (1-char is duped,
-  // 2+-chars is sliced). Empty / missing → no-op (raw text,
-  // no brackets). Booleans (`wrap|true|false`) are hard-rejected
-  // by the char-pair resolver as badarg. Applies to BOTH
-  // address-mode and local-mode (was address-only with
-  // hard-coded `~` in v0.8.21+).
+  // v0.9.x wrap redesign — char-pair instead of bool: 1-char duped,
+  // 2+ sliced to 2, empty/missing → no-op, booleans badarg. Applies
+  // to address AND local mode.
 
   it("address|fetched JSON + quote|hitokoto → bare value (wrap default no-op)", () => {
     // v0.9.x default: no wrap chars. The user opts into wrapping
@@ -667,18 +611,10 @@ describe("renderTemplate — m_quote address+field (v0.8.21+)", () => {
 });
 
 describe("renderTemplate — m_quote fetch-failure diagnostics (v0.8.20+)", () => {
-  // v0.8.20+ — when fetchQuoteFromAddress returns null (curl exit /
-  // non-JSON body / all paths miss), it appends a structured warning
-  // to diagnostics.jsonl so a postmortem can grep why the local
-  // QUOTES fallback fired. Gate is CREDITGAUGE_DIAGNOSTICS_ENABLE=1;
-  // these tests enable it for the duration.
-  //
-  // The diagnostics module reads state root from process.env.HOME /
-  // CLAUDE_CONFIG_DIR at append-time; we redirect both to the
-  // per-test _tmpDir so the JSONL file lands at
-  // `<_tmpDir>/.claude/plugins/creditgauge/state/<projectHash(cwd)>/diagnostics.jsonl`.
-  // We use setSessionCwd to encode the originating project's hash on
-  // the row's `cwd` field AND on the file path (Per-Project Layout).
+  // v0.8.20+ — fetchQuoteFromAddress null (curl exit / non-JSON / all
+  // paths miss) appends a structured warning so a postmortem can grep
+  // why the local QUOTES fallback fired. Redirect HOME/CLAUDE_CONFIG_DIR
+  // to the per-test tmp dir and setSessionCwd for the per-project row.
 
   let diagRoot: string;
   beforeEach(() => {
@@ -693,16 +629,10 @@ describe("renderTemplate — m_quote fetch-failure diagnostics (v0.8.20+)", () =
     diagnostics.setDebugFlags({ parse: true });
   });
 
-  // Helper: read all JSONL rows from the project's diagnostics
-  // file. Returns [] when the file is missing. The path mirrors
-  // diagnostics.stateRoot() — see src/diagnostics.ts.
+  // Helper: read all JSONL rows from the project's diagnostics file
+  // (diagRoot/plugins/creditgauge/state/<hash>/diagnostics.jsonl —
+  // CLAUDE_CONFIG_DIR is the literal config root, no .claude infix).
   function readDiagLines(): Array<Record<string, unknown>> {
-    // diagnostics.stateRoot() returns either
-    //   $CLAUDE_CONFIG_DIR/plugins/creditgauge/state (when set), or
-    //   $HOME/.claude/plugins/creditgauge/state (when unset).
-    // We set CLAUDE_CONFIG_DIR=diagRoot in beforeEach so the
-    // per-project file lands at diagRoot/plugins/creditgauge/state/<hash>/diagnostics.jsonl
-    // (no .claude infix — CLAUDE_CONFIG_DIR is the literal config root).
     const path = join(
       diagRoot,
       "plugins",
@@ -774,10 +704,8 @@ describe("renderTemplate — m_quote fetch-failure diagnostics (v0.8.20+)", () =
 
 describe("renderTemplate — m_token* modules", () => {
   // ----- m_tokenIn / m_tokenOut (v0.4.0+ per-API-call delta) -----
-  // semantics changed again from raw current_usage.* values to
-  // delta vs the previous tick's snapshot, gated on delta_api > 0.
-  // Same stability rule as the speed modules: always render (data
-  // missing → "in:--"). Tests below cover each gate.
+  // render current.input/output as the per-turn delta, gated on
+  // delta_api > 0; missing data → "in:--". Tests cover each gate.
 
   it("m_tokenIn renders 'in:N' where N is the delta vs the previous tick", () => {
     // Seed prev in=0; fakeSnapshot has current.input=38 → delta=38.
@@ -1033,12 +961,9 @@ describe("renderTemplate — m_token* modules", () => {
 
 
   // ----- m_accTokenIn / m_accTokenOut / m_accTokenCachedIn (v0.8.x
-  //   cwf-tickStatus-v2 — REPLACES the v0.4.x–v0.8.0
-  //   m_totalToken* / m_totalTokenWithCacheIn family, which was
-  //   REMOVED with no alias). The m_acc* family reads the same
-  //   per-session AccSnapshot (peekAvg) as before; what changed is
-  //   that the module name now goes through the acc* pipeline
-  //   instead of the removed total* pipeline.
+  //   cwf-tickStatus-v2 — replaces the REMOVED m_totalToken* family;
+  //   same per-session AccSnapshot via peekAvg, now through the
+  //   acc* pipeline).
 
   it("m_accTokenIn first tick (no avg cache) → assumes prev=0, contributes this turn's delta", () => {
     // v0.4.0+ (revised 2026-06-29): first tick assumes prev=0,
@@ -1320,12 +1245,9 @@ describe("renderTemplate — m_token* modules", () => {
     assert.equal(strip(out), "hit:0.0%");
   });
 
-  // v0.8.x — m_tokenHitRate cache-fallback: when this tick's
-  // stdin lacks cache_read_input_tokens (cacheRead=null) but
-  // lastActive:tokenHitRate holds a value within the 60s TTL
-  // window, render the cached percentage STALE_COLORed instead
-  // of dropping to the "hit:n/a" placeholder. Mirrors m_apiMs's
-  // fallback added in this session.
+  // v0.8.x — m_tokenHitRate cache-fallback: cacheRead=null on stdin but
+  // a cached lastActive:tokenHitRate (within TTL) renders the cached
+  // percentage STALE_COLORed instead of the "hit:n/a" placeholder.
   it("m_tokenHitRate| cacheRead=null WITH cached lastActive:tokenHitRate (within TTL) → 'hit|99.5%' (STALE_COLORed)", () => {
     // First render: cacheRead is present → 99.978% → setLastTokenHitRate
     // fires from the MODULES body, persisting ~99.978 to status.json.
@@ -1397,12 +1319,9 @@ describe("renderTemplate — m_token* modules", () => {
     assert.ok(out.includes(STALE), `expected STALE wrap: ${JSON.stringify(out)}`);
   });
 
-  // v0.8.x — m_tokenHitRate idle-tick STALE_COLOR: when this
-  // tick's stdin is present (cacheRead != null) but the API
-  // did not do work (hasDelta=false → deltaApi=0), the rendered
-  // hit rate is the same value as the prior tick, NOT a fresh
-  // measurement. Mirror the m_tokenInSpeed / m_tokenOutSpeed /
-  // m_apiMs convention: gray it.
+  // v0.8.x — m_tokenHitRate idle-tick STALE_COLOR: stdin present but
+  // deltaApi=0 → same hit rate as the prior tick, NOT a fresh
+  // measurement. Mirrors the tps / apiMs convention: gray it.
   it("m_tokenHitRate| idle tick (deltaApi=0, cacheRead present) → 'hit|99.5%' STALE_COLORed", () => {
     // First tick: prime the prev-tick cache to apiMs=60_000. After
     // priming, current.input=38 etc. moves by a non-zero amount.
@@ -1489,20 +1408,11 @@ describe("renderTemplate — m_token* modules", () => {
 
 // ----- v0.8.0+ per-turn API-ms delta (m_apiMs) ---------------------------
 //
-// Per-tick delta of cost.totalApiDurationMs formatted as a dhms
-// time string with the "api:" prefix. Distinct from m_accApiMs
-// (session-cumulative token count, prefix "acc:") and m_sumApiMs
-// (cross-project sum token count, prefix "api:" but token
-// formatted). The new module's value semantics:
-//
-//   m_apiMs = current total_api_duration_ms − prev total_api_duration_ms
-//
-// Gate: hasDelta (deltaApi > 0). Idle tick (current == prev) →
-// "api:n/a". No stdin or no sessionId → "api:n/a". The
-// writeBack path mirrors m_tokenIn / m_tokenOut: the renderer
-// fires setPrevTick on every call so the next tick has a fresh
-// baseline regardless of which per-turn module appears in the
-// user's template.
+// m_apiMs = current − prev total_api_duration_ms, formatted as dhms
+// with the "api:" prefix (distinct from m_accApiMs / m_sumApiMs).
+// Gate: deltaApi > 0; idle / no-stdin / no-sessionId → "api:n/a".
+// The renderer fires setPrevTick on every call so the next tick has a
+// fresh baseline.
 
 describe("renderTemplate — v0.8.0+ m_apiMs per-turn delta", () => {
   beforeEach(() => {
@@ -2359,11 +2269,9 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     assert.equal(strip(out), "out:155");
   });
 
-  // v0.8.0+ — newly registered module under the labelTokenTotalIn
-  // family. Reads the same source as m_tokenInTotal but emits the
-  // labelTokenTotalIn prefix instead of labelTokenIn — both default to
-  // "in:" / "total:" respectively, but a user override on either
-  // axis diverges them.
+  // v0.8.0+ — m_tokenTotalIn reads the same source as m_tokenInTotal
+  // but emits the labelTokenTotalIn prefix (default "total:"), so a
+  // user override on either axis diverges them.
   it("m_tokenTotalIn| 'total|163.5k' (cumulative, labelTokenTotalIn axis)", () => {
     const out = renderTemplate(["m_tokenTotalIn"], ctxFor(fakeSnapshot())).join("\n");
     assert.equal(strip(out), "total:163.5k");
@@ -2378,10 +2286,8 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
   });
 
   // ----- m_apiCalls (v0.4.x) -------------------------------------------
-  // Reads the project-wide tickStatus slot's sumApiCount. Survives
-  // session changes — the value reflects ALL sessions that have
-  // ticked in this cwd. Supports :color: and :nulldrop: like other
-  // text-style modules. Renders "calls:N"; placeholder is "calls:n/a".
+  // Reads the project-wide tickStatus slot's sumApiCount (survives
+  // session changes). Renders "calls:N"; placeholder "calls:n/a".
 
   it("m_apiCalls| renders 'calls|0' when no project-wide tickStatus slot exists", () => {
     // Fresh cwd, no prior write → tickStatus slot is null → counter
@@ -2753,34 +2659,18 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
 
 // ----- v0.4.0+ nulldrop inline override ----------------------------------
 //
-// Every m_* module accepts an optional `:nulldrop:<true|false>`
-// inline argument. Semantics (FLIPPED in v0.4.0 — see
-// nulldrop-inline-override memory):
-//   omitted / `:nulldrop:false`  → DEFAULT. Force a stable
-//     placeholder when data is null — module ALWAYS renders.
-//   `:nulldrop:true`             → opt out of placeholder; preserve
-//     v0.3.x drop-on-null behavior.
-//
-// Placeholder shape per family (see PLACEHOLDERS in render.ts):
-//   pure-number → STALE_COLOR "n/a" wrapped     (e.g. "in:n/a")
-//   number+unit → STALE_COLOR "-- <unit>"       (e.g. "5h:--/s")
-//   gauge       → STALE_COLOR "░░░░░░░░ 0%"     (or full bar 100% in remaining mode)
-//   bare-string → STALE_COLOR "n/a" wrapped
-//
-// The bare MODULES path is unaffected — bare `m_contextSize` still
-// drops when tokens is null. To force a placeholder the user MUST
-// use the inline form `m_contextSize` (which now defaults to
-// placeholder — see above) or `m_contextSize:nulldrop:false`. To
-// preserve old drop behavior on an inline token, write
-// `m_contextSize:nulldrop:true`.
+// Every m_* module accepts `:nulldrop:<true|false>`:
+//   omitted / false → DEFAULT: force a stable placeholder (module
+//     ALWAYS renders). true → opt out; preserve v0.3.x drop-on-null.
+// Placeholder shape per family: pure-number "n/a", number+unit
+// "-- <unit>", gauge "░░░░░░░░ 0%", bare-string "n/a".
 
 describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
   // ----- pure-number family -----
 
   it("m_contextSize|nulldrop|false with no tokens renders 'size|n/a' (placeholder)", () => {
-    // v0.8.0+ — m_contextSize was renamed to m_contextSize (semantic now
-    // cumulative occupancy, sourced from totals.input). The
-    // placeholder still reads "size:n/a".
+    // v0.8.0+ — m_contextSize (cumulative occupancy from totals.input).
+    // Placeholder still reads "size:n/a".
     const out = renderTemplate(
       ["m_contextSize|nulldrop:false"],
       ctxFor(null),
@@ -2916,10 +2806,8 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
   });
 
   it("m_contextWindowSize|nulldrop|false renders 'size|n/a' when context_window.size is null", () => {
-    // v0.8.0+ — m_contextSize was renamed to m_contextWindowSize
-    // (capacity, sourced from context_window.size). The new
-    // m_contextSize (cumulative occupancy) is tested separately
-    // above.
+    // v0.8.0+ — m_contextWindowSize (capacity from context_window.size).
+    // The separate m_contextSize (occupancy) is tested above.
     const out = renderTemplate(
       ["m_contextWindowSize|nulldrop:false"],
       ctxFor(
@@ -3139,18 +3027,9 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
 
   // ----- v0.4.0 default = placeholder (flip from earlier opt-in design) -----
   //
-  // The DEFAULT for an INLINE token (one with `:` in it) is now
-  // force-placeholder. This is a behavior flip from the
-  // pre-v0.4.0-final design (which had nulldrop:false as the
-  // opt-in). Bare `m_contextSize` (no colon) STILL drops — that path goes
-  // through MODULES, not the inline dispatcher, and the v0.3.x
-  // drop semantics on bare tokens are preserved as a backward-compat
-  // promise. Users who want drop semantics on an inline token add
-  // `:nulldrop:true`.
-  //
-  // Concretely: the placeholder fires whenever an inline token's
-  // params.nulldrop is NOT the literal "true" (undefined counts as
-  // "false" / default).
+  // Inline tokens (with `:`) default to force-placeholder; bare
+  // tokens (no colon) still drop via the MODULES path (v0.3.x compat).
+  // `:nulldrop:true` opts back into drop-on-null.
 
   it("bare m_contextSize emits 'size:n/a' on null (v6.x placeholder parity)", () => {
     // v6.x — bare m_contextSize now follows the placeholder rule, matching
@@ -3272,19 +3151,13 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
 
 // ----- v0.4.0+ speed cache + color:scale behavior ---------------------
 //
-// The speed modules gained two new behaviors in v0.4.0:
-//   1. Cache the last ACTIVE-tick tps per session. On an idle
-//      tick (no API call this turn), fall back to the cached
-//      tps instead of rendering "--/s". Idle ticks do NOT
-//      overwrite the cache.
-//   2. 5-band scale coloring (`:color:scale` or bare default).
-//      Faster = greener; slower = redder. `out` bands:
-//      [10, 20, 40, 80]; `in` bands: 5× out = [50, 100, 200, 400].
-//      `:color:<shortcut|SGR>` overrides the active-tick color
-//      (e.g. `:color:red` → always red on active ticks).
-//   3. Cached/inactive ticks ALWAYS render in STALE_COLOR
-//      regardless of the user's :color: choice. Gray signals
-//      "this is a stale measurement from a previous API call".
+// 1. Cache the last ACTIVE-tick tps per session; idle ticks fall back
+//    to it (never "--/s") and do NOT overwrite the cache.
+// 2. 5-band scale coloring (bare default or `:color:scale`): out bands
+//    [10,20,40,80], in bands 5× out; `:color:<c>` overrides on active
+//    ticks.
+// 3. Cached/inactive ticks ALWAYS render STALE_COLOR regardless of
+//    the user's :color:.
 
 describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.4.0+)", () => {
   beforeEach(() => {
@@ -3555,36 +3428,20 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
   });
 
   // ----- v0.8.x R7 — TTL gate disabled for the 4 speed/api/hitrate
-  // modules. The 60s TTL is no longer enforced: any cached value in
-  // status.json (even one written long ago) must surface on idle
-  // ticks. The four tests below pre-write a status.json entry with
-  // `at: Date.now() - 5*60_000` (5 minutes ago — well past the old
-  // 60s window) and confirm each module's idle render still pulls
-  // the cached value rather than the placeholder.
-  //
-  // The LAST_ACTIVE_TTL_MS constant in status-store is retained
-  // for future opt-in via config, but readLastActive no longer
-  // compares against it. The cache is now the persistent "last
-  // known good" value.
+  // modules: any cached value in status.json must surface on idle
+  // ticks (the tests pre-write an entry 5 minutes old). The
+  // LAST_ACTIVE_TTL_MS constant is retained for future opt-in but
+  // readLastActive no longer compares against it.
 
   const seedBackdatedLastActive = (
     direction: "in" | "out" | "apiMs" | "tokenHitRate",
     value: number,
     prevTick?: PrevTickSnapshot,
   ): void => {
-    // Direct write into the tmp status.json the test resolver
-    // points at. We bypass the writeLastActive helper because
-    // that helper stamps `at: Date.now()`, which would defeat
-    // the point of the test (we want the entry to look 5
-    // minutes old). Schema mirrors status-store's loader.
-    // We also write a prev-tick entry if supplied (passed AFTER
-    // this function returns, the in-memory _stores Map will be
-    // cleared by resetStatusForTest, so the on-disk JSON is
-    // authoritative). setPrevTick → writePrevTickStatus →
-    // flushToDisk would otherwise rewrite the file, clobbering
-    // the backdated entry — the right ordering is: build the
-    // whole status.json here, then call resetStatusForTest, then
-    // render.
+    // Direct write into the tmp status.json with a backdated `at`
+    // (writeLastActive stamps Date.now(), defeating the test).
+    // Build the whole file here, then resetStatusForTest + render —
+    // otherwise setPrevTick's flushToDisk would rewrite it.
     const path = join(_tmpDir, "status.json");
     const store: Record<string, unknown> = {
       [`lastActive:${direction}`]: {
@@ -3594,11 +3451,9 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
       },
     };
     if (prevTick) {
-      // v0.8.10-alpha.2 snapshot contract: prevTickStatus now
-      // carries only totalApiMs + identity. The per-turn
-      // in/out/cachedIn/totalIn fields are gone — apiMs is the
-      // ONLY cross-tick subtraction. See plan
-      // ancient-wobbling-mochi.md for the rationale.
+      // v0.8.10-alpha.2 snapshot contract: prevTickStatus carries
+      // only totalApiMs + identity (apiMs is the only cross-tick
+      // subtraction).
       store["prevTickStatus"] = {
         at: Date.now(),
         value: {
@@ -3622,9 +3477,9 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
     // STALE_COLORed cached value.
     seedBackdatedLastActive("in", 12.5, { totalApiMs: 60_000 });
     resetStatusForTest();
-    // v0.9.x — re-bootstrap tick-state now that the on-disk file
-    // is populated; beforeEach's beginTickForTest loaded an empty
-    // store when this cwd was null.
+    // Re-bootstrap the status-store now that the on-disk file is
+    // populated; beforeEach's beginTickForTest loaded an empty store
+    // when this cwd was null.
     const snap = fakeSnapshot();
     beginTickForTest(snap.cwd, snap);
     processTick(snap.cwd, snap, null);
@@ -3689,16 +3544,9 @@ describe("renderTemplate — m_tokenInSpeed / m_tokenOutSpeed cache + scale (v0.
 // ----- v0.4.0+ m_template module -----
 //
 // Direct coverage of `m_template:<key>[:type:<plan|balance>]` against
-// `renderTemplate` (no provider dispatch — ctx.providerType is
-// set explicitly). The end-to-end "minimax renders the chunk" path
-// is in lineTemplate.test.ts; this file exercises the renderer in
-// isolation so a missing-key warn is easier to capture.
-//
-// v0.8.15+ — the inline intrinsic arg is renamed to `type` (was
-// `mode`); the legacy `mode` arg is still accepted for back-compat.
-// The renderer-side check prefers `type` when both are present on
-// the same token. The comparison target inside the renderer is
-// ctx.providerType (a TYPE discriminator, not a mode).
+// renderTemplate (providerType set explicitly; the end-to-end path is
+// in lineTemplate.test.ts). v0.8.15+ — `mode` was renamed to `type`
+// (legacy `mode` still accepted for back-compat).
 describe("renderTemplate — m_template inline-args (v0.4.0+)", () => {
   beforeEach(() => __resetForTest());
 
@@ -3843,14 +3691,9 @@ describe("renderTemplate — m_template inline-args (v0.4.0+)", () => {
   });
 });
 
-// v0.8.7+ — m_template passthrough. Outer m_template declares
-// named args (scope/color/nulldrop/window/model/align) and the
-// renderer forwards them as a fallback to the inner module list
-// via ctx.passThrough. Inner-explicit-wins: when the inner module
-// also declares the same arg, its value is used; the passthrough
-// only fills undefined slots. Unknown args still fail loud
-// (parseInlineArgs → badarg → warn + drop) so typos are not
-// silently accepted.
+// v0.8.7+ — m_template passthrough: outer named args (scope/color/
+// nulldrop/window/model/align) forward as a fallback to inner modules
+// via ctx.passThrough. Inner-explicit-wins; unknown args still badarg.
 describe("renderTemplate — m_template passthrough (v0.8.7+)", () => {
   beforeEach(() => {
     __resetForTest();
@@ -4223,27 +4066,12 @@ describe("renderTemplate — m_template passthrough (v0.8.7+)", () => {
   });
 });
 
-// v0.4.x+ — Per-Project cache isolation. Two snapshots with the
-// same sessionId but different cwds must NOT share the same
-// tickSpeed: / tickAvg: cache slot. The render layer applies a
-// `projectHash(cwd):` prefix before calling into the cache module,
-// so each project's accumulator lives at a distinct key. This
-// describe block exercises that path end-to-end via the public
-// render-template API.
+// v0.4.x+ — Per-Project cache isolation: the same sessionId under
+// different cwds must not share a tickSpeed/tickAvg slot. The render
+// layer keys each project's accumulator by projectHash(cwd).
 describe("render — per-project cache isolation", () => {
   it("same sessionId, different cwds → accumulators are independent", () => {
     __resetForTest({ lineTemplates: { tok: ["m_tokenInSpeed", "m_tokenOutSpeed"] } });
-    // v0.9.x — per-cwd isolation is enforced by the on-disk file
-    // path (state/<projectHash>/status.json), not by per-key
-    // prefixing. status-store keeps a per-cwd `_stores` cache
-    // keyed by cwd, so writing via setPrevTick(cwdA) and then
-    // re-loading via loadFromDisk(cwdA) returns cwdA's slot
-    // while loadFromDisk(cwdB) returns cwdB's (empty, on a
-    // fresh tmp dir). The tick-state's per-tick pending
-    // accumulates ONE cwd at a time — to verify two-cwd
-    // independence we exercise the disk persistence boundary
-    // directly: write both, commit, then read each back
-    // independently.
     const sid = "sess-shared";
     const cwdA = "D:\\WorkSpace\\alpha";
     const cwdB = "D:\\WorkSpace\\beta";
@@ -4254,7 +4082,7 @@ describe("render — per-project cache isolation", () => {
     // keyed by cwd, so writing via setPrevTick(cwdA) and then
     // re-loading via loadFromDisk(cwdA) returns cwdA's slot
     // while loadFromDisk(cwdB) returns cwdB's (empty, on a
-    // fresh tmp dir). The tick-state's per-tick pending
+    // fresh tmp dir). The status-store's per-tick pending
     // accumulates ONE cwd at a time — to verify two-cwd
     // independence we exercise the disk persistence boundary
     // directly: write both, commit, then read each back
@@ -4309,10 +4137,9 @@ describe("render — per-project cache isolation", () => {
 
 // ----- vX.X.X+ — six named separator aliases (s_space / s_dot / s_newline / s_tab / s_colon / s_pipe) -----
 //
-// These are the only separator tokens. The legacy numeric `s_<n>`
-// form and the `separators` config array are REMOVED — the
-// aliases render their built-in literals regardless of any user
-// config.
+// The only separator tokens: the numeric `s_<n>` form and the
+// `separators` config array are REMOVED; aliases render their
+// built-in literals regardless of config.
 describe("renderTemplate — named separator aliases (vX.X.X+)", () => {
   beforeEach(() => {
     // vX.X.X+ defaults: no `separators` config array, default
@@ -4425,45 +4252,18 @@ describe("renderTemplate — named separator aliases (vX.X.X+)", () => {
 
 // ----- v0.8.0+ acc modules (per-session / per-project / per-model) -----
 //
-// Six new modules expose the four-layer accumulator that setAvg
-// writes each tick:
-//   m_accTokenIn       — session-cumulative current.input
-//   m_accTokenOut      — session-cumulative current.output
-//   m_accTokenCachedIn — session-cumulative current.cacheRead
-//   m_accTokenTotalIn  — accTokenIn + accTokenCachedIn (the "total tokens
-//                        the model has seen this session, counting
-//                        cache_read as already-paid-for" view)
-//   m_accApiMs         — session-cumulative cost.totalApiDurationMs
-//   m_accTokenHitRate  — accTokenCachedIn / (accTokenCachedIn + accTokenIn) * 100%
-//
-// All six accept an optional `:scope:<session|project|model>` arg.
-// Default scope:
-//   - the 5 plain modules fall back to "project" when no
-//     sessionId is on the snapshot (so a fresh project renders
-//     placeholders instead of empty), otherwise "session".
-//   - m_accTokenHitRate defaults to "session" — a per-session
-//     ratio is the natural "what % of MY model reads are cache
-//     hits" answer; project/model are opt-in.
-//
-// Slot locations (setAvg writes 3 slots per tick):
-//   session: tickStatus:<sid>     (read via peekAvg)
-//   project: tickStatus            (read via statusStore.readTickStatus)
-//   model:   tickStatus:<model>    (read via statusStore.readTickStatus)
-//
-// Placeholders (v0.8.0+ labels.*): the four token-axis acc
-// modules (m_accTokenIn/Out/CachedIn/TotalIn) read their prefix
-// from labelFor so the placeholder matches the configured
-// labelTokenIn/Out/CacheIn/TotalIn. m_accApiMs keeps its hardcoded
-// "api:" prefix (mirrors m_apiMs). m_accTokenHitRate (v0.8.x R8)
-// now mirrors m_tokenHitRate's "hit:" prefix (was "acc:") so the
-// per-turn / acc / sum triple shares one prefix. Inline default
-// is the placeholder (nulldrop:false behavior); bare form also
-// renders the placeholder when data is missing — matching the
-// v6.x bare-vs-inline parity rule.
+// m_accTokenIn/Out/CachedIn (session-cumulative), m_accTokenTotalIn
+// (accTokenIn + accTokenCachedIn), m_accApiMs, m_accTokenHitRate
+// (cachedIn / (cachedIn + in)). Accept `:scope:<session|project|model>`;
+// the 5 plain modules default to "project" when no sessionId, else
+// "session"; hit-rate defaults to "session". Slots: session
+// tickStatus:<sid>, project tickStatus:<projectHash>, model
+// tickStatus:<model>. Prefixes come from labels.* (m_accApiMs keeps
+// hardcoded "api:"; hit-rate uses "hit:" per v0.8.x R8).
 describe("renderTemplate — v0.8.0+ m_acc* modules (three-scope accumulators)", () => {
   it("m_accTokenIn| bare form on a fresh session self-primes → 'in:38' (the per-tick delta)", () => {
-    // v1.0 — self-priming moved from accPrimer (render-phase) to
-    // processTick (data-processor phase). The m_acc* family no
+    // Self-priming moved from accPrimer (render-phase) to
+    // processTick (status-store phase). The m_acc* family no
     // longer writes to pending during render; the test must run
     // processTick + commit BEFORE renderTemplate to mirror
     // current.input into the per-session slot. Mirrors
@@ -5035,24 +4835,12 @@ describe("renderTemplate — v0.8.0+ m_acc* modules (three-scope accumulators)",
 
 // ----- v0.8.0+ sum/avg advanced statistics -------------------------------
 //
-// 8 new modules: 5 sums (in / out / cached / total / apiMs) + 3
-// ratios (tokenHitRate / tokenInSpeed / tokenOutSpeed). All read
-// the per-tick jsonl stream (cross-project via readAllSamples) and
-// filter by `:model:`, `:window:`, `:align:`, `:term:`. Results
-// are cached in state/cache.json under the
-// "stat:<model>:<windowKey>:<align>" key
-// (windowKey ∈ {"5h","7d","all"} ∪ {intervals[*].windowId} ∪
-// {term keys used as fallback when windowId is empty}) with
-// TTL=300s. sinceMs is derived from window + ctx.nowMs + optional
-// resetStartAt but is NOT part of the key. v0.9.8 — |term:short|
-// folds into windowKey="5h" when intervals.short.windowId="5h",
-// so one statistical intent maps to one cache row regardless of
-// how the user spelled it.
-//
-// Tests below use a tmpDir as the state root (via setStateRoot)
-// so the user's real on-disk samples are untouched. Each test
-// seeds one or more jsonl rows directly into the per-session
-// file, then asserts on the rendered output.
+// 8 modules (5 sums + 3 ratios) read the per-tick jsonl stream
+// (cross-project via readAllSamples), filtered by model/window/align/
+// term, cached in state/cache.json under "stat:<model>:<windowKey>:<align>"
+// with TTL=300s (windowKey = windowId or the term literal; v0.9.8 makes
+// |term:short| and |window:5h| align on one row). Tests seed jsonl
+// rows into a tmp state root (setStateRoot) and assert output.
 
 describe("renderTemplate — v0.8.0+ m_sum*/m_avg* advanced statistics", () => {
   beforeEach(() => {
@@ -5851,17 +5639,11 @@ describe("renderTemplate — v0.8.0+ labels.* config customization", () => {
       const token = renderTemplate(["m_tokenInTotal"], ctxFor(snap)).join("\n");
       assert.match(strip(speed), /^speed-in:/);
       assert.match(strip(token), /^In:/);
-      // m_sumTokenInSpeed with empty state should drop (agg.rows===0)
-      // unless `nulldrop:false` forces the placeholder path. We use
-      // a fresh cwd so no state rows from prior tests contaminate
-      // the aggregate.
+      // Empty state → placeholder via |nulldrop:false| (fresh cwd so no
+      // prior-test rows contaminate the aggregate).
       const sumCtx = ctxFor(
         fakeSnapshot({ sessionId: "label-inspeed-sum", cwd: "D:\\label-inspeed-sum" }),
       );
-      // m_sumTokenInSpeed with empty state should drop (agg.rows===0)
-      // unless `nulldrop:false` forces the placeholder path. We use
-      // a fresh cwd so no state rows from prior tests contaminate
-      // the aggregate.
       const sumSpeed = renderTemplate(
         ["m_sumTokenInSpeed|nulldrop:false"],
         sumCtx,
@@ -6340,19 +6122,11 @@ describe("renderTemplate — m_contextUsage (vX.X.X+ two-tone context x/y)", () 
 // The on-disk file's `tickStatus:<sid>` entry must reflect the new
 // field set after a render that exercises the per-tick pipeline.
 describe("renderTemplate — v0.8.x cwf-tickStatus-v2 (tickStatus acc-only + prevTickStatus singleton + 3 scopes)", () => {
-  // The v0.8.0 "tickStatus field renames" describe block was
-  // rewritten for v0.8.x cwf-tickStatus-v2. What changed:
-  //   - tickStatus:<sid>.value is now ACC-ONLY (no in/out/cachedIn/
-  //     totalIn/totalApiMs fields). Per-tick / session-cumulative
-  //     values moved to the singleton `prevTickStatus` slot.
-  //   - m_totalToken* / m_totalTokenWithCacheIn REMOVED (no alias).
-  //   - The project-wide slot key changed from `tickStatus` (no
-  //     suffix) to `tickStatus:<projectHash(cwd)>`.
-  //   - m_acc* family defaults to scope=session (per-session,
-  //     clear-bounded). scope=ccsession was REMOVED in this
-  //     revision and surfaces as badarg (see resolveAccScope).
-  //
-  // The tests below pin the new on-disk layout.
+  // v0.8.x cwf-tickStatus-v2 changes: tickStatus:<sid>.value is
+  // ACC-ONLY (per-tick values moved to the singleton prevTickStatus);
+  // m_totalToken* REMOVED; project key is `tickStatus:<projectHash>`;
+  // m_acc* defaults to scope=session (ccsession removed → badarg).
+  // Tests below pin the new on-disk layout.
 
   it("setPrevTick writes the singleton prevTickStatus slot (only totalApiMs + identity persist)", () => {
     // v0.8.10-alpha.2 snapshot contract: prevTickStatus carries
@@ -6482,14 +6256,10 @@ describe("renderTemplate — v0.8.x cwf-tickStatus-v2 (tickStatus acc-only + pre
       "PrevTickSnapshot.totalApiMs round-trips through the bridge");
   });
 
-  // v0.8.x — scope contract for accApiMs (user rule 2026-07-04,
-// unifying the surviving 3 scopes on delta-accumulation):
-//   ALL 3 scopes (session / project / model):
-//     accApiMs += deltaApiMs (delta-accumulator).
-//   The ccsession scope (which previously ADDITIONALLY zeroed
-//   the entire slot on a backwards `totalApiMs` step / claude-
-//   code-process-restart) was REMOVED in this revision; its
-//   per-process regression-reset quirk has no surviving target.
+  // v0.8.x — scope contract for accApiMs (user rule 2026-07-04):
+  // ALL 3 surviving scopes delta-accumulate (accApiMs += deltaApiMs).
+  // The ccsession scope (which zeroed the slot on regression) was
+  // REMOVED.
   describe("scope contract — accApiMs handler per scope", () => {
     it("scope=session: accApiMs accumulates deltaApiMs (not absolute)", () => {
       setPrevTick("sess-scope-api",
@@ -6594,9 +6364,8 @@ describe("renderTemplate — v0.8.x cwf-tickStatus-v2 (tickStatus acc-only + pre
 
 // ----- v0.9.x — formatTtlSeconds helper -----
 //
-// Fixed-second TTL suffix used by m_cacheTtlStatus / m_statTtlStatus.
-// Bypasses `timeFormat.minUnit` so the gauge always reports seconds
-// regardless of the rest of the statusline's time format.
+// Fixed-second TTL suffix for m_cacheTtlStatus / m_statTtlStatus;
+// bypasses timeFormat.minUnit so the gauge always reports seconds.
 describe("formatTtlSeconds", () => {
   it("whole seconds: 23_500ms → '23s' (floor — never overstate remaining TTL)", () => {
     assert.equal(formatTtlSeconds(23_500), "23s");
@@ -6626,17 +6395,13 @@ describe("formatTtlSeconds", () => {
 
 // ----- v0.8.16 — m_cacheTtlStatus + m_statTtlStatus -----
 //
-// Both modules display the TTL of their respective backing cache
-// (cache.ts response cache + status-store stat cache) as a single
-// character from the palette █▇▆▅▄▃▂▁, colored green (max TTL) →
-// red (min TTL) by a 5-band scale. Missing entry / no-ttlMs → gray
-// ▆ placeholder wrapped in STALE_COLOR.
+// Both render the TTL of their backing cache as a palette char
+// █▇▆▅▄▃▂▁ colored green→red by a 5-band scale; missing/no-ttlMs →
+// gray ▆ placeholder (STALE_COLOR).
 
 describe("render — m_cacheTtlStatus (v0.9.x +fixed-second suffix, +active-provider scoping)", () => {
-  // v0.9.x — m_cacheTtlStatus reads the ACTIVE provider's cache row
-  // (keyed by ctx.currentProvider). Every test in this block scopes
-  // ctx.currentProvider to "minimax" to mirror what index.ts does
-  // for the matched provider.
+  // v0.9.x — reads the ACTIVE provider's cache row (ctx.currentProvider);
+  // every test scopes it to "minimax" as index.ts does.
   const ctxWithProvider = () => ({
     ...ctxFor(fakeSnapshot()),
     currentProvider: "minimax" as const,
@@ -6837,17 +6602,10 @@ describe("render — m_statTtlStatus (v0.9.x +fixed-second suffix)", () => {
 
 // ----- v0.9.8+ m_sumTtlStatus ----------------------------------------
 //
-// Sibling of m_statTtlStatus (which shows the freshest of ALL
-// stat-cache keys); m_sumTtlStatus shows the TTL of the EXACT key
-// resolved by parseWindowScope (model + window + align + term).
-// Lets the user inspect freshness for a SPECIFIC m_sum* filter
-// rather than the newest write to the cache.
-//
-// Test pattern: build a ctx with intervals.short.windowId="5h";
-// seed the corresponding stat:<model>:5h:<align> key; render the
-// module. Default ctx uses modelId="MiniMax-M3" (fakeSnapshot L89)
-// and windowKey resolves to "5h" (term short-circuit) so the
-// key is "stat:MiniMax-M3:5h:true".
+// Sibling of m_statTtlStatus: shows the TTL of the EXACT key resolved
+// by parseWindowScope (model+window+align+term), not the freshest of
+// all. Test pattern: seed stat:<model>:5h:<align> and render (default
+// ctx → key "stat:MiniMax-M3:5h:true").
 describe("render — m_sumTtlStatus (v0.9.8+ per-filter TTL gauge)", () => {
   // Reusable ctx: same shape as the m_sumEstQuota tests.
   const sumCtx = () => ({
@@ -7011,14 +6769,12 @@ describe("render — m_sumTtlStatus (v0.9.8+ per-filter TTL gauge)", () => {
 
 // ----- v0.8.24+ startAt / lastAt time anchors -------------------------------
 //
-// 3 new modules (m_accStartTime / m_sumStartTime / m_sumEndTime)
-// + 2 new label axes (labelStartTime / labelEndTime) +
-// 1 new helper (formatAbsTime). The acc module reads the ccsession
-// slot's startAt (default scope) and renders HH:MM:SS. The two
-// sum modules aggregate min/max over JSONL rows.
+// m_accStartTime (slot startAt → HH:MM:SS) + m_sumStartTime /
+// m_sumEndTime (min/max over JSONL rows) + labelStartTime /
+// labelEndTime axes + formatAbsTime helper.
 describe("renderTemplate — v0.8.24+ m_accStartTime / m_sumStartTime / m_sumEndTime", () => {
   // Reuse the same tmp-dir convention as the m_sum* tests. The
-  // setAvg helper writes through tick-state, so the slot's
+  // setAvg helper writes through the status-store, so the slot's
   // startAt is populated by the first valid write.
   beforeEach(() => {
     setCachePathResolver(() => join(_tmpDir, "cache.json"));
@@ -7529,17 +7285,13 @@ describe("renderTemplate — v0.8.24+ m_accStartTime / m_sumStartTime / m_sumEnd
   });
 });
 
-// v0.8.40+ → v0.9.x → vX.X.X — m_tokenCost / m_accTokenCost /
-// m_sumTokenCost family. vX.X.X+ cost is computed at processTick
-// time (frozen in JSONL) and displayed with currencySymbol for
-// every currency including USD.
+// v0.8.40+ → vX.X.X — m_tokenCost / m_accTokenCost / m_sumTokenCost.
+// Cost is computed at processTick time (frozen in JSONL) and displayed
+// with currencySymbol for every currency including USD.
 describe("renderTemplate — m_tokenCost family (vX.X.X per-model prices)", () => {
   beforeEach(() => {
-    // v0.9.x — seed tokenPrices dict keyed by the active model's
-    // id. The default fakeSnapshot sets modelId="MiniMax-M3" so
-    // the per-model lookup hits. Per-million-token convention:
-    // in/1e6, out/1e6, cachedIn/1e6. The top-level beforeEach
-    // already called beginTickForTest and reset prev tick state.
+    // v0.9.x — seed tokenPrices keyed by the active model id
+    // (fakeSnapshot defaults modelId="MiniMax-M3"); per-million-token.
     const cfg = configStore.get();
     cfg.tokenPricesOverride = {
       "MiniMax-M3": { in: 10_000, out: 20_000, cachedIn: 5_000, currency: "USD" },
@@ -7804,12 +7556,10 @@ describe("renderTemplate — m_tokenCost family (vX.X.X per-model prices)", () =
 
   // ------------------------------------------------------------------
   // m_sumEstQuota (periodic quota estimate)
-  // est = sum(in*price + out*price + cached*price) / (alignedUsedPercent / 100)
-  // Renders fixed 2dp with per-model currency prefix.
-  // Requires |window|<declared id>|align|true so parseWindowScope
-  // returns alignActive=true and getStatAggregate stamps
-  // alignedUsedPercent on the aggregate. Three short-circuits:
-  //   rows===0, alignedUsedPercent==null, alignedUsedPercent===0.
+  // est = sum(cost) / (alignedUsedPercent / 100), fixed 2dp.
+  // Requires |window|<declared>|align|true so the aggregate carries
+  // alignedUsedPercent. Short-circuits: rows===0, alignedUsedPercent
+  // ==null, alignedUsedPercent===0.
   // ------------------------------------------------------------------
   it("m_sumEstQuota with no samples → placeholder", () => {
     __resetStatCacheForTest();
@@ -8036,11 +7786,8 @@ describe("renderTemplate — m_tokenCost family (vX.X.X per-model prices)", () =
 
   // ------------------------------------------------------------------
   // m_sum*|term| (plan-aligned scan via the term short-circuit)
-  // When |term|<key> is set AND model != "all" AND the resolved
-  // interval has a valid startAt+endAt, parseWindowScope returns
-  // a filter with alignActive=true and the matched interval. The
-  // downstream aggregate carries alignedUsedPercent so m_sumEstQuota
-  // becomes usable without the explicit |align|true opt-in.
+  // |term|<key> + model!=all + valid interval startAt/endAt →
+  // alignActive=true, so m_sumEstQuota works without |align|true.
   // ------------------------------------------------------------------
   it("m_sumTokenIn|term|short|model|active → aligned scan on intervals.short", () => {
     // The aggregate cache key for an aligned scan with active
@@ -8409,11 +8156,9 @@ describe("renderTemplate — m_tokenCost family (vX.X.X per-model prices)", () =
 });
 
 describe("renderTemplate — |valueOnly| inline arg — label strip on label-using m_* modules (vX.X.X+)", () => {
-  // vX.X.X+ — opt-in label-prefix strip. Accepts only literal
-  // "true" / "false" (bad value → badarg → drop). Default false
-  // so v0.8.x renders stay byte-identical. Applies to BOTH the
-  // live render path AND the placeholder path. Forwarded through
-  // m_template via the passthrough whitelist.
+  // vX.X.X+ — opt-in label-prefix strip (only literal true/false;
+  // badarg otherwise). Default false → v0.8.x byte-identical. Applies
+  // to live + placeholder paths; forwarded via m_template passthrough.
   beforeEach(() => {
     __resetForTest();
   });

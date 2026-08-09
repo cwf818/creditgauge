@@ -1,26 +1,15 @@
-// v0.8.21+ — fetcher for `m_quote|address|…|field|…` tokens.
-// Mirrors the data-driven shape of src/api.plan.ts (fetch + tolerant
-// JSON parse + diagnostics) and the cache-aside pattern in
-// src/index.ts:fetchProviderData (disk-shadowed TTL cache,
-// stale-on-error via peek).
+// Fetcher for `m_quote|address|…|field|…` tokens. Mirrors the cache-aside
+// pattern of fetchProviderData (disk-shadowed TTL cache, stale-on-error via
+// peek) and the tolerant-parse + diagnostics shape of the built-in plugins.
 //
 // Per-tick contract:
-//   1. `index.ts:main()` calls `preFetchQuotes(cwd, nowMs)` after
-//      stdin is parsed and the provider is resolved, BEFORE
-//      `buildProviderLine` runs.
-//   2. preFetchQuotes scans `cfg().statuslineTemplate` +
-//      `cfg().lineTemplates.*` for every `m_quote|address|…` token
-//      and dedupes by address. For the first one:
-//        - cache.getWithAge(key, ttlMs) → if within TTL, skip the
-//          fetch and reuse the cached body
-//        - otherwise, await fetch(url, { signal: AbortSignal.timeout(5s) })
-//          → on 2xx, cache.set(key, body, ttlMs)
-//        - on non-2xx / network error / timeout, leave the previous
-//          cache entry in place (stale-on-error). If no entry
-//          exists, append a `warning` row to diagnostics.jsonl.
-//   3. The returned body is passed to `buildProviderLine` →
-//      `renderProviderLine` → `ctx.quoteBodies`, and the sync
-//      renderer reads it via `ctx.quoteBodies.get(address)`.
+//   1. index.ts:main() calls preFetchQuotes(cwd, nowMs) after stdin parse and
+//      provider resolution, BEFORE buildProviderLine runs.
+//   2. preFetchQuotes scans statuslineTemplate + lineTemplates.* for the first
+//      m_quote token: within-TTL cache hit → reuse body; else fetch with a 5s
+//      timeout → on 2xx cache.set; on failure keep the old entry (stale-on-
+//      error) or append a `warning` diagnostics row if none exists.
+//   3. The body lands in ctx.quoteBodies for the sync renderer to read.
 
 import { execFileSync } from "node:child_process";
 import { openSync, readFileSync, unlinkSync } from "node:fs";
@@ -32,15 +21,9 @@ import { configStore } from "./config.ts";
 import * as diagnostics from "./diagnostics.ts";
 import { parseFreq } from "./quotes.ts";
 
-// v0.8.21+ — single-error classification: a curl `Command failed:`
-// thrown by Node's child_process carries an embedded `code` (string)
-// for errno-style failures. ENOENT means "binary not on PATH" —
-// that's our trigger to fall back to node:https/http. EPERM /
-// EACCES / ENOEXEC also qualify as "binary unusable"; we treat the
-// whole `ENO*` + `EPERM`/`EACCES` family the same way. Other
-// failures (timeouts, non-2xx exits, DNS) come from curl itself
-// and are surfaced unchanged so a postmortem can attribute them
-// to the network, not the spawn.
+// Classify a curl spawn error: ENOENT/ENOTDIR/EPERM/EACCES/ENOEXEC mean the
+// binary can't launch ("not on PATH") → fall back to node:http(s). Everything
+// else (timeouts, non-2xx, DNS) came from curl itself and is surfaced as-is.
 function isBinaryMissing(err: unknown): boolean {
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code !== "string") return false;
@@ -51,12 +34,8 @@ function isBinaryMissing(err: unknown): boolean {
   return false;
 }
 
-// Run an HTTP(S) GET via node:http(s) core — no extra deps. `insecure`
-// maps to `rejectUnauthorized: false` on the https path so the
-// same `insecureTls` opt-in stays honored across both paths. 5s
-// timeout; rejects on non-2xx (status ≥ 400) so a missing/wrong
-// endpoint still produces a clean diagnostics row, matching curl
-// `-f` semantics.
+// HTTP(S) GET via node core — no deps. `insecure` → rejectUnauthorized:false
+// on https. 5s timeout; non-2xx (≥400) rejects, matching curl `-f`.
 function fetchViaCore(
   url: URL,
   insecure: boolean,
@@ -103,13 +82,10 @@ function fetchViaCore(
   });
 }
 
-// v0.8.21+ — value stored in `src/cache.ts` under the
-// `<freqMs>:<address>` cache key. `binIndex` is the freq-bucket
-// index from `floor(nowMs / freqMs)` at fetch time; the next tick
-// only reuses this body when the current wall-clock bin still
-// equals `binIndex`. Cross-bin → re-fetch so the address source
-// has a fresh payload (matches the user's `|freq|1h`/`1m`/…
-// semantic: the address itself is treated as a rotating stream).
+// Cache value under `quote:<freqMs>:<address>`. `binIndex` is
+// floor(nowMs / freqMs) at fetch time; a later tick only reuses the body
+// when the current wall-clock bin matches (cross-bin → re-fetch, treating
+// the address as a rotating stream per the user's |freq|).
 type QuoteCacheEntry = {
   address: string;
   body: string;
@@ -122,27 +98,18 @@ function truncateForLog(s: string): string {
 }
 
 // Walk a token list for the first `m_quote|address|<addr>|field|<path>`
-// entry. We only ever cache one body — multiple address tokens in
-// the same template collapse to a single endpoint.
+// entry. Only one body is ever cached — multiple address tokens in the same
+// template collapse to a single endpoint.
 //
-// v0.8.21+ — `insecureTls` reflects the `|insecureTls|<b>` inline
-// arg on the token so callers can opt into curl `-k` per-token
-// without touching config.json. When the arg is absent, the value
-// is `undefined` and the global `cfg().quoteInsecureTls` gate is
-// authoritative; an explicit `|insecureTls|true|false` on the
-// token overrides it for that tick.
-//
-// v0.8.21+ — `freq` reads `|freq|<raw>` (passed through the SAME
-// `parseFreq` the local-quote renderer uses) so a single grammar
-// governs both paths. When absent / unparseable we fall back to
-// `1h` (matching the renderer's default for local QUOTES).
+// `insecureTls` comes from the token's `|insecureTls|<b>` inline arg;
+// absent → the global cfg().quoteInsecureTls gate is authoritative.
+// `freq` reads `|freq|<raw>` through the same parseFreq the local-quote
+// renderer uses (one grammar for both paths); absent/unparseable → `1h`.
 type QuoteTarget = {
   address: string;
   insecureTls?: boolean;
-  // `ms` is the resolved bucket duration; `raw` is the original
-  // inline arg string (used for diagnostics to surface what the
-  // user actually typed — defaults to "1h" when the token omits
-  // a `|freq|` arg).
+  // `ms` = resolved bucket duration; `raw` = original inline arg (for
+  // diagnostics; "1h" default when the token omits |freq|).
   freq: { ms: number; raw: string };
 };
 
@@ -214,32 +181,16 @@ async function fetchOne(
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     return { ok: false, reason: "unsupported scheme" };
   }
-  // Capture stderr to a temp file so curl's exit-status detail
-  // (e.g. "curl: (6) Could not resolve host") is preserved for
-  // diagnostics instead of swallowed by stdio:[…,"ignore"]. tmp
-  // filename: `<tmpdir>/creditgauge-curl-<pid>.log` — unique per
-  // process so concurrent ticks (rare but possible) don't clobber
-  // each other's stderr. Cleaned in catch / finally.
-  //
-  // v0.8.21 — use execFileSync("curl", argvArray) instead of
-  // execSync("curl … <shellQuote(addr)>"). Node spawns curl
-  // directly without an intermediate shell, so the URL arg is
-  // passed verbatim — no risk of cmd.exe treating the single
-  // quotes as a string wrapper (Windows would silently strip
-  // them) or MSYS2 path-mangling the URL. argv length is also
-  // uncapped by the shell's MAX_ARG_STRS limit on old Windows.
+  // Capture curl's stderr to `<tmpdir>/creditgauge-curl-<pid>.log` so
+  // exit-status detail survives for diagnostics (unique per process).
+  // execFileSync("curl", argvArray) spawns curl directly — no shell, so the
+  // URL passes verbatim (no cmd.exe quote-stripping / MSYS2 path-mangling)
+  // and argv length isn't capped by MAX_ARG_STRS.
   const stderrPath = `${tmpdir()}/creditgauge-curl-${process.pid}.log`;
-  // v0.8.21+ — opt-in TLS skip. Precedence (highest first):
-  //   1. inline `|insecureTls|true|false` on the m_quote token
-  //      (read by `preFetchQuotes` from the token's inline args)
-  //   2. `cfg().quoteInsecureTls === true` from config.json
-  // No env-var seed — the URL you skip TLS validation for is a
-  // config-file decision, not a shell-environment one. When the
-  // flag is set we append `-k` / `--insecure` to the curl argv so
-  // self-signed / expired / untrusted-CA HTTPS endpoints work
-  // without modifying the system CA bundle. The flag stays OFF by
-  // default — a misconfigured upstream still surfaces TLS errors
-  // loudly.
+  // Opt-in TLS skip. Precedence: inline |insecureTls| on the token, then
+  // cfg().quoteInsecureTls. No env-var seed. Set → append `-k` to curl argv
+  // (self-signed / expired / untrusted-CA endpoints work); OFF by default so
+  // TLS errors stay loud.
   const insecure = insecureTls ?? configStore.get().quoteInsecureTls === true;
   const curlArgs = ["-sSf", "--max-time", "5", "-S"];
   if (insecure) curlArgs.push("-k");
@@ -265,27 +216,15 @@ async function fetchOne(
     try { unlinkSync(stderrPath); } catch { /* benign */ }
     const base = e instanceof Error ? e.message : String(e);
 
-    // v0.8.21+ — fallback gate. When curl itself failed to LAUNCH
-    // (binary not on PATH — typically legacy Windows without
-    // System32\curl.exe, sandboxed envs that strip /usr/bin,
-    // or PATH-truncated service processes), retry via node:http(s)
-    // core so the user still gets their m_quote content instead
-    // of silently falling back to the local QUOTES pool.
-    //
-    // The guard is intentionally narrow: ANY error curl produced
-    // while actually running (timeout, HTTP>=400 exit 22, DNS exit
-    // 6, TLS exit 60) is treated as a meaningful network problem
-    // and surfaced unchanged — the user wants to see why their
-    // endpoint failed, not have it silently covered up by a
-    // second implementation that might mask the same root cause.
+    // Fallback gate: only retry via node:http(s) when curl failed to LAUNCH
+    // (binary not on PATH). Errors curl produced while running (timeout,
+    // HTTP>=400, DNS, TLS) are meaningful network problems and surface
+    // unchanged — a second implementation could mask the same root cause.
     if (isBinaryMissing(e)) {
       const fb = await fetchViaCore(url, insecure);
       if (fb.ok) return fb;
-      // Fallback also failed — surface BOTH reasons so the
-      // postmortem can tell the two apart (a 1st-stage ENOENT +
-      // a 2nd-stage "ENOTFOUND" means "curl missing AND host
-      // unreachable"; an ENOENT + "HTTP 500" means "curl missing
-      // AND endpoint is broken").
+      // Surface BOTH reasons so a postmortem can separate "curl missing"
+      // from the fallback's own failure.
       return {
         ok: false,
         reason: `curl missing (${String((e as { code?: unknown })?.code ?? "")}); node:http(s) fallback: ${fb.reason}`,
@@ -298,16 +237,11 @@ async function fetchOne(
   }
 }
 
-// Pre-fetch the first `m_quote|address|…` source referenced by the
-// active lineTemplate + lineTemplates.* fragments. Returns a
-// per-tick Map<address, body> for the renderer to read. Failures
-// are recorded to diagnostics.jsonl (and reflected as a missing
-// Map entry); successes are written to the disk-shadowed cache
-// so the next tick (or the next process) can skip the fetch.
-//
-// The Map is intentionally per-tick (rebuilt every invocation) —
-// the persistent cache lives in `src/cache.ts`. No module-level
-// state survives between ticks.
+// Pre-fetch the first m_quote|address|… source in the active template;
+// returns a per-tick Map<address, body> for the renderer. Failures record a
+// diagnostics row (and a missing Map entry); successes hit the disk-shadowed
+// cache so the next process skips the fetch. The Map is per-tick — no
+// module-level state survives.
 export async function preFetchQuotes(
   cwd: string | null,
   nowMs: number,
@@ -332,15 +266,10 @@ export async function preFetchQuotes(
   }
   if (target === null) return out;
 
-  // v0.8.21+ — bin-rotated cache-aside. The cache key includes
-  // `freqMs` so two tokens addressing the same endpoint with
-  // different freqs (e.g. `|freq|1h` and `|freq|1d`) keep
-  // independent rotation streams. The cache value includes the
-  // bin index at fetch time; we treat `binIndex === currentBin`
-  // as a HIT (skip fetch; reuse body). Cross-bin → MISS; the TTL
-  // is `4 × freqMs` so the cache row expires on its own even
-  // without any tick ever crossing bins, but the binIndex check
-  // is the actual gate.
+  // Bin-rotated cache-aside. Key includes freqMs (independent streams per
+  // freq); value carries the bin index at fetch time. binIndex === currentBin
+  // → HIT (reuse body); cross-bin → MISS. TTL is 4 × freqMs so the row
+  // expires on its own; the binIndex check is the actual gate.
   const currentBin = Math.floor(nowMs / target.freq.ms);
   const cacheKey = `quote:${target.freq.ms}:${target.address}`;
   const cached = cache.getWithAge<QuoteCacheEntry>(cacheKey, target.freq.ms * 4);
@@ -356,11 +285,9 @@ export async function preFetchQuotes(
 
   const result = await fetchOne(target.address, target.insecureTls);
   if (!result.ok) {
-    // Stale-on-error: keep the previous entry (peek ignores TTL so
-    // even a stale row is surfaced for this tick). When the entry
-    // also doesn't MATCH (address/freqMs differ), log a warning so
-    // a postmortem can see the network failure — but DON'T add to
-    // the returned Map; the renderer will fall back to local QUOTES.
+    // Stale-on-error: surface the previous entry (peek ignores TTL). If it
+    // doesn't match (address/freqMs differ), log a warning but don't add to
+    // the Map — the renderer falls back to local QUOTES.
     const stale = cache.peek<QuoteCacheEntry>(cacheKey);
     if (
       stale === null ||

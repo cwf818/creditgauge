@@ -1,21 +1,10 @@
-// v0.8.29 — tests for the cold-slot JSONL replay path.
-//
-// When state.json is missing (fresh install, after `:clean
-// --purge-runtime`, accidental deletion), the new `replayAccInit`
-// helper reconstructs the tickStatus:<dim> slot from the JSONL
-// history before setAvg mutates it. These tests exercise the full
-// Stage 0 → setAvg → commit → read path with realistic fixtures.
-//
-// Harness mirrors tick-state.test.ts: setStatusPathResolver routes
-// every cwd to a single tmp file (ignores real state layout), but
-// setStateRoot routes the JSONL sample IO to a sibling tmp dir
-// (matches the real `state/<projectHash>/<sessionId>.jsonl` shape).
-//
-// Why two tmp roots: statusPathResolver ignores cwd (every cwd
-// writes to the same status.json) so per-tick state isolation
-// doesn't need per-cwd directories. JSONL sample IO goes through
-// the real stateRoot()/projectHash() path so the
-// readSamples/readAllSamples/readProjectSamples walkers see the
+// v0.8.29 — cold-slot JSONL replay path. When state.json is
+// missing (fresh install, `:clean --purge-runtime`, deletion),
+// replayAccInit reconstructs the tickStatus:<dim> slot from the
+// JSONL history before setAvg mutates it. Harness mirrors
+// tick-state.test.ts: statusPathResolver routes every cwd to one
+// tmp status.json; setStateRoot routes JSONL IO to a sibling tmp
+// dir so readSamples/readAllSamples/readProjectSamples see the
 // real on-disk shape.
 
 import { describe, it, beforeEach, afterEach } from "node:test";

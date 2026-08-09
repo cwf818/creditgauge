@@ -17,8 +17,8 @@ The plugin is shipped as a **single-plugin marketplace**: the repo root IS the m
 ```bash
 npm install          # install dev deps (esbuild, typescript, tsx, @types/node)
 npm run typecheck    # tsc --noEmit
-npm test             # node:test via tsx (1099 tests across api/render/cache/composition)
-npm run build        # esbuild → dist/index.js (single self-contained ESM bundle, target=node18)
+npm test             # node --test via tsx (1182 tests across api/render/cache/composition, ~3.8s)
+npm run build        # esbuild → dist/index.js (single self-contained ESM bundle, target=node18) + copy-builtin-plugins.mjs → dist/plugins/{minimax,deepseek}/index.js
 npm run dev          # esbuild --watch
 ```
 
@@ -36,25 +36,25 @@ src/
   plugins/minimax/    # standalone Quota plugin source
   plugins/deepseek/   # standalone BALANCE plugin source
   # v0.8.36+ — m_windowMemUsage is the RAM-usage sibling of
-  # m_memUsage (which renders absolute bytes "Mem:X.XG/Y.YG" with
-  # a fixed cyan tint). m_windowMemUsage renders a bar+percent
-  # chunk (parallel of m_windowContext) — `▓▓▓▓▓░░░ 62%` — by
-  # wrapping getMemUsage()'s 0..100 ratio in a synthetic Window
-  # and routing through formatOneChunk / formatOneChunkColored.
-  # The value color is driven by colorFor(pct, "used") so
-  # thresholds.percentBands drives the hue. NO label prefix.
-  # Opt-in; not in any default lineTemplate.
-  render.ts           # v1.0 READ-ONLY against tickState.pending: pctBar + ANSI color thresholds + renderProviderLine (sole public entry; the legacy formatLine / formatBalanceLine shims were dropped in v0.9.x); NO setAvg/setPrevTick/setLastSpeed calls (those moved to data-processor.ts)
-  data-processor.ts   # v1.0 processTick + setPrevTick + setAvg + setLastSpeed/ApiMs/TokenHitRate + computeAndCacheTickDeltaPure + getDeltaForRender — owns ALL writes to tickState.pending
+  # m_memUsage (which renders absolute bytes "Mem:X.XG/Y.YG" as a
+  # two-tone string: the used chunk is band-colored via
+  # colorFor(pct, "used"), only the prefix + total keep the module's
+  # fixed cyan tint). m_windowMemUsage renders a bar+percent chunk
+  # (parallel of m_windowContext) — `▓▓▓▓▓░░░ 62%` — by wrapping
+  # getMemUsage()'s 0..100 ratio in a synthetic Window and routing
+  # through formatOneChunk / formatOneChunkColored. The value color
+  # is driven by colorFor(pct, "used") so thresholds.percentBands
+  # drives the hue. NO label prefix. Wired into the standard preset
+  # via the mem_info fragment (m_template|mem_info).
+  render.ts           # v1.0 READ-ONLY against status-store's per-tick pending map: pctBar + ANSI color thresholds + renderProviderLine (sole public entry; the legacy formatLine / formatBalanceLine shims were dropped in v0.9.x); NO setAvg/setPrevTick/setLastSpeed calls (those live in status-store.ts)
+  status-store.ts     # v1.0 per-tick state owner — beginTick / processTick / mark / setAvg / setPrevTick / setLastSpeed|ApiMs|TokenHitRate / computeAndCacheTickDeltaPure / getDeltaForRender / commit; owns ALL writes to the in-memory pending store + the single commit() flush to state/<projectHash>/state.json + the append-only JSONL samples
   cache.ts            # TTL + stale-on-error (Map<key, {at, value}>) — TTL passed in by index.ts from configStore
   config.ts           # config loader/store and provider facade
   config.providers.ts  # provider defaults, type validation, effective mappings
   config.template.ts   # line-template defaults and template-only types
   composition.ts      # reads CREDITGAUGE_UPSTREAM env, prepends (preserving ANSI/multi-line) and appends line
-  tick-state.ts       # v1.0 per-tick in-memory Store: beginTick / mark / commit; backing the data-processor's writes + the single commit() flush
-  __fixtures__/       # remains.real.json, balance.real.json, balance.multi.json, …
+  __fixtures__/       # quota.real.minimax.json, balance.real.json, balance.multi.json, stdin.real.json, …
   session-parse.ts    # parseTokenSnapshot — stdin JSON → TokenSnapshot (extracted from index.ts so unit tests don't drag index side effects)
-  token-store.ts      # append-only JSONL state file at state/<projectHash>/<sessionId>.jsonl for sum/avg modules (v0.4.x+; v0.8.0 adds readAllSamples cross-project scan)
   *.test.ts           # node:test unit tests
 .claude-plugin/
   plugin.json         # plugin manifest (name, version, commands, homepage)
@@ -64,15 +64,26 @@ commands/
   uninstall.md        # /creditgauge:uninstall slash command (Pattern B2)
   clean.md            # /creditgauge:clean slash command (Pattern B2)
   clean-cache.md      # /creditgauge:clean-cache slash command (Pattern B2)
+  clean-journal.md    # /creditgauge:clean-journal slash command (Pattern B2)
+  reset.md            # /creditgauge:reset slash command (Pattern B2)
   config.md           # /creditgauge:config slash command (Pattern B2)
 scripts/
   wrapper.sh          # bash wrapper: CREDITGAUGE_UPSTREAM_CMD → CREDITGAUGE_UPSTREAM → us
   install.sh          # settings.json patcher (install/restore/dry-run; uninstall is its own command in v0.9.x+)
   uninstall.sh        # self-contained uninstaller (used by :uninstall and dev:uninstall)
   clean.sh            # trim old .bak.<ts> files, keeping only the most recent per file
-  lib/edit-settings.mjs # ESM helper used by install.sh
+  clean-cache.sh      # remove stale plugin-cache version dirs, keeping only the newest
+  clean-journal.sh    # remove old state/<projectHash>/*.jsonl journal files by age or --all
+  config.sh           # read/modify runtime config (statuslineTemplate preset switch, upstream chain toggle)
+  reset.sh            # wipe cache.json + state.json + cache.stat.json for the current project only
+  migrate-state.sh    # legacy state/token-samples/<hash>/ → state/<hash>/ migration helper
+  copy-builtin-plugins.mjs # build step: src/plugins/<id>/index.js → dist/plugins/<id>/index.js
   dev-uninstall.sh    # DEV-ONLY thin shim → exec uninstall.sh
-  index.js            # gitignored, esbuild bundle, the actual entry point
+  lib/edit-settings.mjs # ESM helper used by install.sh
+  lib/edit-config.mjs   # ESM helper used by config.sh
+  lib/journal.mjs       # install-journal read/write helper used by uninstall.sh
+  lib/project-hash.sh   # shared projectHash(cwd) helper for shell scripts
+  test-*.sh           # isolated-tmpdir shell regression tests (install/uninstall/edit-settings/clean-cache/reset/config/rename-consistency)
 settings.example.json # template (NEVER commit a real settings.json)
 ```
 
@@ -86,7 +97,7 @@ Claude Code's `statusLine.command` spawns a child process that reads a session J
    - **Real shape** (verified against `https://www.minimaxi.com/v1/token_plan/remains` on 2026-06-24): `{ model_remains: [{ model_name, current_interval_remaining_percent, current_weekly_remaining_percent, start_time, end_time, weekly_start_time, weekly_end_time, … }, …], base_resp: { status_code } }`. We pick the entry with the **lowest interval remaining %** as the source of truth (the most-active model). `start_time`/`end_time` (and their weekly counterparts) populate `Window.resetStartAt` and `Window.resetDurationMs` so the renderer can pick a window-fill-aware reset arrow.
    - **Legacy/fallback shape**: `{ data: { five_hour: { remaining, limit }, weekly: { remaining, limit } } }` — for any provider that returns the simpler schema (no start fields → reset arrow falls back to `resetArrows[0]`).
 4. Cache: `src/cache.ts` holds a single 60-second TTL entry. On fetch failure it returns the stale value so the statusline doesn't blank.
-5. Render: `src/render.ts` emits a single compact line `Usage: ▓░░░░░░░ 9% 🕔4h47m·5h · ▓▓░░░░░░ 25% 🕔2d8h·7d`. Layout: a single mode label prefix (`Usage:` or `Remain:`), then per-window `<bar> <coloredN%><RESET> <glyph><countdown>·<windowLabel>` segments joined with ` · `. When the window has no reset time (DeepSeek, legacy), the segment renders as ` <windowLabel>` (no arrow/countdown). Sub-minute remaining renders as `<1m` by default (so a window about to reset is distinguishable from one with a full minute left) — set `stale.minUnit: "s"` to opt into second precision (`47s` instead). `m_countdown|valueOnly:true` renders just `<glyph><countdown>` (no `·` window label). Default mode is **`used`** (line begins with `Usage:`); set `display: "remaining"` in `config.json` to switch. 5-band colors (256-color SGR): bright green / dark green / yellow / orange / red, applied to the displayed value at 0/20/40/60/80 boundaries. The colored chunk is always on the right side of the bar, sized by the displayed value. The reset arrow glyph comes from `stale.resetArrows` (default 12 clock-face emoji `🕛,🕚,🕙,…,🕐`), indexed by `remainingMs / resetDurationMs` so the array reads left-to-right as "few remaining → many remaining" (i.e. ascending by remaining-time ratio). Two glyphs (`["⏳","⌛"]`) reproduce the v0.2.1 hourglass pair; one glyph is static. Providers without start data (DeepSeek, legacy) fall back to index 0.
+5. Render: `src/render.ts` emits a single compact line `Usage: ▓░░░░░░░ 9% 🕔4h47m·5h · ▓▓░░░░░░ 25% 🕔2d8h·7d`. Layout: a single mode label prefix (`Usage:` or `Remain:`), then per-window `<bar> <coloredN%><RESET> <glyph><countdown>·<windowLabel>` segments joined with ` · `. When the window has no reset time (DeepSeek, legacy), the segment renders as ` <windowLabel>` (no arrow/countdown). Sub-minute remaining renders with second precision (`47s`) by default (`timeFormat.minUnit: "s"`); set `timeFormat.minUnit: "m"` to collapse sub-minute to `<1m`. `m_countdown|valueOnly:true` renders just `<glyph><countdown>` (no `·` window label). Default mode is **`remaining`** (line begins with `Remain:`); set `display: "used"` in `config.json` to switch. 5-band colors (256-color SGR): bright green / dark green / yellow / orange / red, applied to the displayed value at `thresholds.percentBands` boundaries (default `[60, 70, 80, 90]`). The colored chunk is always on the right side of the bar, sized by the displayed value. The reset arrow glyph comes from `stale.resetArrows` (default 12 clock-face emoji `🕛,🕚,🕙,…,🕐`), indexed by `remainingMs / resetDurationMs` so the array reads left-to-right as "few remaining → many remaining" (i.e. ascending by remaining-time ratio). Two glyphs (`["⏳","⌛"]`) reproduce the v0.2.1 hourglass pair; one glyph is static. Providers without start data (DeepSeek, legacy) fall back to index 0.
 6. Compose: `src/composition.ts` emits upstream (whatever `CREDITGAUGE_UPSTREAM` contains — possibly multi-line, possibly ANSI-colored) on the leading lines and our line last. It strips only trailing whitespace, injects `\x1b[0m` if upstream ends with an unclosed SGR, and otherwise preserves upstream verbatim.
 7. **Token-usage modules (v0.8.0+):** In addition to the tokenplan 5h/7d window display, the plugin reads the session JSON from stdin (verified schema: `context_window.{total_input_tokens, total_output_tokens, current_usage.{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}}`, `cost.total_duration_ms`, `session_id`, `cwd`) and exposes fine-grained modules via `lineTemplate`. Modules are split into three tiers — **per-turn** (stdin-only, zero IO), **acc** (in-memory three-layer accumulator: session / project / model), and **sum/avg** (cross-project JSONL scan, TTL=300s). All modules are opt-in — the default `lineTemplate` does NOT include any token module, so existing v0.7.x configs render byte-identical after upgrade. The `m_tokenTotalIn` invariant (`total_input_tokens == current.input_tokens + current.cache_read_input_tokens`) is verified in `session-parse.ts` and a violation emits a `warning` to `state/<projectHash>/diagnostics.jsonl` (gated by `CREDITGAUGE_DIAGNOSTICS_ENABLE=1`, 60s dedupe).
 
@@ -96,7 +107,7 @@ Claude Code's `statusLine.command` spawns a child process that reads a session J
    - `m_tokenTotalIn` — totals.input (session cumulative)
    - `m_tokenInTotal` / `m_tokenTotalOut` — totals.input / totals.output (session cumulative; v0.8.0+ renamed from `m_tokenOutTotal` to sit in the `totalOut` family alongside `totalOut` on-disk / `m_accTokenOut` / `m_sumTokenOut`)
    - `m_tokenInSpeed` / `m_tokenOutSpeed` — session-avg tps (last-active-tick cache, color:scale). v0.8.x R7 — TTL gate disabled: idle ticks always surface the cached value STALE_COLORed, never expire. The `LAST_ACTIVE_TTL_MS` constant in `status-store.ts` is retained for future opt-in via config, but the read path no longer compares against it.
-   - `m_apiMs` — per-turn delta of `cost.totalApiDurationMs` formatted as dhms time string with hardcoded `api:` prefix (e.g. `api:1m`, `api:5s`, `api:<1m`); idle tick → cached value STALE_COLORed (R7; previously the `api:n/a` placeholder after 60s — R9 unified on n/a body to align with the rest of the n/a-family placeholders). Honors `timeFormat.minUnit` (`m` default → sub-minute collapses to `<1m`; `s` opt-in → second precision). Reuses `computeAndCacheTickDelta` memo so prev-tick baseline is shared with `m_tokenIn` / `m_tokenOut` / `m_tokenInSpeed`.
+   - `m_apiMs` — per-turn delta of `cost.totalApiDurationMs` formatted as dhms time string with the `labels.labelApiMs` prefix (default `api:`) (e.g. `api:1m`, `api:5s`, `api:<1m`); idle tick → cached value STALE_COLORed (R7; previously the `api:n/a` placeholder after 60s — R9 unified on n/a body to align with the rest of the n/a-family placeholders). Honors `timeFormat.minUnit` (`s` default → second precision; `m` opt-in → sub-minute collapses to `<1m`). Reuses `computeAndCacheTickDelta` memo so prev-tick baseline is shared with `m_tokenIn` / `m_tokenOut` / `m_tokenInSpeed`.
    - `m_contextSize` — totals.input (actual used)
    - `m_contextWindowSize` — context_window.size (capacity; typo preserved)
    - `m_contextUsedPercent` / `m_contextRemainingPercent` — contextWindow.usedPct / .remainingPct
@@ -125,25 +136,25 @@ Claude Code's `statusLine.command` spawns a child process that reads a session J
 
 #### Per-tick write invariant (v1.0)
 
-The per-tick pipeline is a two-phase split between **data-processor (writes)** and **render (reads)** — owned by `src/data-processor.ts` and `src/tick-state.ts`. The pipeline:
+The per-tick pipeline is a two-phase split between **status-store (writes)** and **render (reads)** — owned entirely by `src/status-store.ts`. The pipeline:
 
-1. **`beginTick(cwd, tokens)`** (index.ts:main, right after `diagnostics.setSessionCwd`) — loads `state/<projectHash>/status.json` into a per-tick `pending` map, validates the snapshot (see below), and exposes the pending map for the data-processor to mutate.
+1. **`beginTick(cwd, tokens)`** (index.ts:main, right after `diagnostics.setSessionCwd`) — loads `state/<projectHash>/state.json` into a per-tick `pending` map, validates the snapshot (see below), and exposes the pending map for the data-processor to mutate.
 2. **`processTick(cwd, tokens, provider)`** (index.ts:main, AFTER provider resolution + `applyProviderOverrides`) — ALREADY-RUNS data-processing pipeline. Runs after provider resolution so the cost computation in `normalizeTick` can use the full 5-layer token price cascade (provider overrides + config.tokenPrices.json). **Always fires**, independent of the user's `lineTemplate`. Even an empty template still has the data-processor run, so the next tick has a baseline. Five stages, gated on the validation flag:
-   - **Stage 1** — regression-reset: if `prev.totalApiMs > current.totalApiDurationMs` (claude-code process restarted), `tickState.mark(CCSESSION_KEY, emptyTickStatus())`.
+   - **Stage 1** — regression-reset: if `current.totalDurationMs < prev.totalDurationMs` (claude-code process restarted; v0.8.23+ signal with a 120_000 ms cold-start guard), `mark(CCSESSION_KEY, emptyTickStatus())`.
    - **Stage 2** — compute deltas via `computeAndCacheTickDeltaPure(tokens)`; stash on `_state.delta` for render reads (no on-disk side effect).
    - **Stage 3** — `setPrevTick`: writes PREV_TICK_KEY for next tick's baseline.
    - **Stage 4** — `setAvg` for the per-session slot (accIn / accOut / accApiMs / accApiCount / accTotalIn).
    - **Stage 4b** — `setAvg` for the cache track (`accCached` only, when stdin shipped `cache_read_input_tokens`).
    - **Stage 5** — `lastActive:*` marks: `tpsIn`, `tpsOut`, `apiMs`, `tokenHitRate` for the speed/cache/idle-render fallbacks.
-3. **`commit()`** (index.ts:main, between `appendSample` and the provider-dispatch branch) — flushes `pending` to `status.json` as ONE full-file rewrite. No-op when:
+3. **`commit()`** (index.ts:main, between `appendSample` and the provider-dispatch branch) — flushes `pending` to `state/<projectHash>/state.json` as ONE full-file rewrite. No-op when:
    - `dirty === false` (nothing was marked — pristine / idle tick);
    - `valid === false` (validation gate failed — see below);
    - `cwd === null` (no per-project dir to write to).
-4. **Render** (`buildProviderLine` → `renderTemplate`) — PURE READ against `tickState.getState().pending[key]`. NO `tickState.mark` / `setAvg` / `setPrevTick` / `setLastSpeed` / `setLastApiMs` / `setLastTokenHitRate` calls anywhere in `src/render.ts`. Reads go through `getDeltaForRender()` / `peekAcc` / `peekPrevTick` / `peekLastSpeed` / `peekLastApiMs` / `peekLastTokenHitRate`. mid-render mutations.
+4. **Render** (`buildProviderLine` → `renderTemplate`) — PURE READ against `statusStore.getState().pending[key]`. NO `mark` / `setAvg` / `setPrevTick` / `setLastSpeed` / `setLastApiMs` / `setLastTokenHitRate` calls anywhere in `src/render.ts`. Reads go through `getDeltaForRender()` / `peekAcc` / `peekPrevTick` / `peekLastSpeed` / `peekLastApiMs` / `peekLastTokenHitRate`. mid-render mutations.
 
-**Invariant**: **at most one full-file rewrite per tick** (zero on invalid / idle / pristine ticks). The previous v0.8.x code path fired 5–13 `writeFileSync` calls per active render (`accPrimer`, `accCachePrimer`, `setLastSpeed`, `setPrevTick`); v0.9.x collapsed that to one, and **v1.0 fully decoupled writes from reads** so render is read-only against the in-memory store. No `statusStore.writeTickStatus` bypass anywhere — the v0.9.x regression-reset "immediate write" exception is gone; in v1.0 the reset is a regular `tickState.mark` that flushes alongside every other write via the same single `commit()`.
+**Invariant**: **at most one full-file rewrite per tick** (zero on invalid / idle / pristine ticks). The previous v0.8.x code path fired 5–13 `writeFileSync` calls per active render (`accPrimer`, `accCachePrimer`, `setLastSpeed`, `setPrevTick`); v0.9.x collapsed that to one, and **v1.0 fully decoupled writes from reads** so render is read-only against the in-memory store. No `writeTickStatus` bypass anywhere — the v0.9.x regression-reset "immediate write" exception is gone; in v1.0 the reset is a regular `mark` that flushes alongside every other write via the same single `commit()`.
 
-**Validation gate** (per user contract 2026-07-04): `tokens.totals.tokenTotalIn > 0 AND tokens.totals.tokenTotalOut > 0 AND (tokens.cost.totalApiDurationMs - prevTickStatus.totalApiMs) > 0`. On the first tick (no prev baseline), the rule collapses to `totalApiDurationMs > 0`. Invalid ticks commit nothing — but **`processTick` Stages 3-5 are skipped on invalid ticks**, only Stage 1 (regression-reset) always fires. Writes staged in `pending` (regression reset mark) survive in-memory until the next valid tick when `commit()` flushes them. The renderer can still read pending (which is a clone of the loaded on-disk state) so render never crashes on invalid ticks — it just falls back to placeholder / "0" / last-cached values via the existing `getDeltaForRender` sentinel + `peekLast*` fallbacks.
+**Validation gate** (per user contract 2026-07-04): `tokens.totals.tokenTotalOut > 0 AND apiMs > 0` (totalIn dropped; on the first tick with no prev baseline, `apiMs` is back-derived from tokenOut via the legacy v0.4.x formula `tokenOut × 1000 / 50`). Invalid ticks commit nothing — but **`processTick` Stages 3-5 are skipped on invalid ticks**, only Stage 1 (regression-reset) always fires. Writes staged in `pending` (regression reset mark) survive in-memory until the next valid tick when `commit()` flushes them. The renderer can still read pending (which is a clone of the loaded on-disk state) so render never crashes on invalid ticks — it just falls back to placeholder / "0" / last-cached values via the existing `getDeltaForRender` sentinel + `peekLast*` fallbacks.
 
 **Module-keyed field naming** (v0.9.x+): `TokenSnapshot` fields are named for their primary reader module — `tokens.current.tokenIn` (read by `m_tokenIn`), `tokens.totals.tokenTotalIn` (read by `m_tokenTotalIn`), `tokens.contextWindow.contextWindowSize` (read by `m_contextWindowSize`), etc. The grouping (`current` for per-turn deltas, `totals` for session-cumulative, `contextWindow` for capacity/percentages, `cost` for stdin `cost.*` fields) is preserved so the `total_input_tokens == input_tokens + cache_read_input_tokens` invariant check in `src/session-parse.ts` still rides on the type-level signal.
 
@@ -152,22 +163,26 @@ The per-tick pipeline is a two-phase split between **data-processor (writes)** a
 The runtime state directory is partitioned by project so multiple Claude Code sessions in different project directories never contend over the same files. Assumption: one project directory → one Claude Code session.
 
 ```
-~/.claude/plugins/creditgauge/state/
-  upstream-cmd.sh              # top-level — install/uninstall dependency, NOT touched per tick
-  upstream-cmd.txt             # top-level — install/uninstall dependency, NOT touched per tick
-  config.json                  # top-level — install/uninstall dependency, NOT touched per tick
+~/.claude/plugins/creditgauge/
+  config.json                  # top-level — user config, sibling of state/ (NOT inside it)
   config.tokenPrices.json      # top-level — per-model token pricing, seeded by install.sh, 5-layer cascade
-  <projectHash>/               # e.g. d--workspace-creditgauge-cc (the actual cwd on this machine)
-    cache.json                 # disk-shadowed TTL cache (per-project, key-prefixed by <projectHash>:)
-    diagnostics.jsonl          # append-only warning/error log (per-project)
-    <sessionId>.jsonl          # token samples (was state/token-samples/<hash>/<sid>.jsonl)
+  state/
+    upstream-cmd.sh            # top-level — install/uninstall dependency, NOT touched per tick
+    upstream-cmd.txt           # top-level — install/uninstall dependency, NOT touched per tick
+    cache.json                 # single top-level disk-shadowed TTL cache, shared across projects via <projectHash>: key prefix
+    cache.stat.json            # cross-project sum/avg stat cache (TTL=300s)
+    diagnostics.jsonl          # legacy top-level fallback log (cwd=null writes)
+    <projectHash>/             # e.g. d--workspace-creditgauge-cc (the actual cwd on this machine)
+      state.json               # per-project accumulated tick/acc/prev-tick state (the v1.0 single-commit target)
+      diagnostics.jsonl        # append-only warning/error log (per-project)
+      <sessionId>.jsonl        # token samples (was state/token-samples/<hash>/<sid>.jsonl)
 ```
 
 - All per-tick IO paths derive their location from `projectHash(cwd)` (lowercased, `\/: ` → `-`, control chars stripped, capped at 80 chars; exported from `src/status-store.ts`).
-- `src/render.ts` prefixes every cache key with `<projectHash>:` so `cache.json` files never share keys across projects. The cache module API (`get`/`set`/etc.) is unchanged — the prefix is a render-side concern only.
+- `state/cache.json` is a single top-level file shared across all projects; `src/render.ts` prefixes every cache key with `<projectHash>:` so entries never collide. The cache module API (`get`/`set`/etc.) is unchanged — the prefix is a render-side concern only.
 - `src/diagnostics.ts` gained an optional `cwd` parameter on `append` / `readLatest` / `diagnosticsPath`. When omitted or null (e.g. plugin-level config-parse warnings), writes fall back to the legacy top-level `state/diagnostics.jsonl`.
 - Legacy migration for users upgrading from v0.4.0–v0.4.<n-1>: legacy top-level `cache.json` / `diagnostics.jsonl` are NOT auto-migrated (no project info recoverable). Legacy `state/token-samples/<projectHash>/<sessionId>.jsonl` files can be preserved with `bash scripts/migrate-state.sh` (or `--dry-run` to preview). Idempotent — `mv -n` is a no-op when the destination already exists.
-- `scripts/clean.sh --purge-runtime` walks every `state/*/` subdir and removes its `cache.json`, `diagnostics.jsonl`, and `<*.jsonl>` files. It still cleans the legacy top-level `cache.json` / `diagnostics.jsonl` and the `state/token-samples/` tree for users who skipped migration. Top-level `upstream-cmd.{sh,txt}` and `config.json` are NEVER purged. (v0.7.0: also wipes the legacy `plugins/tokenplan-usage-hud/state/` tree left behind by users upgrading from the pre-rename install — both via the projectHash walk and a final whole-subtree wipe.)
+- `scripts/clean.sh --purge-runtime` walks every `state/<projectHash>/` subdir and removes its `cache.json`, `diagnostics.jsonl`, and `<sessionId>.jsonl` files, plus the top-level `state/cache.stat.json`. Top-level `upstream-cmd.{sh,txt}` are NEVER purged. For the targeted "wipe THIS project's cache.json + state.json + cache.stat.json" case, use `scripts/reset.sh` (`/creditgauge:reset`), which preserves diagnostics + token-sample history. (v0.7.0: also wipes the legacy `plugins/tokenplan-usage-hud/state/` tree left behind by users upgrading from the pre-rename install — both via the projectHash walk and a final whole-subtree wipe.)
 
 ### How `:install` / `:uninstall` / `:clean` run
 
@@ -213,16 +228,16 @@ After install, run `/creditgauge:install` to wire the wrapper into `settings.jso
 
 ## Testing notes
 
-- `npm test` runs all 1099 tests in ~250ms. No network calls in tests — they exercise pure functions and fixtures.
-- The captured real response lives at `src/__fixtures__/remains.real.json` and is the source of truth for the parser's shape assumptions. If MiniMax changes the API, capture a fresh response and update both the fixture and `src/api.plan.ts`.
+- `npm test` runs all 1182 tests in ~3.8s. No network calls in tests — they exercise pure functions and fixtures.
+- The captured real response lives at `src/__fixtures__/quota.real.minimax.json` and is the source of truth for the MiniMax parser's shape assumptions. If MiniMax changes the API, capture a fresh response and update both the fixture and the MiniMax plugin parser (`src/plugins/minimax/index.js`).
 - Live smoke test (no Claude Code needed): `echo '{}' | ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic ANTHROPIC_AUTH_TOKEN=<token> node dist/index.js`.
 - Live install smoke test: `bash scripts/install.sh --dry-run` then `bash scripts/install.sh` then `bash scripts/uninstall.sh` (or `bash scripts/uninstall.sh --dry-run` first).
 - Live uninstall smoke test: `bash scripts/uninstall.sh --dry-run` then `bash scripts/uninstall.sh`. Re-run to confirm idempotency.
-- Shell-script regression tests: `bash scripts/test-install.sh`, `bash scripts/test-uninstall.sh`, `bash scripts/test-edit-settings.sh`, `bash scripts/test-clean-cache.sh` — all use isolated tmpdirs, no real settings.json touched.
+- Shell-script regression tests: `bash scripts/test-install.sh`, `bash scripts/test-uninstall.sh`, `bash scripts/test-edit-settings.sh`, `bash scripts/test-clean-cache.sh`, `bash scripts/test-config.sh`, `bash scripts/test-reset.sh`, `bash scripts/test-rename-consistency.sh` — all use isolated tmpdirs, no real settings.json touched.
 
 ## Build & release
 
-- `npm run build` produces `dist/index.js` (~9kb). This is the only artifact the runtime needs.
+- `npm run build` produces `dist/index.js` (~345 KB) plus `dist/plugins/{minimax,deepseek}/index.js` (copied from `src/plugins/*/index.js` by `scripts/copy-builtin-plugins.mjs`). These are the artifacts the runtime needs.
 - Tag releases as `vX.Y.Z`; marketplace install picks up the highest version directory under `~/.claude/plugins/cache/<plugin>/<plugin>/`.
 - Push to GitHub via `gh repo create cwf818/creditgauge --public --source=. --remote=origin --push` then `git push --tags`. (This requires `gh` CLI auth — see README "Push to GitHub" if `gh` is not available.)
 
@@ -262,6 +277,7 @@ Then re-install:
 npm run build
 HIGHEST=$(ls -d ~/.claude/plugins/cache/creditgauge/creditgauge/*/ | sort -V | tail -1)
 cp dist/index.js "${HIGHEST}dist/index.js"
+cp -r dist/plugins "${HIGHEST}dist/plugins"   # built-in plugin copies
 # Smoke check: pick a unique identifier from your change and grep
 # for it in the cache bundle. Count must be > 0.
 grep -c "<unique_identifier_from_your_change>" "${HIGHEST}dist/index.js"
@@ -271,6 +287,6 @@ The trailing `grep -c` is the smoke check: it must be `> 0` to confirm the cache
 
 When the change adds new files under `src/` (not just edits existing modules), or touches `scripts/wrapper.sh` / `scripts/install.sh` / `.claude-plugin/*.json`, the minimal overwrite is NOT enough — fall back to the **full mirror** flow above (bump version, mirror sources, update installed_plugins.json, re-run install).
 
-Why this is "every task, not just when asked": the deploy is fast (~50ms cp of a 160kb bundle) and idempotent. Skipping it produces confusing bugs where tests pass but the statusline reads stale. See `memory/local-deploy-procedure.md` for the full procedure and history.
+Why this is "every task, not just when asked": the deploy is fast (~50ms cp of a ~345 KB bundle) and idempotent. Skipping it produces confusing bugs where tests pass but the statusline reads stale. See `memory/local-deploy-procedure.md` for the full procedure and history.
 
 If the loader still says "EPERM" after `dev:uninstall`, the most common cause is a Claude Code process holding a file lock on the marketplace dir. **Quit all running Claude Code sessions** (not just this one) and re-run `npm run dev:uninstall`.

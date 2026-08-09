@@ -113,7 +113,7 @@ run_config() {
 echo "-- status: no config.json, no upstream --"
 build_fixture
 out="$(run_config)"
-assert_match_str "[status-default] default preset caption" "standard-slim   (default preset — no config.json)" "$out"
+assert_match_str "[status-default] default preset caption" "(default — no config.json; quota/balance dispatch)" "$out"
 assert_match_str "[status-default] upstream none" "upstream:           none (no upstream was preserved)" "$out"
 
 echo "-- status: preset string --"
@@ -138,7 +138,7 @@ write_config '{
   "statuslineTemplate": "nope"
 }'
 out="$(run_config)"
-assert_match_str "[status-unknown] lists valid presets" "unknown preset; valid: simple compact standard abundant standard-slim" "$out"
+assert_match_str "[status-unknown] lists valid presets" "unknown preset; valid: simple compact standard" "$out"
 
 echo "-- status: upstream enabled / disabled --"
 build_fixture
@@ -166,10 +166,10 @@ assert_eq "[set-preset] preserved cacheTtlMs" "60000" "$(jget_field "$CONFIG_FIL
 
 echo "-- set-preset: creates config.json when absent --"
 build_fixture
-out="$(run_config --preset-standard-slim)"
-assert_match_str "[set-preset-create] ok line" "set statuslineTemplate: standard-slim" "$out"
+out="$(run_config --preset-compact)"
+assert_match_str "[set-preset-create] ok line" "set statuslineTemplate: compact" "$out"
 assert_file_exists "[set-preset-create] config.json created" "$CONFIG_FILE"
-assert_eq "[set-preset-create] value" "standard-slim" "$(jget_field "$CONFIG_FILE" statuslineTemplate)"
+assert_eq "[set-preset-create] value" "compact" "$(jget_field "$CONFIG_FILE" statuslineTemplate)"
 
 echo "-- set-preset: replaces custom array --"
 build_fixture
@@ -177,16 +177,16 @@ write_config '{
   "statuslineTemplate": ["m_version", "s_space", "m_tokenIn"],
   "display": "used"
 }'
-out="$(run_config --preset-abundant)"
+out="$(run_config --preset-simple)"
 assert_match_str "[set-preset-replace] replaced hint" "replaced custom template with 3 tokens" "$out"
-assert_eq "[set-preset-replace] value" "abundant" "$(jget_field "$CONFIG_FILE" statuslineTemplate)"
+assert_eq "[set-preset-replace] value" "simple" "$(jget_field "$CONFIG_FILE" statuslineTemplate)"
 assert_eq "[set-preset-replace] preserved display" "used" "$(jget_field "$CONFIG_FILE" display)"
 
 echo "-- set-preset: unknown preset errors --"
 build_fixture
 out="$(run_config --preset-nope 2>&1)"; rc=$?
 assert_eq "[set-preset-unknown] exit code" "1" "$rc"
-assert_match_str "[set-preset-unknown] lists valid presets" "valid presets: simple compact standard abundant standard-slim" "$out"
+assert_match_str "[set-preset-unknown] lists valid presets" "valid presets: simple compact standard" "$out"
 
 echo "-- set-preset: bad JSON leaves file untouched --"
 build_fixture

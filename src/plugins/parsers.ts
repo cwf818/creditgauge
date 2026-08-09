@@ -1,17 +1,8 @@
-// Pure-validator helpers used by built-in dynamic plugins + the
-// host's post-fetch normalisation step.
-//
-// Plugins return whatever shape their `fillQuota` / `fillBalance`
-// decided to project from the raw response. The host runs the
-// canonical normalisers (`ensureQuota` / `ensureBalance` /
-// `ensureInterval`) here so the plugin author never has to know
-// about the canonical Quota / Balance types — only their fill
-// contract + the ctx argument (signal).
-//
-// v0.9.x — the path-expression projection layer
-// (`parseQuota` / `parseBalance` / `path-expr.ts`) was REMOVED.
-// Plugin authors do their own parsing and ship canonical objects
-// directly; there's no host-side path-walker left to configure.
+// Pure normalizers used by built-in dynamic plugins + the host's post-fetch
+// step. Plugins return whatever shape they projected; the host runs
+// ensureQuota / ensureBalance / ensureInterval here so plugin authors never
+// need the canonical Quota / Balance types. No host-side path-walker exists —
+// plugins do their own parsing.
 
 import type { Balance, BalanceEntry, Interval, Quota } from "./data.js";
 
@@ -124,16 +115,10 @@ export function ensureInterval(
   };
 }
 
-// v0.9.5 — accept the open-ended dict shape `{ short, mid, long,
-// <any> }` directly from the plugin. The legacy v0.9.4 wrapper
-// `{ intervals: { … } }` and the v0.9.x fixed-slot fields
-// `{ shortInterval, midInterval, longInterval }` are both gone
-// (hard cut per the v0.9.x new-feature convention; plugin authors
-// upgraded to v0.9.4 already return the wrapper, so the upgrade is
-// a single-line removal). The `all` reserved key is rejected as a
-// dict key (reserved by parseWindowScope's no-time-anchor sentinel
-// — accepting it would silently shadow the m_sum*|window|all
-// short-circuit).
+// Accept the open dict shape `{ short, mid, long, <any> }` directly from the
+// plugin (the old `{ intervals: { … } }` wrapper is gone). `all` is rejected
+// as a dict key — it's reserved by parseWindowScope's no-time-anchor sentinel
+// and accepting it would shadow the m_sum*|window|all short-circuit.
 export function ensureQuota(value: unknown): Quota | null {
   if (!isRecord(value)) return null;
   const out: Record<string, Interval | null> = {};
@@ -154,17 +139,11 @@ export function ensureQuota(value: unknown): Quota | null {
   return { intervals: out };
 }
 
-// Apply the is_available fallback contract (missing → optimistic
-// true), derive `minValue` over the surviving entries, and guard the
-// final shape. The plugin layer is responsible for projecting
-// `raw → Partial<Balance>`; this function is the host's normaliser
-// and is the ONLY place the canonical `Balance` shape is produced.
-//
-// Returns null when `value` is not a record.
-//
-// v2026.07.17+ — `minValue` is no longer consulted by the renderer
-// for color (per-entry 5-band drives hue). The field is still
-// computed here for downstream plugins / alerting / introspection.
+// Host normalizer: applies the is_available fallback (missing → optimistic
+// true), derives minValue, and is the ONLY place the canonical Balance shape
+// is produced (the plugin projects raw → Partial<Balance>). Returns null when
+// `value` is not a record. minValue isn't used for color anymore (per-entry
+// 5-band drives hue); kept for downstream plugins / introspection.
 export function ensureBalance(value: unknown): Balance | null {
   if (!value || typeof value !== "object") return null;
   const partial = value as { isAvailable?: boolean; entries?: BalanceEntry[] };

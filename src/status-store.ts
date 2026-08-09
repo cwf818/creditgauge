@@ -1,24 +1,14 @@
-// Runtime state boundary for stdin-derived data.
-//
-// This module owns three related state files under
-// `${CLAUDE_CONFIG_DIR}/plugins/creditgauge/state/`:
+// Runtime state boundary for stdin-derived data. Owns three state files
+// under `${CLAUDE_CONFIG_DIR}/plugins/creditgauge/state/`:
 //
 //   - `cache.stat.json`                    — cross-project sum/avg stat cache
 //   - `<projectHash>/state.json`           — per-project accumulated state
 //   - `<projectHash>/<sessionId>.jsonl`    — append-only normalized samples
 //
-// The write path is intentionally centralized here:
-//
-//   stdin -> parseTokenSnapshot -> processAndSaveTick -> render
-//
-// `processAndSaveTick()` loads the project state, normalizes stdin,
-// validates it, updates accumulators / prevTickStatus / lastActive,
-// flushes `state.json` once, and appends one JSONL row when valid.
-//
-// Compatibility:
-//   - `src/token-store.ts`, `src/tick-state.ts`, and `src/data-processor.ts`
-//     are kept as thin compatibility shims that re-export the APIs now
-//     implemented here.
+// Single home of the per-tick pipeline (beginTick / processTick / mark /
+// setAvg / commit): loads state, normalizes + validates stdin, updates
+// accumulators / prevTickStatus / lastActive, flushes state.json once,
+// and appends one JSONL row when valid.
 
 import {
   appendFileSync,
@@ -51,50 +41,31 @@ export type TickStatusValue = {
   accTokenTotalIn: number;
   accApiMs: number;
   accApiCalls: number;
-  // v0.8.10-alpha.3 — derived ratio, computed at processTick write
-  // time and persisted alongside the raw accumulators. Render reads
-  // it straight (no recompute). Formula:
-  //   accTokenHitRate = accTokenCachedIn / accTokenTotalIn * 100
-  // Zero denominator (no totalIn accumulated this slot) → 0.
+  // Derived ratio persisted at write time so render reads it straight:
+  // accTokenCachedIn / accTokenTotalIn * 100 (zero denominator → 0).
   accTokenHitRate: number;
-  // v0.8.24+ — wall-clock instant this slot received its first
-  // valid write (Unix ms). Stamped by setAvg / bumpDeltaScope
-  // on first write (when readTickStatus returns null OR
-  // startAt is null). `null` = "no writes yet" → m_accStartTime
-  // renders the "start:n/a" placeholder.
+  // Unix-ms instant of this slot's first valid write (stamped by
+  // setAvg / bumpDeltaScope). null = "no writes yet" → start:n/a.
   startAt?: number | null;
-  // vX.X.X+ — accumulated per-tick token costs grouped by
-  // currency. Each element is { currency, value } where value
-  // is a decimal string (e.g. "0.0123") to avoid floating-point
-  // drift across many ticks. Empty array = no costs accumulated
-  // (default for legacy slots / no tokenPrices config).
+  // Accumulated per-tick token costs by currency; value is a decimal
+  // string to avoid floating-point drift. Empty = none accumulated.
   costs: Array<{ currency: string; value: string }>;
 };
-// the ONLY field the next tick subtracts against is `totalApiMs`
-// (apiMs = current.totalApiMs - prev.totalApiMs). All other per-turn
-// fields live on `TokenSnapshot` as snapshot fields and are read
-// straight, not derived. Identity (sessionId/cwd/model) is kept for
-// stale-baseline detection.
-//
-// v0.8.23+ — `totalDurationMs` joins the cursor alongside
-// `totalApiMs`. detectRegression now reads `totalDurationMs`
-// (stdin `cost.total_duration_ms` — the wall-clock cost of the
-// running claude-code process) as the regression signal, since
-// that field increments monotonically per tick on every observed
-// stdin producer. `totalApiMs` stays in the cursor because it's
-// still the source for the per-tick api-ms delta. The two are
-// read independently — totalDurationMs never feeds apiMs.
+// The only field the next tick subtracts against is `totalApiMs`
+// (apiMs = current - prev); all other per-turn fields are read
+// straight from TokenSnapshot. `totalDurationMs` joins the cursor
+// as detectRegression's signal (stdin cost.total_duration_ms — the cc
+// process wall-clock, monotonic per tick). The two are read
+// independently — totalDurationMs never feeds apiMs.
 export type PrevTickStatusValue = {
   totalApiMs: number;
   totalDurationMs: number;
   sessionId: string | null;
   cwd: string | null;
   model: string | null;
-  // v0.8.15-alpha — carry-over for stdin `context_window.used_percentage`.
-  // When the next tick arrives with contextUsedPercent===0 (an
-  // observed error from the stdin producer), beginTick falls back
-  // to this prev value rather than surfacing a misleading "0%".
-  // Null when no prior tick has ever observed a non-null value.
+  // Carry-over for stdin context_window.used_percentage: when a tick
+  // reports 0 (an observed error), beginTick falls back to this prev
+  // value. Null when no prior non-null value was ever observed.
   contextUsedPercent: number | null;
 };
 
@@ -112,17 +83,15 @@ export type Entry =
 
 export type Store = Record<string, Entry>;
 
-// v0.8.10-alpha.2 — the only derived delta in the whole pipeline.
-// Speed modules (m_tokenInSpeed, m_tokenOutSpeed, m_apiMs) use this.
-// The rest of the render path reads `TickSnapshot.{in, out, ...}` directly.
+// The only derived delta in the pipeline; speed/apiMs modules use it.
+// Everything else reads TickSnapshot.{in, out, ...} directly.
 export type ApiMsDelta = {
   apiMs: number;        // -1 = regression sentinel, 0 = idle, >0 = real delta
   totalApiMs: number;   // current tick stdin value
 };
 
-// v0.8.10-alpha.2 — TickSnapshot replaces TickDeltaResult. It's a flat
-// projection of the current tick's stdin snapshot + the single derived
-// `apiMs`. No "writeBack" payload — next tick re-reads from disk.
+// Flat projection of the current tick's stdin snapshot + the derived
+// apiMs. No write-back payload — next tick re-reads from disk.
 export type TickSnapshot = {
   hasMeasurement: boolean;
   in: number;
@@ -132,8 +101,7 @@ export type TickSnapshot = {
   totalOut: number;
   totalApiMs: number;
   apiMs: number;
-  // vX.X.X+ — per-tick cost derived at processTick time. null
-  // when no price matches the active model.
+  // Per-tick cost derived at processTick time; null when no price matches.
   cost: { currency: string; value: string } | null;
 };
 
@@ -144,32 +112,21 @@ export type AvgSnapshot = {
   accTokenCachedIn: number;
   accApiCalls: number;
   accTokenTotalIn: number;
-  // v0.8.10-alpha.3 — mirror of TickStatusValue.accTokenHitRate,
-  // pre-computed by the data-processor.
+  // Mirror of TickStatusValue.accTokenHitRate, pre-computed.
   accTokenHitRate: number;
-  // v0.8.24+ — propagated from TickStatusValue.startAt. The
-  // renderer reads it through peekAcc / readAccumulator and
-  // formats via formatAbsTime.
+  // Propagated from TickStatusValue.startAt; rendered via formatAbsTime.
   startAt?: number | null;
-  // vX.X.X+ — propagated from TickStatusValue.costs. The renderer
-  // reads the accumulated costs array through peekAcc /
-  // readAccumulator. Optional for backward-compat with test
-  // call sites that construct AvgSnapshot without costs.
+  // Propagated from TickStatusValue.costs; optional for test call sites.
   costs?: Array<{ currency: string; value: string }>;
 };
 
-// v0.8.10-alpha.2 — internal per-tick snapshot for the data-processor.
-// Carries the full stdin snapshot + the single derived apiMs +
-// regression flag + derived speed/rate metrics. Renamed from
-// `NormalizedTick` because "normalized" was the old "delta of two
-// snapshots" mental model.
+// Internal per-tick snapshot: full stdin snapshot + derived apiMs +
+// regression flag + speed/rate metrics.
 type CurrentTick = {
   sessionId: string;
   cwd: string;
-  // v0.9.x — active-model id (stdin.model.id). Drives the per-model
-  // accumulator slot key and the JSONL sample.model stamp. Was
-  // modelDisplayName in v0.8.x; renamed so per-model pricing +
-  // filtering use the stable id, not the friendly label.
+  // Active-model id (stdin.model.id). Drives the per-model accumulator
+  // slot key and the JSONL sample.model stamp (stable id, not label).
   modelId: string | null;
   // snapshot fields — read straight from stdin, no cross-tick subtract
   in: number;
@@ -189,9 +146,7 @@ type CurrentTick = {
   tokenHitRate: number | null;
   tokenInSpeed: number | null;
   tokenOutSpeed: number | null;
-  // vX.X.X+ — per-tick token cost computed from stdin deltas
-  // × tokenPrices. null when no price entry matches the active
-  // model (no cost to compute).
+  // Per-tick token cost (stdin deltas × tokenPrices); null when no match.
   cost: { currency: string; value: string } | null;
 };
 
@@ -217,27 +172,19 @@ export type TickState = {
 };
 
 export type SumFilter = {
-  // vX.X.X — `windowKey` widened from the v0.8.x closed union to
-  // `string`. Each unique windowKey (declared `interval.windowId`,
-  // the literal "all" sentinel, or a free-form dhms string) mints
-  // its own stat cache entry under `stat:<model>:<windowKey>`. The
-  // v0.8.x cap of ≤ 12 entries (2 model × 3 window × 2 align) is
-  // gone — cache.ts's TTL=300s keeps abandoned entries bounded.
+  // Each unique windowKey (declared interval.windowId, "all", or a
+  // free-form dhms string) mints its own `stat:<model>:<windowKey>`
+  // cache entry; TTL=300s keeps abandoned entries bounded.
   windowKey: string;
   sinceMs: number;
   modelFilter?: string;
-  // vX.X.X+ — default provider filter: only include JSONL rows whose
-  // base_url matches the current normalized ANTHROPIC_BASE_URL.
-  // Always set by parseWindowScope; no user-facing inline arg yet.
-  // undefined = no provider filtering (scan all rows).
+  // Default provider filter: only rows whose base_url matches the
+  // normalized ANTHROPIC_BASE_URL (set by parseWindowScope).
+  // undefined = no filtering.
   providerBaseUrl?: string;
-  // The renderer-side SumFilter declares more fields
-  // (`windowIdMatch` / `interval` / `windowMs`) used by
-  // m_sumStartTime / m_sumEndTime — those are read at the
-  // parseWindowScope call site, not here, so we deliberately
-  // don't redeclare them on this side of the import boundary.
-  // Status-store treats the parameter structurally: any object
-  // with these three core fields is accepted.
+  // Renderer-side SumFilter adds windowIdMatch/interval/windowMs read
+  // at the parseWindowScope call site; status-store treats the filter
+  // structurally, so those aren't redeclared here.
 };
 
 export type StatAggregate = {
@@ -252,20 +199,12 @@ export type StatAggregate = {
   // min(s.at) across the filtered rows. 0 when no row carries a
   // valid at. Drives m_sumStartTime rendering.
   firstAt: number;
-  // vX.X.X — used% of the plan window this aggregate was aligned
-  // to, captured at getStatAggregate time. Populated ONLY when the
-  // caller resolved an aligned scan (alignActive=true) AND the
-  // matched interval carries a usable percent; null otherwise
-  // (non-aligned / "all" / dhms scans, or a window with no
-  // percent). Read from the structurally-passed `filter.interval`,
-  // mirroring render.ts's intervalToWindow used%-pick rule.
+  // Plan-window used% captured at getStatAggregate time when the caller
+  // resolved an aligned scan (alignActive=true) with a usable percent;
+  // null otherwise. Read from the structurally-passed filter.interval.
   alignedUsedPercent?: number | null;
   generatedAt: number;
-  // vX.X.X+ — per-currency cost totals over the window.
-  // Each element is { currency, value } where value is a
-  // decimal string summed across all matching samples.
-  // Optional for backward-compat with test call sites that
-  // construct StatAggregate without costs.
+  // Per-currency cost totals over the window; optional for test call sites.
   costs?: Array<{ currency: string; value: string }>;
 };
 
@@ -417,28 +356,22 @@ function parseStore(raw: string): Store {
     }
     if (key === PREV_TICK_KEY) {
       const v = e.value as Record<string, unknown>;
-      // v0.8.10-alpha.2 — only totalApiMs + identity participate in
-      // any cross-tick math. Legacy `in/out/cachedIn/totalIn` fields
-      // on disk (from pre-alpha versions) are silently dropped.
+      // Only totalApiMs + identity participate in cross-tick math;
+      // legacy in/out/cachedIn/totalIn fields are silently dropped.
       out[key] = {
         at: e.at,
         kind: "prevTickStatus",
         value: {
           totalApiMs: typeof v.totalApiMs === "number" ? v.totalApiMs : 0,
-          // v0.8.23+ — totalDurationMs cursor. Legacy rows written
-          // before v0.8.23 lack this field; backfill with 0 so a
-          // backward-jump guard at next tick (current=0 vs prev=0)
-          // doesn't accidentally fire a regression reset on a
-          // freshly-upgraded state file.
+          // Legacy rows lack totalDurationMs; backfill with 0 so the
+          // cold-start guard doesn't fire on a freshly-upgraded file.
           totalDurationMs: typeof v.totalDurationMs === "number"
             ? v.totalDurationMs
             : 0,
           sessionId: typeof v.sessionId === "string" ? v.sessionId : null,
           cwd: typeof v.cwd === "string" ? v.cwd : null,
           model: typeof v.model === "string" ? v.model : null,
-          // v0.8.15-alpha — backfill contextUsedPercent for legacy
-          // prev rows. Missing field → null (start of history); a
-          // numeric 0/100 stays 0/100 as parsed.
+          // Legacy rows: missing → null (start of history).
           contextUsedPercent: typeof v.contextUsedPercent === "number"
             ? v.contextUsedPercent
             : null,
@@ -453,12 +386,7 @@ function parseStore(raw: string): Store {
       const accTokenCachedIn = typeof v.accTokenCachedIn === "number" ? v.accTokenCachedIn
         : typeof v.accCached === "number" ? v.accCached : 0;
       const accTokenTotalIn = typeof v.accTokenTotalIn === "number" ? v.accTokenTotalIn : 0;
-      // v0.8.10-alpha.3 — backfill accTokenHitRate for legacy rows
-      // that don't have it persisted. Compute from the parsed raw
-      // accumulators so a missing field gets a meaningful value
-      // on first read (the next processTick will overwrite with
-      // the fresh formula anyway). Zero-denominator → 0.
-      // Formula: accTokenCachedIn / accTokenTotalIn * 100
+      // Backfill accTokenHitRate for legacy rows (zero-denominator → 0).
       const accTokenHitRate = typeof v.accTokenHitRate === "number"
         ? v.accTokenHitRate
         : accTokenTotalIn > 0 ? (accTokenCachedIn / accTokenTotalIn) * 100 : 0;
@@ -475,12 +403,9 @@ function parseStore(raw: string): Store {
           accApiCalls: typeof v.accApiCalls === "number" ? v.accApiCalls
             : typeof v.accApiCount === "number" ? v.accApiCount : 0,
           accTokenHitRate,
-          // v0.8.24+ — backfill. Legacy rows (pre-v0.8.24)
-          // read as null → m_accStartTime shows "start:n/a"
-          // placeholder until the next valid tick stamps
-          // Date.now() via setAvg / bumpDeltaScope.
+          // Legacy rows read as null → start:n/a until the next valid write.
           startAt: typeof v.startAt === "number" ? v.startAt : null,
-          // vX.X.X+ — backfill costs from legacy rows.
+          // Backfill costs from legacy rows.
           costs: coerceCostsArray(v.costs),
         },
       };
@@ -555,9 +480,7 @@ export function emptyTickStatus(): TickStatusValue {
     accApiMs: 0,
     accApiCalls: 0,
     accTokenHitRate: 0,
-    // v0.8.24+ — "no writes yet" sentinel. setAvg /
-    // bumpDeltaScope stamp Date.now() on the first valid
-    // write.
+    // "No writes yet" sentinel; stamped with Date.now() on first valid write.
     startAt: null,
     costs: [],
   };
@@ -566,17 +489,12 @@ export function emptyTickStatus(): TickStatusValue {
 export function emptyPrevTickStatus(): PrevTickStatusValue {
   return {
     totalApiMs: 0,
-    // v0.8.23+ — see [[detectRegression-totaldurationms]]. Zero
-    // sentinel for "no prior measurement"; the next active tick
-    // writes the real stdin value.
+    // Zero sentinel for "no prior measurement"; next active tick writes the real value.
     totalDurationMs: 0,
     sessionId: null,
     cwd: null,
     model: null,
-    // v0.8.15-alpha — null = no prior history; beginTick does NOT
-    // substitute when prev is also null (a fresh install or after
-    // `clean` naturally surfaces the first tick's stdin value as-is,
-    // including a 0 from a malformed probe).
+    // null = no prior history; beginTick substitutes only when prev is non-null.
     contextUsedPercent: null,
   };
 }
@@ -631,14 +549,9 @@ export function writeTickStatus(
   if (!cwd) return;
   const store = cloneStore(loadFromDiskInternal(cwd));
   store[key] = { at: Date.now(), kind: "tickStatus", value };
-  // v0.8.10-alpha.2 — also seed the in-memory pending map so
-  // a subsequent processTick on this cwd sees the seed without
-  // requiring an explicit beginTick + load from disk. The
-  // activeStoreFor fallback returns _tickState.pending when
-  // _tickState.cwd is null (the test setup convention
-  // beginTickForTest(null, null)), so updating pending is
-  // the only way to reach the read path even when the active
-  // tick's cwd doesn't match this write's cwd.
+  // Also seed the in-memory pending map so a subsequent processTick /
+  // beginTickForTest(null, null) read path sees the write without a
+  // fresh load-from-disk.
   if (_tickState) {
     _tickState.pending[key] = { at: Date.now(), kind: "tickStatus", value };
     _tickState.dirty = true;
@@ -663,12 +576,7 @@ export function writePrevTickStatus(
   if (!cwd) return;
   const store = cloneStore(loadFromDiskInternal(cwd));
   store[PREV_TICK_KEY] = { at: Date.now(), kind: "prevTickStatus", value };
-  // v0.8.10-alpha.2 — also seed the in-memory pending map so a
-  // subsequent beginTickForTest on this cwd sees the seed
-  // (beginTick loads from disk into pending, so the on-disk
-  // write is the source of truth — but seeding pending as well
-  // means a test that fires setPrevTick then beginTickForTest
-  // doesn't lose the seed to a "pending was empty" race).
+  // Also seed pending so setPrevTick → beginTickForTest keeps the seed.
   if (_tickState) {
     _tickState.pending[PREV_TICK_KEY] = {
       at: Date.now(),
@@ -680,17 +588,14 @@ export function writePrevTickStatus(
   flushToDiskInternal(cwd, store);
 }
 
+// Declared for future opt-in; the read path no longer compares against it.
 export const LAST_ACTIVE_TTL_MS = 60_000;
-// v0.8.24 — sanity ceiling on the per-tick apiMs sample
-// (validateNormalizedTick, below). Rejects apiMs values at or
-// above this bound so a single pathological stdin reading
-// (clock skew, provider bug, stale baseline) cannot pollute
-// the JSONL sample stream / the per-session accApiMs sum.
-// NOT a fetch timeout — the real fetch timeout is config-driven
-// (configStore.get().fetchTimeoutMs) and applied in src/index.ts
-// via AbortSignal.timeout(). Set to 5min — well above any
-// realistic per-tick API call (typically <60s) but below the
-// 10min "pathological" marker. Pin in tick-state.test.ts.
+// Sanity ceiling on the per-tick apiMs sample: values at or above this
+// bound are rejected so a pathological stdin reading (clock skew,
+// provider bug, stale baseline) can't pollute the JSONL stream / the
+// accApiMs sum. NOT a fetch timeout (that's config-driven in index.ts
+// via AbortSignal.timeout). 5min — above any realistic per-tick call
+// (typically <60s), below the 10min "pathological" marker.
 export const MAX_SAMPLE_API_MS = 300_000;
 
 export function readLastActive(
@@ -876,33 +781,23 @@ export function readAllSamples(sinceMs: number): TokenSample[] {
   return out;
 }
 
-// ----- v0.8.29 — cold-slot JSONL replay ----------------------------------------
-//
-// When state.json is missing (fresh install, after `:clean --purge-runtime`,
-// accidental deletion), setAvg's first valid write seeded each tickStatus
-// slot from the CURRENT tick's delta only — historical JSONL was discarded.
-// The user saw a misleading `acc:0` followed by a one-tick blip instead of
-// the cumulative number they expected.
-//
-// This block mirrors the m_sum* pattern (readAllSamples / cache.stat.json
-// TTL) for the three persistent m_acc* scopes (session / project / model).
-//
-// Replay runs in processTick Stage 0 — BEFORE setAvg mutates the slot. The
-// recovered aggregate is mark()'ed into _tickState.pending, so:
-//   - on valid ticks, setAvg additively merges this tick's delta on top
-//     of the recovered base (single commit per tick preserved)
-//   - on invalid ticks, the recovered base is flushed standalone (no
-//     delta; we don't pollute history with a bad row)
-//   - render sees the recovered value via the existing pending read path
-//     (no firstWriteKeys side-channel needed)
+// ----- Cold-slot JSONL replay -----
+// When state.json is missing (fresh install / :clean --purge-runtime),
+// setAvg's first write would seed each tickStatus slot from the current
+// tick's delta only — a misleading acc:0 followed by a one-tick blip.
+// This block mirrors the m_sum* pattern (readAllSamples / stat-cache
+// TTL) for the persistent m_acc* scopes (session / project / model).
+// Replay runs in processTick Stage 0, before setAvg mutates the slot:
+//   - valid ticks: setAvg merges this tick's delta on top of the base
+//   - invalid ticks: the recovered base flushes standalone (no bad row)
+//   - render sees the value via the existing pending read path
 
 function replayAccKey(
   scope: "session" | "project" | "model",
   args: {
     sessionId?: string | null;
     cwd?: string | null;
-    // v0.9.x — active-model id (stdin.model.id) for scope=model
-    // slot key. Renamed from modelDisplayName.
+    // stdin.model.id for scope=model slot key.
     modelId?: string | null;
   },
 ): string | null {
@@ -919,21 +814,16 @@ function replayAccKey(
   return `tickStatus:${args.modelId}`;
 }
 
-// v0.8.29 — read-once per-scope helper. Walks the JSONL stream scoped
-// to one slot:
-//   session  → state/<projectHash>/<sessionId>.jsonl (one file)
-//   project  → every *.jsonl under state/<projectHash>/ (cross-session)
-//   model    → every *.jsonl under state/<projectHash>/ filtered by
-//              sample.model === args.modelId
-// sinceMs=0 → no time cutoff; replay reads the full history.
+// Read-once per-scope JSONL walk:
+//   session → one <sessionId>.jsonl; project → every *.jsonl under the
+//   projectHash dir; model → that set filtered by sample.model.
+// sinceMs=0 → no time cutoff (full history).
 function readReplaySamples(
   scope: "session" | "project" | "model",
   args: {
     sessionId?: string | null;
     cwd?: string | null;
-    // v0.9.x — renamed from modelDisplayName. JSONL rows now stamp
-    // modelId (stdin.model.id), so the filter compares against the
-    // active model id, not the friendly label.
+    // JSONL rows stamp stdin.model.id; filter compares against it.
     modelId?: string | null;
   },
 ): TokenSample[] {
@@ -941,10 +831,8 @@ function readReplaySamples(
     if (!args.sessionId || !args.cwd) return [];
     return readSamples(args.cwd, args.sessionId, 0);
   }
-  // project / model — read per-project to honor the project-scope
-  // boundary (TokenSample doesn't carry projectHash; reading from
-  // readAllSamples would conflate with other projects under the same
-  // state root on a multi-project machine).
+  // project / model — read per-project; readAllSamples would conflate
+  // projects sharing the state root.
   if (!args.cwd) return [];
   const all = readProjectSamples(args.cwd, 0);
   if (scope === "project") return all;
@@ -953,9 +841,7 @@ function readReplaySamples(
   return all.filter((s) => s.model === args.modelId);
 }
 
-// readProjectSamples — mirrors readAllSamples' inner walk, but only
-// visits the one projectHash subdir matching cwd. Same coerceSampleRow
-// filter, same mtime cutoff semantics.
+// Mirrors readAllSamples' walk but visits only the one projectHash subdir.
 function readProjectSamples(cwd: string, sinceMs: number): TokenSample[] {
   const dir = join(stateRoot(), projectHash(cwd));
   logFsList(dir, "status-store.readProjectSamples", undefined, "statusStore");
@@ -1003,13 +889,9 @@ function readProjectSamples(cwd: string, sinceMs: number): TokenSample[] {
   return out;
 }
 
-// v0.8.29 — cold-slot replay. Returns a TickStatusValue ready to
-// mark() into pending, or null when:
-//   - slot already has a startAt (warm — replay is a no-op, the
-//     user's confirmed value is preserved)
-//   - JSONL has zero matching rows (no history to recover; the
-//     current tick's setAvg will populate from this tick's delta)
-//   - missing sessionId / cwd / modelId (no slot to recover)
+// Cold-slot replay: returns a TickStatusValue to mark() into pending,
+// or null when the slot is warm (startAt set), JSONL has no matching
+// rows, or the slot key can't be built (missing ids).
 export function replayAccInit(
   scope: "session" | "project" | "model",
   args: {
@@ -1020,21 +902,16 @@ export function replayAccInit(
 ): TickStatusValue | null {
   const key = replayAccKey(scope, args);
   if (!key) return null;
-  // Short-circuit on warm slot — preserves the user's confirmed
-  // value. Reads via activeStoreFor so a same-tick in-memory
-  // pending entry is preferred over the on-disk file (avoids
-  // a "warmed earlier in this tick, cold again now" race).
+  // Warm-slot short-circuit (reads pending first to avoid a same-tick
+  // "warmed, now cold again" race).
   const existing = readTickStatus(args.cwd, key);
   if (existing && existing.startAt != null) return null;
 
   const samples = readReplaySamples(scope, args);
   if (samples.length === 0) return null;
 
-  // Aggregate the same fields setAvg writes. Mirrors aggregateSamples
-  // but mapped to TickStatusValue field names. Note: accTokenTotalIn
-  // here is the PER-TICK-DELTA accumulator (sum of per-row
-  // totalIn-deltas), matching aggregateSamples' sumTotalIn ==
-  // sumIn + sumCached semantics.
+  // Aggregate the same fields setAvg writes (mapped to TickStatusValue
+  // names). accTokenTotalIn sums per-row deltas (sumIn + sumCached).
   let accTokenIn = 0;
   let accTokenOut = 0;
   let accTokenCachedIn = 0;
@@ -1050,11 +927,10 @@ export function replayAccInit(
     accTokenTotalIn += s.in + s.cacheIn;
     accApiMs += s.apiMs ?? 0;
     if ((s.apiMs ?? 0) > 0) accApiCalls += 1;
-    // firstAt = min(s.at) across the filtered rows, matching
-    // aggregateSamples' firstAt semantics.
+    // firstAt = min(s.at), matching aggregateSamples.
     const candidate = (Number.isFinite(s.at) && s.at > 0) ? s.at : null;
     if (candidate != null && candidate < firstAt) firstAt = candidate;
-    // vX.X.X+ — accumulate cost by currency from the JSONL samples.
+    // Accumulate cost by currency from the JSONL samples.
     if (s.cost) {
       const prev = costsMap.get(s.cost.currency) ?? 0;
       costsMap.set(s.cost.currency, prev + parseFloat(s.cost.value));
@@ -1062,7 +938,7 @@ export function replayAccInit(
   }
   if (!Number.isFinite(firstAt)) firstAt = Date.now();
 
-  // Build the costs array from the map, matching aggregateSamples' format.
+  // Build the costs array from the map.
   const costs: Array<{ currency: string; value: string }> = [];
   for (const [currency, total] of costsMap) {
     costs.push({ currency, value: total.toFixed(10) });
@@ -1157,10 +1033,8 @@ function setStatCache<T>(key: string, value: T, ttlMs: number): void {
   flushStatCacheToDisk();
 }
 
-// v0.8.16 — TTL-IGNORING peek for a specific stat-cache key.
-// Mirrors cache.peekWithTtl: returns null on miss, NEVER on expiry,
-// so the renderer can show "cache is past TTL, will refresh next
-// tick". Used by m_statTtlStatus's per-key variant.
+// TTL-ignoring peek for one stat-cache key: null on miss, never on
+// expiry (so render can show "past TTL, refreshes next tick").
 export function peekStatAgeMs(key: string): { ageMs: number; ttlMs: number } | null {
   loadStatCacheFromDisk();
   const e = _statCacheStore.get(key) as StatCacheEntry<unknown> | undefined;
@@ -1168,11 +1042,8 @@ export function peekStatAgeMs(key: string): { ageMs: number; ttlMs: number } | n
   return { ageMs: Date.now() - e.at, ttlMs: e.ttlMs ?? 0 };
 }
 
-// v0.8.16 — TTL-IGNORING peek for the freshest entry across all
-// stat-cache keys. Used by m_statTtlStatus because the stat cache
-// can hold many keys (one per model/window/align combination) and
-// we display the freshest so the user always sees the most-recently-
-// scanned entry.
+// TTL-ignoring peek for the freshest entry across all stat-cache keys
+// (the cache can hold many model/window/align rows).
 export function peekFreshestStatAgeMs(): { ageMs: number; ttlMs: number } | null {
   loadStatCacheFromDisk();
   let best: { at: number; ageMs: number; ttlMs: number } | null = null;
@@ -1184,19 +1055,13 @@ export function peekFreshestStatAgeMs(): { ageMs: number; ttlMs: number } | null
   return best ? { ageMs: best.ageMs, ttlMs: best.ttlMs } : null;
 }
 
-// v0.8.16 — Test seam for m_statTtlStatus tests. Exposes the
-// private setStatCache so tests can seed rows without going
-// through getStatAggregate's full readAllSamples scan path.
-// Mirrors the `__resetCacheForTest` pattern in cache.ts.
+// Test seam: seed stat-cache rows without the readAllSamples scan path.
 export function setStatCacheForTest<T>(key: string, value: T, ttlMs: number): void {
   setStatCache(key, value, ttlMs);
 }
 
-// v0.8.16 — Test seam for backdating an already-seeded stat-cache
-// row. Used by m_statTtlStatus tests to simulate aged entries
-// without monkey-patching Date.now (which would also break
-// setStatCache's internal `at` stamping). Mirrors the backdate
-// pattern cache tests use via `(cache as any).store.set(…)`.
+// Test seam: backdate a seeded row to simulate aging without
+// monkey-patching Date.now.
 export function setStatCacheAtForTest(key: string, at: number): void {
   const e = _statCacheStore.get(key);
   if (!e) throw new Error(`setStatCacheAtForTest: key "${key}" not found`);
@@ -1233,7 +1098,7 @@ function aggregateSamples(samples: TokenSample[]): StatAggregate {
     ) {
       firstAt = s.at;
     }
-    // vX.X.X+ — accumulate cost by currency.
+    // Accumulate cost by currency.
     if (s.cost) {
       const prev = costsMap.get(s.cost.currency) ?? 0;
       costsMap.set(s.cost.currency, prev + parseFloat(s.cost.value));
@@ -1259,33 +1124,19 @@ function aggregateSamples(samples: TokenSample[]): StatAggregate {
   };
 }
 
-// vX.X.X+ — Single source of truth for the on-disk stat-cache
-// key string given a filter. Mirrors the template literal inside
-// getStatAggregate (~L1227) so the renderer (m_sumTtlStatus) can
-// peek the same row without recomputing the full aggregate. The
-// key shape MUST stay in sync with getStatAggregate's composer —
-// if that template changes, update this helper too.
+// Single source of truth for the stat-cache key string (mirrors
+// getStatAggregate's composer — MUST stay in sync with it).
 export function statKeyForFilter(filter: SumFilter): string {
   const base = `stat:${filter.modelFilter ?? "all"}:${filter.windowKey}:${(filter as { alignActive?: boolean }).alignActive ?? false}`;
   return filter.providerBaseUrl ? `${base}:${filter.providerBaseUrl}` : base;
 }
 
 export function getStatAggregate(filter: SumFilter): StatAggregate {
-  // vX.X.X — `:alignActive` segment RESTORED. The renderer-side
-  // parseWindowScope buckets along `alignActive` because the
-  // declared-windowId branch (align=true) and the dhms /
-  // "all" branches (align=false) can produce different
-  // (sinceMs, modelFilter) for the same `windowKey` literal.
-  // E.g. `|window|monthly|align|true` scans sinceMs =
-  // Date.parse(interval.resetStartAt), while `|window|monthly|align|false`
-  // (no dhms parse) drops with warn — but if a user later
-  // aliases `windowId: "5h"` to a 5-hour declared interval AND
-  // also writes `|window|5h|align|false`, the same `windowKey`
-  // string lands on different (sinceMs, interval) pairs.
-  // Bucketing along align keeps the two readings in disjoint
-  // cache slots so they don't poison each other. Free-form dhms
-  // values (always alignActive=false) still mint their own entries
-  // via the literal `windowKey` (`stat:...:2h30m:false`).
+  // `:alignActive` segment: align=true (declared windowId) and
+  // align=false (dhms/"all") scans can land different sinceMs on the
+  // same windowKey literal, so bucketing along align keeps the two
+  // readings in disjoint cache slots. Free-form dhms values
+  // (alignActive=false) mint their own entries via the literal key.
   const key = statKeyForFilter(filter);
   const cached = getStatCache<StatAggregate>(key, STAT_CACHE_TTL_MS);
   if (cached) return cached;
@@ -1294,20 +1145,15 @@ export function getStatAggregate(filter: SumFilter): StatAggregate {
     filter.modelFilter === undefined
       ? samples
       : samples.filter((s) => s.model === filter.modelFilter);
-  // vX.X.X+ — default provider filter: when set, only include rows
-  // whose base_url matches the current normalized ANTHROPIC_BASE_URL.
+  // Default provider filter: only rows whose base_url matches ANTHROPIC_BASE_URL.
   const providerFiltered =
     filter.providerBaseUrl === undefined
       ? filtered
       : filtered.filter((s) => s.base_url === filter.providerBaseUrl);
   const agg = aggregateSamples(providerFiltered);
-  // vX.X.X — when the caller resolved an aligned scan
-  // (alignActive=true), stamp the aligned plan window's used% onto
-  // the aggregate so downstream renders can read it without a
-  // second interval lookup. `filter.interval` is passed
-  // structurally by the renderer (render.ts's SumFilter carries it;
-  // status-store's SumFilter deliberately doesn't redeclare it), so
-  // we read it defensively off an `unknown`-widened view.
+  // On an aligned scan (alignActive=true), stamp the plan window's
+  // used% onto the aggregate (read defensively off the structurally-
+  // passed filter.interval).
   const f = filter as SumFilter & {
     alignActive?: boolean;
     interval?: { usedPercent?: number | null; remainingPercent?: number | null } | null;
@@ -1319,10 +1165,8 @@ export function getStatAggregate(filter: SumFilter): StatAggregate {
   return agg;
 }
 
-// vX.X.X — mirror of render.ts's intervalToWindow used%-pick rule:
-// used% wins when present; else derive from 100 - remaining%; else
-// null (no percent available). Kept here (not imported from
-// render.ts) to avoid a status-store → render dependency edge.
+// Mirror of render.ts's used%-pick rule: used% wins, else 100 -
+// remaining%, else null. Kept here to avoid a status-store → render dep.
 function intervalUsedPercent(
   iv: { usedPercent?: number | null; remainingPercent?: number | null },
 ): number | null {
@@ -1339,13 +1183,9 @@ function intervalUsedPercent(
 
 let _tickState: TickState | null = null;
 
-// v0.8.11-alpha — the prev cursor carries ONLY totalApiMs. Returns
-// it (as the baseline for `apiMs = current - baseline`) or null when
-// there's no history. The signal is purely numeric: a forward roll
-// is an api-call duration; a backward roll means the cumulative
-// counter restarted (cc restarted) and detectRegression flags the
-// tick as a reset. Nothing about sessionId identity participates in
-// this math — the numeric direction IS the truth.
+// The prev cursor carries only totalApiMs (baseline for apiMs).
+// Detection is purely numeric — a backward roll means the cc process
+// restarted; sessionId identity plays no part.
 function resolvePreviousBaseline(
   tokens: TokenSnapshot | null,
   prev: PrevTickStatusValue | null,
@@ -1356,20 +1196,11 @@ function resolvePreviousBaseline(
   return { prevTotalApiMs: prev.totalApiMs };
 }
 
-// v0.8.15-alpha — stdin-side error guard for context_window.used_percentage.
-// Observed stdins from error states occasionally surface
-// `used_percentage=0` instead of `null`, which the renderer would
-// display as a literal "0%". When the prev tick carries a usable
-// value (non-null), fall back to it so the line stays consistent.
-// Three-state decision matrix:
-//   stdin === null      → keep null (real "no data")
-//   stdin  > 0          → keep as-is (real percentage)
-//   stdin === 0         → error sentinel: substitute prev IF prev is
-//                         non-null; otherwise leave the 0 for
-//                         transparency (no carry-over to lie about)
-// The substitution target is `tokens.contextWindow.contextUsedPercent`,
-// since `m_contextUsedPercent` reads stdin's path verbatim — no
-// separate propagation through the TickSnapshot / measurement layer.
+// stdin-side error guard for context_window.used_percentage: a 0 from
+// an error-state stdin would render as a misleading "0%". Substitute
+// prev when stdin reports 0 and prev is non-null; null/positive stdin
+// passes through. Substitutes tokens.contextWindow.contextUsedPercent
+// in place (m_contextUsedPercent reads that path verbatim).
 function applyContextUsedPercentCarryOver(
   tokens: TokenSnapshot,
   prev: PrevTickStatusValue | null,
@@ -1388,67 +1219,19 @@ function applyContextUsedPercentCarryOver(
   }
 }
 
-// v0.8.11-alpha → v0.8.23: regression detection.
-//
-// Originally the signal was `current.totalApiMs < prev.totalApiMs`
-// (stdin `cost.total_api_duration_ms`). That counter tracks the
-// cumulative API roundtrip time and increments only on actual
-// API calls — when a user idle-gazes for 30s with no API activity,
-// totalApiMs stays put and a subsequent restart is harder to spot
-// because the counter barely moves.
-//
-// v0.8.23+ — switched the primary signal to
-// `current.totalDurationMs < prev.totalDurationMs` (stdin
-// `cost.total_duration_ms`, the wall-clock cost of the running
-// cc process). totalDurationMs increments monotonically per tick
-// on every observed stdin producer, so it's a more reliable
-// "the cc process restarted" trigger — even an idle session shows
-// clock progression.
-//
-// Two extra guards keep the check well-behaved on edge cases:
-//
-//   1. **120s cold-start threshold** — the first tick of a fresh
-//      cc process carries `totalDurationMs ≈ 0`. Comparing against
-//      a prev baseline from a prior process (which could be any
-//      positive number up to hours) would falsely fire a regression
-//      on EVERY cold start. When the current totalDurationMs is
-//      under 120_000 (2 minutes), the cc process is brand-new and
-//      we treat the backward jump as expected — the prev baseline
-//      is from a different process and will be replaced by the
-//      current value before the next tick.
-//
-//   2. **contextUsedPercent===0 stdin-error guard** (carried over
-//      from v0.8.15-alpha) — when the caller observes
-//      `contextUsedPercent===0` AND no carry-over applies (prev
-//      null), `totalDurationMs` may roll backward as a side effect
-//      of the malformed probe rather than a real cc restart.
-//      Suppress the regression flag in that case. When carry-over
-//      substitutes a non-zero prev value, contextUsedPercent is
-//      already != 0 by the time detectRegression runs
-//      (normalizeTick applies carry-over first), so the guard
-//      naturally does not fire.
-//
-// Identity (sessionId/cwd) is still NOT part of the check — a
-// regression detection that also requires identity would miss the
-// common "I ran a different cc command" restart case.
+// Regression detection: a backward totalDurationMs jump (stdin
+// cost.total_duration_ms — the cc process wall-clock, monotonic per
+// tick, even when idle) means the cc process restarted. Guards:
+//   1. 120s cold-start — a fresh process's small totalDurationMs is
+//      compared against a prior process's baseline; suppress the false
+//      fire (the baseline is replaced before the next tick anyway).
+//   2. contextUsedPercent===0 stdin-error guard — a malformed probe can
+//      roll totalDurationMs backward; suppress unless carry-over has
+//      already substituted a non-zero prev value.
+// Identity (sessionId/cwd) is NOT part of the check — it would miss the
+// common "ran a different cc command" restart.
 const COLD_START_THRESHOLD_MS = 120_000;
 
-// v0.8.24+ — read-once-per-tick helper. Returns the
-// wall-clock instant of the first tick for the current
-// session, which becomes the row-level `startAt` for every
-// JSONL sample we write. For a fresh session (no JSONL file
-// yet, or empty / unreadable), returns Date.now() — this row
-// IS the first tick, so its own startAt === its own at.
-//
-// Reads the JSONL head line (oldest tick — JSONL appends to
-// the END, so the first tick is at the TOP). The first line
-// is the smallest one; subsequent reads of the same file
-// (this is per-tick, so every tick after the first hits the
-// same page-cached line) are amortized to ~µs.
-//
-// Why not an in-memory sticky: the statusline runs as a
-// per-tick child process (see diagnostics.ts:148-152), so an
-// in-memory sticky dies between ticks. The first tick of
 function detectRegression(
   tokens: TokenSnapshot | null,
   prev: PrevTickStatusValue | null,
@@ -1457,13 +1240,9 @@ function detectRegression(
   const currentTotalDurationMs = tokens.cost?.totalDurationMs;
   if (currentTotalDurationMs == null
       || !Number.isFinite(currentTotalDurationMs)) return false;
-  // v0.8.23+ — cold-start guard. On the first tick of a fresh
-  // cc process, totalDurationMs is small (sub-2-minute by
-  // definition). Comparing against the prev baseline (from a
-  // prior process) would falsely flag a regression; suppress.
+  // Cold-start guard: suppress false fires on a fresh cc process.
   if (currentTotalDurationMs < COLD_START_THRESHOLD_MS) return false;
-  // v0.8.15-alpha — stdin-side error guard for contextUsedPercent
-  // (carried forward). See block comment above.
+  // stdin-error guard for contextUsedPercent — see block comment above.
   const cw = tokens.contextWindow;
   if (cw && cw.contextUsedPercent === 0) return false;
   return currentTotalDurationMs < prev.totalDurationMs;
@@ -1477,15 +1256,8 @@ function normalizeTick(
   if (!tokens || !tokens.sessionId || !tokens.cwd) {
     return { snapshot: null, measurement: EMPTY_TICK };
   }
-  // v0.8.15-alpha — stdin-side error guard for context_window.used_percentage.
-  // Observed stdins from error states occasionally surface
-  // `used_percentage=0` instead of `null`, which the renderer would
-  // display as a literal "0%". When the prev tick carries a usable
-  // value (non-null, non-zero error sentinel), fall back to it so
-  // the line stays consistent. This mutation is in-place against
-  // the caller's TokenSnapshot — render reads `tokens.contextWindow.
-  // contextUsedPercent` directly off the same reference, so no
-  // separate propagation path is needed.
+  // stdin-side error guard for context_window.used_percentage (in-place
+  // mutation; render reads the same reference). See applyContextUsedPercentCarryOver.
   applyContextUsedPercentCarryOver(tokens, prev);
   const in_ = tokens.current.tokenIn;
   const out_ = tokens.current.tokenOut;
@@ -1506,40 +1278,28 @@ function normalizeTick(
   }
 
   const { prevTotalApiMs } = resolvePreviousBaseline(tokens, prev);
-  // v0.8.11-alpha — regression detection is purely numerical and
-  // independent of sessionId identity: a backward totalApiMs jump
-  // always means the cumulative counter restarted (cc restarted),
-  // regardless of whose sessionId the prev baseline belonged to.
+  // Regression detection is purely numerical (see detectRegression).
   const invalidRegression = detectRegression(tokens, prev);
-  // apiMs is THE unique cross-tick delta. When prevTotalApiMs is
-  // null (no history yet — first tick after install/cache wipe),
-  // back-derive apiMs from tokenOut via the legacy v0.4.x formula:
-  // apiMs = tokenOut * 1000 / 50 (assumes a 50 t/s fall-back rate so
-  // the first tick's speed gates render a real value rather than 0).
+  // apiMs is THE unique cross-tick delta. With no prev baseline (first
+  // tick after install/cache wipe), back-derive from tokenOut via the
+  // legacy v0.4.x formula: tokenOut * 1000 / 50 (50 t/s fall-back rate).
   const apiMs = invalidRegression || prevTotalApiMs === null
       ? (out_ * 1000) / 50
       : totalApiMs - prevTotalApiMs;
   const cachedIn = tokens.current.tokenCachedIn ?? 0;
   const hasCachedIn = tokens.current.tokenCachedIn != null;
-  // v0.8.10-alpha.2 — validation gate uses session-cumulative totals
-  // (user contract pinned to the totals.* fields). The per-turn
-  // current.tokenIn / tokenOut are snapshot fields, not gates.
-  // vX.X.X+ — totalIn dropped from the gate: totalOut + apiMs alone
-  // decide validity (a cache-read-only tick can legitimately have
-  // totalIn == 0 and still be a real measurement).
+  // Validation gate (user contract): totalOut > 0 && apiMs > 0. totalIn
+  // is deliberately excluded — a cache-read-only tick can have totalIn
+  // == 0 and still be a real measurement.
   const valid = totalOut > 0 && apiMs > 0;
   const tokenHitRate =
     totalIn > 0 ? (cachedIn / totalIn) * 100 : null;
   const tokenInSpeed = apiMs > 0 ? (in_ / apiMs) * 1000 : null;
   const tokenOutSpeed = apiMs > 0 ? (out_ / apiMs) * 1000 : null;
 
-  // vX.X.X+ — per-tick token cost. Computed from stdin deltas ×
-  // tokenPrices via the 5-layer resolution cascade (config.json
-  // provider override > config.tokenPrices.json provider.model >
-  // config.tokenPrices.json provider.default > global default).
-  // Resolved at processTick time so the value is frozen in the
-  // JSONL sample and the accumulator independent of future config
-  // changes. null when no price entry matches the active model.
+  // Per-tick cost (stdin deltas × tokenPrices via the 5-layer cascade),
+  // resolved at processTick time so the value is frozen in the sample
+  // and accumulator. null when no price entry matches.
   let cost: { currency: string; value: string } | null = null;
   const modelId = tokens.modelId ?? null;
   if (modelId) {
@@ -1550,11 +1310,8 @@ function normalizeTick(
     }
   }
 
-  // v0.8.11-alpha — full-snapshot smoke diagnostic at the post-derive
-  // point: env-gated (default off), one line per tick carrying every
-  // field computed above so a postmortem can confirm accTokenHitRate /
-  // accTokenTotalIn pre-compute math at the source rather than chasing
-  // it through the read path.
+  // Env-gated full-snapshot smoke row (default off) for postmortem
+  // confirmation of the pre-compute math.
   if (isSubkeyEnabled("smokeNormalizeTick")) {
     appendDiag(
       "info",
@@ -1575,11 +1332,8 @@ function normalizeTick(
     totalOut: totalOut ?? 0,
     totalApiMs,
     apiMs: valid ? apiMs : 0,
-    // vX.X.X+ — cost is always populated so idle ticks can
-    // STALE_COLOR the last-known cost (mirrors m_tokenIn's
-    // "live but stale" pattern). Gating on `valid` would
-    // drop the cost placeholder on idle ticks because the
-    // render path reads r.cost before checking r.hasMeasurement.
+    // Always populated so idle ticks can STALE_COLOR the last-known
+    // cost (render reads r.cost before checking hasMeasurement).
     cost,
   };
 
@@ -1587,9 +1341,7 @@ function normalizeTick(
     snapshot: {
       sessionId: tokens.sessionId,
       cwd: tokens.cwd,
-      // v0.9.x — active-model id (stdin.model.id). Drives the
-      // per-model accumulator slot key and the JSONL sample.model
-      // stamp. Was modelDisplayName in v0.8.x.
+      // stdin.model.id — per-model slot key + sample.model stamp.
       modelId: tokens.modelId ?? null,
       in: in_,
       out: out_,
@@ -1613,16 +1365,9 @@ function normalizeTick(
 
 function validateNormalizedTick(tick: CurrentTick | null): boolean {
   if (!tick) return false;
-  // v0.8.10-alpha.2 — session-cumulative totals (per user contract).
-  // vX.X.X+ — totalIn dropped from the gate: totalOut + apiMs alone
-  // decide validity (a cache-read-only tick can legitimately have
-  // totalIn == 0 and still be a real measurement).
-  // v0.8.24 — MAX_SAMPLE_API_MS sanity ceiling (inclusive: a tick
-  // with apiMs <= 5min is accepted; anything above is rejected so
-  // a clock-skew / provider-bug reading cannot pollute the JSONL
-  // sample stream or the per-session accApiMs sum). The 5min cap
-  // is well above any realistic per-tick API call (typically <60s)
-  // but below the "10min pathological" marker.
+  // Validation gate (per user contract): totalOut > 0 && apiMs > 0,
+  // plus the MAX_SAMPLE_API_MS sanity ceiling (apiMs <= 5min; rejects
+  // clock-skew / provider-bug readings that would pollute the JSONL).
   return (tick.totalOut ?? 0) > 0 && tick.apiMs > 0 && tick.apiMs <= MAX_SAMPLE_API_MS;
 }
 
@@ -1630,10 +1375,8 @@ export function beginTick(cwd: string | null, tokens: TokenSnapshot | null): Tic
   const loaded = cwd ? loadFromDiskInternal(cwd) : {};
   const prevEntry = loaded[PREV_TICK_KEY];
   const prev = prevEntry?.kind === "prevTickStatus" ? prevEntry.value : null;
-  // vX.X.X+ — provider is unknown at beginTick time (runs before
-  // matchProvider in index.ts). Pass null so the initial validation
-  // gate uses config.tokenPrices.json (no provider override).
-  // processTick re-runs normalizeTick with the real provider later.
+  // Provider unknown at beginTick (pre-matchProvider): pass null so the
+  // gate uses config.tokenPrices.json; processTick re-runs it later.
   const { snapshot, measurement } = normalizeTick(tokens, prev, null);
   _tickState = {
     cwd,
@@ -1669,11 +1412,8 @@ export function commit(): void {
   const s = _tickState;
   if (!s) return;
   if (!s.cwd) return;
-  // v0.8.10-alpha.2 — flush on dirty regardless of `valid`.
-  // Validation gate now governs sample-row emission only
-  // (see processTick — `s.sample` stays null on invalid).
-  // v1.0 invariant preserved: at most one full-file rewrite per
-  // tick (one or zero).
+  // Flush on dirty regardless of `valid` — the gate governs sample-row
+  // emission only. At most one full-file rewrite per tick (invariant).
   if (!s.dirty) return;
   flushToDiskInternal(s.cwd, s.pending);
 }
@@ -1693,10 +1433,8 @@ export function beginTickForTest(
 
 // ----- Render/query helpers ----------------------------------------------------
 
-// v0.8.10-alpha.2 — peekPrevTick returns just the prev-cursor (the
-// one field the next tick subtracts against). Identity match is
-// still applied so a stale baseline from a different sessionId is
-// masked out.
+// Returns just the prev-cursor (the one field the next tick subtracts
+// against). Identity mismatch (different sessionId) → null.
 export type PrevTickSnapshot = {
   totalApiMs: number;
 };
@@ -1762,9 +1500,7 @@ export function readAccumulator(
   args: {
     sessionId?: string | null;
     cwd?: string | null;
-    // v0.9.x — active-model id (stdin.model.id). Renamed from
-    // modelDisplayName; the per-model slot key namespace now keys
-    // off the stable id, not the friendly label.
+    // stdin.model.id — per-model slot key.
     modelId?: string | null;
   },
 ): AvgSnapshot | null {
@@ -1795,39 +1531,28 @@ export function readAccumulator(
   };
 }
 
-// v0.8.10-alpha.2 — render-facing snapshot accessor. Returns the
-// current tick's snapshot + the derived apiMs (or EMPTY_TICK when
-// no tick is active). Render reads it for speed/apiMs modules and
-// pulls per-turn fields straight from here without any
-// "delta of two snapshots" math.
+// Render-facing accessor: the current tick's snapshot + derived apiMs
+// (EMPTY_TICK when no tick is active).
 export function getDeltaForRender(): TickSnapshot {
   return _tickState?.measurement ?? EMPTY_TICK;
 }
 
-// ----- Write-side helpers (compat with old data-processor surface) ------------
+// ----- Write-side helpers -----
 
 export function computeAndCacheTickDeltaPure(
   tokens: TokenSnapshot | null,
 ): TickSnapshot {
   const prev = _tickState?.prevTick ?? null;
-  // vX.X.X+ — called outside the normal tick pipeline (no provider
-  // context). Pass null so cost resolution uses config.tokenPrices.json
-  // without provider overrides.
+  // Outside the normal tick pipeline (no provider context): pass null so
+  // cost resolution uses config.tokenPrices.json without overrides.
   return normalizeTick(tokens, prev, null).measurement;
 }
 
-// v0.8.10-alpha.2 — setPrevTick now stamps only totalApiMs (the one
-// field the next tick subtracts against for `apiMs`). Identity
-// (sessionId/cwd/model) is preserved across ticks so peekPrevTick's
-// identity-mismatch guard has something to compare against.
-//
-// v0.8.23+ — `totalDurationMs` joins the cursor alongside
-// totalApiMs (added to detectRegression's regression signal).
-// setPrevTick's snap payload is preserved (legacy callers thread
-// only totalApiMs); the new field is carried forward from the
-// prev baseline so a stale setPrevTick call doesn't wipe the
-// duration history — the v0.8.11-alpha totalApiMs-only contract
-// survives on the snap argument.
+// setPrevTick stamps only totalApiMs (the field the next tick subtracts
+// for apiMs); identity is preserved for peekPrevTick's mismatch guard.
+// totalDurationMs joins the cursor for detectRegression — the snap
+// payload only carries totalApiMs (legacy contract), so the duration
+// value is carried forward from the prev baseline, not wiped.
 export function setPrevTick(
   _sessionId: string,
   snap: PrevTickSnapshot,
@@ -1836,28 +1561,18 @@ export function setPrevTick(
 ): void {
   void _sessionId;
   if (!cwd) return;
-  // v0.8.10-alpha.2 — delegate to writePrevTickStatus so the
-  // seed reaches BOTH disk (so the next beginTickForTest's
-  // loadFromDiskInternal picks it up) AND the in-memory pending
-  // map (so a same-tick setAvg call sees the seed). The earlier
-  // mark-only path wrote only to pending, which got clobbered
-  // by beginTick's loadFromDiskInternal overwrite.
+  // Delegate to writePrevTickStatus so the seed reaches both disk and
+  // the in-memory pending map (mark-only used to be clobbered).
   const prev = readPrevTickStatus(cwd) ?? emptyPrevTickStatus();
-  // v0.8.15-alpha — caller (processTick) stamps the current
-  // tick's effective contextUsedPercent into identity. We preserve
-  // the prior value when caller omits the field so a future caller
-  // that forgets to thread it doesn't accidentally wipe history
-  // (a wiped prev.contextUsedPercent would silently disable the
-  // carry-over fallback the next tick).
+  // Preserve the prior value when the caller omits contextUsedPercent —
+  // wiping it would silently disable the carry-over fallback next tick.
   const nextContextUsedPercent = identity?.contextUsedPercent !== undefined
     ? identity.contextUsedPercent
     : prev.contextUsedPercent;
   writePrevTickStatus(cwd, {
     totalApiMs: snap.totalApiMs,
-    // v0.8.23+ — legacy setPrevTick callers don't thread a new
-    // duration value; preserve the prev baseline so the cursor
-    // is not wiped. processTick's own mark() call writes the
-    // fresh value the same tick.
+    // Legacy callers don't thread a duration; preserve the prev baseline
+    // (processTick's mark() writes the fresh value same tick).
     totalDurationMs: prev.totalDurationMs,
     sessionId: identity?.sessionId ?? prev.sessionId,
     cwd: identity?.cwd ?? prev.cwd,
@@ -1897,8 +1612,7 @@ export function setLastTokenHitRate(
   mark("lastActive:tokenHitRate", { direction: "tokenHitRate", tps: pct });
 }
 
-// vX.X.X+ — coerce a raw value to a costs array. Handles legacy
-// rows (undefined / non-array) and malformed entries gracefully.
+// Coerce raw to a costs array, tolerating legacy/malformed entries.
 function coerceCostsArray(raw: unknown): Array<{ currency: string; value: string }> {
   if (!Array.isArray(raw)) return [];
   return raw.filter(
@@ -1910,10 +1624,8 @@ function coerceCostsArray(raw: unknown): Array<{ currency: string; value: string
   ) as Array<{ currency: string; value: string }>;
 }
 
-// vX.X.X+ — accumulate one per-tick cost delta into the costs array.
-// Finds the existing entry for the same currency and adds the parsed
-// values, preserving 6dp precision; appends a new entry when no match
-// exists. Never mutates the input array.
+// Accumulate one per-tick cost delta into the costs array (sums by
+// currency, toFixed(10)); never mutates the input array.
 function accumulateCosts(
   existing: Array<{ currency: string; value: string }>,
   delta: { currency: string; value: string },
@@ -1934,8 +1646,7 @@ export function setAvg(
   snap: AvgSnapshot,
   cwd?: string | null,
   extras?: {
-    // v0.9.x — active-model id (stdin.model.id). Renamed from
-    // modelDisplayName; per-model slot key now keys off the id.
+    // stdin.model.id — per-model slot key.
     modelId?: string | null;
     deltaApiCalls?: number;
     currentApiMs?: number;
@@ -1944,7 +1655,7 @@ export function setAvg(
     deltaTokenCachedIn?: number;
     deltaApiMs?: number;
     deltaTokenTotalIn?: number;
-    // vX.X.X+ — per-tick cost delta to accumulate.
+    // Per-tick cost delta to accumulate.
     deltaCost?: { currency: string; value: string } | null;
   },
 ): void {
@@ -1959,43 +1670,26 @@ export function setAvg(
   const sessionKey = `tickStatus:${sessionId}`;
   const sessionCurrent = readTickStatus(cwd, sessionKey) ?? emptyTickStatus();
   const sessionNext: TickStatusValue = { ...sessionCurrent };
-  // v0.8.24+ — first-write stamp. Stamps Date.now() on the very
-  // first write to a session slot (when startAt is null), then
-  // preserves the original value across subsequent writes. The
-  // session slot only ever has a "first write" moment — there is
-  // no regression-reset path here (session identity is bound to
-  // sessionId, which doesn't roll over).
+  // First-write stamp: Date.now() when startAt is null, then preserved.
+  // (No regression-reset path — session identity is bound to sessionId.)
   if (sessionNext.startAt == null) {
     sessionNext.startAt = Date.now();
   }
-  // v0.8.10-alpha.2 (per user refinement 2026-07-04) —
-  // `accTokenTotalIn` is an ACCUMULATE-ADDITIVE accumulator
-  // following the same shape as accTokenIn / accTokenOut /
-  // accTokenCachedIn:
-  //   accTokenTotalIn = accTokenTotalIn + tokenTotalIn
-  // The naming convention is `acc<Field>` matching the
-  // stdout prefix schema (m_accTokenTotalIn) and the on-disk
-  // TickStatusValue field. The "tokenTotalIn" value from
-  // stdin IS a per-tick snapshot (NOT cross-tick cumulative),
-  // but the ACCUMULATOR aggregates it across ticks for
-  // cross-session analytics — that's a deliberate
-  // accumulator choice, NOT a semantic confusion with
-  // "total_api_duration_ms" which IS truly cross-tick
-  // cumulative.
+  // accTokenTotalIn is accumulate-additive like the other acc fields:
+  // += the per-tick tokenTotalIn (which itself is a per-turn snapshot,
+  // NOT cross-tick cumulative — unlike cost.totalApiDurationMs).
   sessionNext.accTokenIn += snap.accTokenIn;
   sessionNext.accTokenOut += snap.accTokenOut;
   sessionNext.accTokenCachedIn += snap.accTokenCachedIn;
   sessionNext.accApiMs += snap.accApiMs;
   sessionNext.accTokenTotalIn += snap.accTokenTotalIn;
   sessionNext.accApiCalls += snap.accApiCalls;
-  // v0.8.10-alpha.3 — recompute accTokenHitRate from the post-add
-  // raw accumulators. Persisted to disk on next commit() so the
-  // render pipeline can read it straight without recomputing.
-  // Formula: accTokenCachedIn / accTokenTotalIn * 100
+  // Recompute the ratio from the post-add accumulators so render reads
+  // it straight (accTokenCachedIn / accTokenTotalIn * 100).
   sessionNext.accTokenHitRate = sessionNext.accTokenTotalIn > 0
     ? (sessionNext.accTokenCachedIn / sessionNext.accTokenTotalIn) * 100
     : 0;
-  // vX.X.X+ — accumulate per-tick cost into the costs array by currency.
+  // Accumulate per-tick cost by currency.
   if (extras?.deltaCost && extras.deltaCost.value) {
     sessionNext.costs = accumulateCosts(sessionNext.costs, extras.deltaCost);
   }
@@ -2004,9 +1698,7 @@ export function setAvg(
   const bumpDeltaScope = (key: string) => {
     const current = readTickStatus(cwd, key) ?? emptyTickStatus();
     const next: TickStatusValue = { ...current };
-    // v0.8.24+ — same first-write stamp rule as the session
-    // slot. For project/model, the "first write" branch fires
-    // when the slot's startAt is null (no prior history).
+    // Same first-write stamp rule as the session slot.
     if (next.startAt == null) {
       next.startAt = Date.now();
     }
@@ -2014,19 +1706,14 @@ export function setAvg(
     next.accTokenOut += deltaTokenOut;
     next.accTokenCachedIn += deltaTokenCachedIn;
     next.accApiMs += deltaApiMs;
-    // v0.8.10-alpha.2 — session / project / model all accumulate
-    // `accTokenTotalIn` additively: `+= tokenTotalIn` per tick,
-    // identical to accTokenIn / accTokenOut / accTokenCachedIn.
+    // All scopes accumulate accTokenTotalIn additively (like the other acc fields).
     next.accTokenTotalIn += deltaTokenTotalIn;
     next.accApiCalls += incrementCalls;
-    // v0.8.10-alpha.3 — same derived-field recompute as the
-    // session slot. After every scope bump, the cached ratio is
-    // refreshed so m_accTokenHitRate can read straight.
-    // Formula: accTokenCachedIn / accTokenTotalIn * 100
+    // Refresh the cached ratio after every scope bump.
     next.accTokenHitRate = next.accTokenTotalIn > 0
       ? (next.accTokenCachedIn / next.accTokenTotalIn) * 100
       : 0;
-    // vX.X.X+ — accumulate per-tick cost into the costs array by currency.
+    // Accumulate per-tick cost by currency.
     if (extras?.deltaCost && extras.deltaCost.value) {
       next.costs = accumulateCosts(next.costs, extras.deltaCost);
     }
@@ -2050,40 +1737,25 @@ export function processTick(
   const prevEntry = s.pending[PREV_TICK_KEY];
   const prev = prevEntry?.kind === "prevTickStatus" ? prevEntry.value : null;
   const { snapshot, measurement } = normalizeTick(tokens, prev, provider);
-  // v0.8.15-alpha — measurement reflects the freshest normalizeTick
-  // result even on invalid ticks. The render path's computeTickDelta
-  // reads r.in / r.out here, gated on r.hasMeasurement; surfacing a
-  // 0-with-hasMeasurement-false on invalid keeps the line consistent
-  // with the prior v1.0 contract (no partial-write visibility to
-  // render) rather than carrying the EMPTY_TICK zeros forward.
+  // measurement always reflects the freshest normalizeTick result even
+  // on invalid ticks (0 + hasMeasurement=false keeps the line
+  // consistent with the v1.0 contract).
   s.snapshot = snapshot;
   s.valid = validateNormalizedTick(snapshot);
   s.measurement = measurement;
 
-  // v0.8.29 — Stage 0: cold-slot JSONL replay. For each
-  // tickStatus:<dim> slot that has no startAt on disk (state.json
-  // was wiped / never existed), scan the JSONL history and
-  // re-populate the slot with the recovered aggregate BEFORE
-  // setAvg mutates it. The subsequent setAvg will additively
-  // merge this tick's delta on top of the recovered base, and
-  // commit() flushes everything in a single full-file rewrite
-  // (v1.0 invariant preserved).
-  //
-  // Replay runs even when s.valid is false (invalid tick —
-  // cwd + sessionId are still known). The recovered aggregate
-  // is the historical truth; the invalid tick's delta is dropped
-  // because setAvg is gated on s.valid. If commit() later
-  // flushes the slot without this tick's delta, that's the
-  // correct outcome — we preserved the historical aggregate
-  // without polluting it with a bad row.
+  // Stage 0: cold-slot JSONL replay — for each tickStatus:<dim> slot
+  // with no startAt, recover the aggregate from JSONL history BEFORE
+  // setAvg mutates it (setAvg then merges this tick's delta on top;
+  // commit flushes in one rewrite). Runs even on invalid ticks: the
+  // recovered base is historical truth, and the invalid delta is
+  // dropped (setAvg is gated on s.valid), so history isn't polluted.
   const REPLAY_SCOPES = ["session", "project", "model"] as const;
   if (cwd && tokens?.sessionId) {
     const replayArgs = {
       sessionId: tokens.sessionId,
       cwd,
-      // v0.9.x — pass modelId (stdin.model.id) into replayAccKey
-      // so the per-model slot key namespace aligns with the new
-      // sample.model stamp.
+      // Pass stdin.model.id so the per-model slot key aligns with sample.model.
       modelId: tokens.modelId ?? null,
     };
     for (const scope of REPLAY_SCOPES) {
@@ -2108,35 +1780,19 @@ export function processTick(
     }
   }
 
-  // v0.8.10-alpha.2 — prev-tick baseline update fires BEFORE the
-  // validity guard, so it reaches disk even on an invalid tick
-  // (apiMs == -1). The commit gate in commit() is no longer gated
-  // on `valid`, so `dirty === true` is sufficient to flush
-  // `pending`.
+  // Prev cursor is staged AFTER the validity guard so an invalid tick
+  // never advances it (the guard returns before the mark below).
 
   if (!s.valid || !snapshot || !tokens?.sessionId) {
     s.sample = null;
     return;
   }
 
-  // Stage the prev-cursor. The next tick reads `prev.totalApiMs`
-  // to compute `apiMs = current - prev`, `prev.totalDurationMs`
-  // to compute the regression signal (see `detectRegression`),
-  // and `prev.contextUsedPercent` to substitute a real prior
-  // value when stdin mistakenly reports `used_percentage=0`
-  // (see applyContextUsedPercentCarryOver).
-  // `tokens.contextWindow.contextUsedPercent` is already the
-  // post-carry-over value when normalizeTick has run, so reading
-  // it here persists the substituted value to disk.
-  //
-  // v0.8.23+ — totalDurationMs is sourced from stdin
-  // `cost.total_duration_ms`. It's a separate counter from
-  // totalApiMs (the latter tracks per-call API roundtrips; the
-  // former tracks the cc process wall-clock). It increments on
-  // every tick and survives longer API-idle gaps, making it a
-  // more reliable regression signal — see [[detectRegression-totaldurationms]].
-  // When stdin omits the field (older producers), fall back to
-  // the prev value so the regression check still has a baseline.
+  // Stage the prev-cursor: the next tick reads totalApiMs (apiMs =
+  // current - prev), totalDurationMs (regression signal), and
+  // contextUsedPercent (carry-over for a mistaken 0). totalDurationMs
+  // is sourced from stdin cost.total_duration_ms; when stdin omits it,
+  // fall back to the prev value so the check keeps a baseline.
   const prevForCarry = prevEntry?.kind === "prevTickStatus"
     ? prevEntry.value
     : null;
@@ -2151,16 +1807,9 @@ export function processTick(
     contextUsedPercent: tokens.contextWindow?.contextUsedPercent ?? null,
   });
 
-  // Accumulators get the current snapshot values straight — no
-  // cross-tick subtraction on per-turn fields. `accTokenTotalIn` keeps its
-  // own internal last-value semantics (see setAvg) so the user's
-  // `m_accTokenIn|field|total` line-template still gets a meaningful
-  // delta accumulator.
-  // v0.8.10-alpha.3 — accTokenHitRate is pre-computed here (raw
-  // accumulators) so the per-session slot READS it directly
-  // without recomputation. Stage 4 below refines it on subsequent
-  // ticks; this initial value is correct for the very first tick
-  // when no prior state exists.
+  // Accumulators get snapshot values straight (no cross-tick
+  // subtraction on per-turn fields). accTokenHitRate is pre-computed
+  // here so the per-session slot reads it directly.
   const initialCachedIn = snapshot.hasCachedIn ? snapshot.cachedIn : 0;
   const initialTokenTotalIn = snapshot.totalIn ?? 0;
   setAvg(tokens.sessionId, {
@@ -2174,7 +1823,7 @@ export function processTick(
       ? (initialCachedIn / initialTokenTotalIn) * 100
       : 0,
   }, cwd, {
-    // v0.9.x — pass modelId through to setAvg's per-model slot.
+    // Pass stdin.model.id through to setAvg's per-model slot.
     modelId: tokens.modelId ?? null,
     deltaApiCalls: 1,
     deltaTokenIn: snapshot.in,
@@ -2224,9 +1873,7 @@ export function processAndSaveTick(
   beginTick(cwd, tokens);
   processTick(cwd, tokens, provider);
   const s = getState();
-  // v0.8.10-alpha.2 — `s.valid` no longer gates flush. Sample-row
-  // emission is still gated on `s.valid` (invalid ticks don't have
-  // a meaningful row to append).
+  // `valid` doesn't gate state flush — only sample-row emission.
   const shouldWriteState = !!s.cwd && s.dirty;
   commit();
   let wroteSample = false;

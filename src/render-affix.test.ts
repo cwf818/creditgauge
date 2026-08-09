@@ -1,28 +1,9 @@
-// vX.X.X+ — m_* prefix/suffix auto-space tests. Spec:
-// docs/superpowers/specs/2026-08-08-m-affix-autospace-design.md
-// prefixSpace (default true) auto-prepends a space before each m_*
-// module (except m_label / m_template) per R1/R2/R3; suffixSpace
-// (default false) auto-appends before a following module. Explicit
-// |prefix:| / |suffix:| always overrides the global default.
-//
-// NOTE vs the implementation plan's Task 2 test file:
-//  - imports corrected to the real module layout (`__resetForTest as
-//    resetCacheForTest` from cache.ts; resetTickStateForTest /
-//    beginTickForTest live in status-store.ts, not tick-state.ts).
-//  - the "color span" assertion checks the prefix precedes the actual
-//    red SGR this codebase emits (`\x1b[38;5;196m`), not `\x1b[31m`.
-//
-// vX.X.X+ — the s_space cleanup byte-identity sweep (which rendered
-// every built-in from its pre-cleanup snapshot in
-// src/__fixtures__/pre-affix-templates.ts and compared to the
-// cleaned registries) is GONE. The user redesigned the fragment
-// library + presets on top of the cleanup — the key sets now differ
-// (fragments removed/renamed), so the sweep's key-set + content
-// assertions are obsolete. In its place is a lightweight preset
-// render guard (see the bottom of this file): render each remaining
-// preset (simple / compact / standard) under prefixSpace=true with a
-// deterministic ctx and assert the output is non-empty and free of
-// double spaces.
+// vX.X.X+ — m_* prefix/suffix auto-space tests. prefixSpace (default
+// true) prepends a space before each m_* module (except m_label /
+// m_template); suffixSpace (default false) appends before a following
+// module; explicit |prefix:| / |suffix:| always overrides.
+// The obsolete s_space-cleanup byte-identity sweep is gone; in its
+// place is a lightweight preset render guard at the bottom of the file.
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";

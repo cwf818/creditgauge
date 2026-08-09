@@ -1,18 +1,11 @@
-// Pure rendering helpers: split-bar (left colorless / right colored),
-// 5-band thresholds, ANSI coloring, and line assembly.
+// Pure rendering helpers: split-bar, 5-band thresholds, ANSI coloring,
+// and line assembly. All tunable values come from the singleton in
+// ./config.ts. The line layout is driven by the `statuslineTemplate`
+// config field — an ordered list of display-module tokens and
+// separator references.
 //
-// All tunable values (colors, thresholds, bar geometry, currency
-// prefixes, display-mode labels, stale annotation formatting) come
-// from the singleton in ./config.ts. The defaults in config.ts match
-// today's hardcoded values exactly.
-//
-// v0.2.17: the line layout is now driven by a `lineTemplate` config
-// field — an ordered list of display-module tokens (m_modeLabel,
-// m_window5h, m_countdown5h, m_window7d, m_countdown7d, m_balance,
-// m_age, m_version) and separator references (s_0, s_1, …). New
-// code should call `renderProviderLine` directly with the open-ended
-// `intervals` dict shape (v0.9.4) so non-reserved terms aren't
-// dropped on the floor.
+// Render is READ-ONLY against the per-tick in-memory state; all writes
+// go through src/status-store.ts (processTick + single commit()).
 
 import { configStore, warn } from "./config.ts";
 import { normalizeUrl } from "./utils.ts";
@@ -41,9 +34,7 @@ import {
 import { readGitInfo } from "./git-info.ts";
 import * as statusStore from "./status-store.ts";
 import * as cache from "./cache.ts";
-// v0.8.17+ — m_memUsage data source. Darwin shells out to
-// `vm_stat` for active+wired pages; other platforms fall back to
-// os.totalmem() - os.freemem().
+// m_memUsage data source: Darwin shells out to `vm_stat`, others use os.*.
 import * as os from "node:os";
 import { execSync } from "node:child_process";
 export type { PrevTickSnapshot, AvgSnapshot };
@@ -51,70 +42,44 @@ export type { PrevTickSnapshot, AvgSnapshot };
 type Window = {
   // Percentage USED in [0, 100]. May be fractional; we'll round.
   pct: number;
-  // ISO timestamp string when the window resets, if known.
+  // ISO timestamp when the window resets, if known.
   resetAt?: string | null;
-  // ISO timestamp string for when the current window STARTED. Paired with
-  // resetAt so we can compute the window's total duration and pick a
-  // fill-state-appropriate reset arrow (⏳ when plenty of time remains,
-  // ⌛ when the window is mostly consumed). Optional — DeepSeek has no
-  // such concept, so missing fields fall back to the legacy single-arrow.
+  // ISO timestamp when the current window STARTED. Paired with resetAt to
+  // compute duration + pick a fill-state arrow; missing on providers with no
+  // window concept (DeepSeek), which falls back to the legacy single arrow.
   resetStartAt?: string | null;
-  // Window length in milliseconds (resetAt - resetStartAt). Optional;
-  // required for the split-arrow logic, falls back to a single arrow when
-  // missing. Kept as a separate field so callers don't have to re-parse the
-  // ISO strings inside hot render paths.
+  // Window length in ms (resetAt - resetStartAt). Required for the split-arrow
+  // logic; kept separate so hot render paths don't re-parse the ISO strings.
   resetDurationMs?: number | null;
 };
 
-// v0.9.x — unified interval shape. Replaces the v0.5.0–v0.8.x
-// pair-of-Windows model (`Quota.fiveHour` / `Quota.weekly`) with
-// three independent intervals. v0.9.4 — those three slots collapse
-// into a single open-ended `intervals` dict
-// (`Record<string, Interval|null>`); the three reserved keys
-// ("short" / "mid" / "long") ship with the historical windowId
-// defaults (5h / 7d / 30d) so existing renders stay byte-identical
-// after upgrade. The fields are populated by the plugin's
-// `fillQuota` and normalised by `ensureInterval` in
-// src/plugins/parsers.ts. The renderer (m_windowQuota / m_countdown /
-// m_quota) reads these fields directly. `Window` (above) is still the
-// shape `formatOneChunk` and `formatOneResetSuffix` consume;
-// `intervalToWindow` (below) projects an `Interval` → `Window` when
-// the gauge / countdown rendering path needs to fire.
+// Unified interval shape. The `intervals` dict is open-ended; the three
+// reserved keys ("short" / "mid" / "long") ship with windowId defaults
+// 5h / 7d / 30d. Fields are populated by the plugin's `fillQuota` and
+// normalised by `ensureInterval` in src/plugins/parsers.ts.
+// `intervalToWindow` (below) projects an `Interval` → `Window` for the
+// gauge / countdown renderers.
 export type Interval = {
-  // Built-in defaults: shortInterval → "5h", midInterval → "7d",
-  // longInterval → "30d". Configurable via `intervals.<key>.windowId`.
-  //
-  // vX.X.X — `windowId` is now `string`, not the v0.9.0 closed
-  // union "5h" | "7d" | "30d", because user-supplied `intervals.*.
-  // windowId` values flow through to runtime Intervals verbatim
-  // (config.ts auto-prefixes digit-leading values with `w` so they
-  // can never be mistaken for a parseable dhms string, but
-  // otherwise any string identifier is allowed). Field is purely
-  // a label — the renderer reads `iv.label` (defaulting to the
-  // same value) for display, NOT `iv.windowId`, so widening has
-  // no observable effect on existing renders.
+  // Free-form string identifier (any value allowed; config.ts auto-prefixes
+  // digit-leading values with `w`). Purely a label — the renderer reads
+  // `iv.label` for display, NOT `iv.windowId`, so widening is invisible.
   windowId: string;
-  // Built-in default: same as windowId. Configurable via
-  // `intervals.<key>.label`. The renderer reads this to print the
-  // window's display label (e.g. "5h" in `quota: 123/500`).
+  // Built-in default: same as windowId. Printed as the window's display label
+  // (e.g. "5h" in `quota: 123/500`).
   label: string;
   // Epoch ms when the window started, or null if unknown.
   startAt: number | null;
   // Epoch ms when the window resets, or null if unknown.
   endAt: number | null;
-  // Window length in ms (derived endAt - startAt when both are
-  // present and the user didn't supply intervalMs directly). Used
-  // by the renderer's fill-state arrow picker. Null when neither
-  // startAt nor endAt nor intervalMs is available.
+  // Window length in ms (endAt - startAt when both are present and the user
+  // didn't supply intervalMs directly). Used by the fill-state arrow picker.
   intervalMs: number | null;
-  // [0, 100] — at least one of {remainingPercent, usedPercent}
-  // is always non-null after ensureInterval. The two are
-  // mirror-derived when only one is mapped.
+  // [0, 100] — at least one of {remainingPercent, usedPercent} is always
+  // non-null after ensureInterval; the two are mirror-derived.
   remainingPercent: number | null;
   usedPercent: number | null;
-  // Quota group — integer units (no normalization). Any subset of
-  // {remainingQuota, usedQuota, limitQuota} may be present; the
-  // renderer (`m_quota`) decides what's enough to render.
+  // Quota group — integer units (no normalization). Any subset may be present;
+  // `m_quota` decides what's enough to render.
   remainingQuota: number | null;
   usedQuota: number | null;
   limitQuota: number | null;
@@ -122,13 +87,9 @@ export type Interval = {
 
 type DisplayMode = "remaining" | "used";
 
-// v0.9.0+ — interval-term selector used by m_windowQuota / m_countdown /
-// m_quota. v0.9.4 — the `intervals` dict is open, so the term is no
-// longer a closed union; it can be any string the plugin declared.
-// TERM_PARAM accepts the byte-for-byte inline resolver behaviour
-// — the renderer reads `ctx.intervals[term]` for ANY string, so
-// passing e.g. `m_windowQuota|term|monthly` just works
-// (placeholder when the key is missing).
+// Interval-term selector used by m_windowQuota / m_countdown / m_quota.
+// The `intervals` dict is open-ended, so `term` accepts any string the plugin
+// declared; the renderer reads `ctx.intervals[term]` (placeholder when missing).
 
 // Shorthand for the active config snapshot. Reading configStore.get()
 // on every call would be wasteful for hot paths (every
@@ -138,65 +99,38 @@ function cfg() {
   return configStore.get();
 }
 
-// v0.8.22+ — top-level token-label resolver. Each call reads
-// configStore (same lazy-read pattern as `cfg()`) and returns the
-// configured prefix for the requested axis. v0.8.22 unified all
-// label names under the `labelToken*` / `labelApi*` namespace so
-// a user who overrides one family member (e.g. `labelTokenIn`)
-// sees the rename propagate consistently to every module that
-// reads the same semantic axis (`m_tokenIn` / `m_accTokenIn` /
-// `m_sumTokenIn`):
-//   "in"        → cfg().labels.labelTokenIn
-//   "out"       → cfg().labels.labelTokenOut
-//   "cacheIn"   → cfg().labels.labelTokenCachedIn
-//   "totalIn"   → cfg().labels.labelTokenTotalIn
-//   "inSpeed"   → cfg().labels.labelTokenInSpeed
-//   "outSpeed"  → cfg().labels.labelTokenOutSpeed
-//   "apiMs"     → cfg().labels.labelApiMs
-//   "apiCalls"  → cfg().labels.labelApiCalls
-//   "memUsage"  → cfg().labels.labelMemUsage
-//   "hitRate"   → cfg().labels.labelTokenHitRate (v0.8.22+; was
-//                  hardcoded "hit:" before — see `src/render.ts`
-//                  m_tokenHitRate / m_accTokenHitRate /
-//                  m_sumTokenHitRate)
-//
-// Defaults reproduce the v0.8.x literal strings ("in:" / "out:"
-// / "cache:" / "Total:" / "api:" / "calls:" / "hit:" / "Mem:")
-// so existing line templates render byte-identical until the user
-// overrides `labels.*` in config.json. Speed defaults are
-// intentionally independent of the corresponding in/out token-
-// axis defaults so a user who renames `labelTokenIn` for the
-// token-axis family can keep the speed axis reading as
-// "in:12.3/s" (or override it independently).
+// Top-level token-label resolver. Reads configStore (lazy, same as `cfg()`)
+// and returns the configured prefix for the requested axis. All label names
+// live under the `labelToken*` / `labelApi*` namespace so overriding one
+// family member propagates to every module on that semantic axis
+// (`m_tokenIn` / `m_accTokenIn` / `m_sumTokenIn` all read labelTokenIn):
+//   "in" → labelTokenIn, "out" → labelTokenOut, "cacheIn" → labelTokenCachedIn,
+//   "totalIn" → labelTokenTotalIn, "inSpeed" → labelTokenInSpeed,
+//   "outSpeed" → labelTokenOutSpeed, "apiMs" → labelApiMs,
+//   "apiCalls" → labelApiCalls, "memUsage" → labelMemUsage,
+//   "hitRate" → labelTokenHitRate
+// Defaults reproduce the v0.8.x literals ("in:" / "out:" / "cache:" /
+// "Total:" / "api:" / "calls:" / "hit:" / "Mem:") so existing templates
+// render byte-identical. Speed defaults are intentionally independent of the
+// in/out token-axis defaults.
 type LabelAxis =
   | "in" | "out" | "cacheIn" | "totalIn"
   | "inSpeed" | "outSpeed" | "apiMs" | "apiCalls"
-  | "memUsage" // v0.8.36+ windowMemUsage axis removed in the bar+percent refactor (parallel of m_windowContext)
-  | "memUsed" | "memTotal" // vX.X.X+ — m_memUsed / m_memTotal label axis
-  | "hitRate"   // v0.8.22+ — lifted out of hardcoded literal
-  | "contextSize" | "contextWindowSize" | "contextUsedPercent" | "contextRemainingPercent" // v0.8.23+
-  | "contextUsage" // vX.X.X+ — m_contextUsage two-tone x/y prefix ("ctx:")
-  | "startTime" | "endTime" // v0.8.24+ — start/end of the tick statistics window
-  | "quota"   // v0.9.0+ — quota module prefix ("quota: 123/500")
-  | "cost"    // vX.X.X+ — token cost module prefix ("cost:$0.0123")
-  | "est"     // vX.X.X+ — periodic quota estimate prefix ("est:$30.20")
-  | "pluginSystem"        // vX.X.X+ — m_pluginSource glyph when built-in (default "⚙")
-  | "pluginUserDefined"   // vX.X.X+ — m_pluginSource glyph when user override (default "🎨")
-  | "pluginCC"            // vX.X.X+ — m_pluginSource glyph reserved for the
-                          // future "claude 官方" branch (data from stdin).
-                          // Default "🔖"; not yet wired into the renderer's
-                          // dispatch table (per the user's "CC 分支暂不做实现"
-                          // decision 2026-07-12) — the axis is here so the
-                          // label is overridable via labels.labelPluginCC
-                          // without a follow-up type change.
-  | "pluginMissing"       // vX.X.X+ — m_pluginSource glyph when the matched
-                          // provider id has no plugin (neither user override
-                          // nor built-in). Default "❗".
-  // vX.X.X+ — m_branch|withStatus:true clean/dirty suffix glyphs
-  // (defaults "✅" / "🟠"; overridable via labels.labelGitClean /
-  // labels.labelGitDirty).
-  | "gitClean"
-  | "gitDirty";
+  | "memUsage" | "memUsed" | "memTotal"
+  | "hitRate"
+  | "contextSize" | "contextWindowSize" | "contextUsedPercent" | "contextRemainingPercent"
+  | "contextUsage"           // "ctx:" two-tone x/y prefix
+  | "startTime" | "endTime"  // tick statistics window start/end
+  | "quota"                  // "quota: 123/500"
+  | "cost"                   // token cost prefix
+  | "est"                    // periodic quota estimate prefix
+  | "pluginSystem"        // m_pluginSource glyph — built-in (default "📌")
+  | "pluginUserDefined"   // m_pluginSource glyph — user override (default "🎨")
+  | "pluginCC"            // m_pluginSource glyph — reserved "claude 官方" branch (default
+                          // "🔖"); not yet wired into the dispatch table (CC 分支暂不做实现
+                          // 2026-07-12), but overridable via labels.labelPluginCC.
+  | "pluginMissing"       // m_pluginSource glyph — matched provider id has no plugin (default "❗")
+  | "gitClean" | "gitDirty";  // m_branch|withStatus:true clean/dirty suffix glyphs (defaults "✅" / "🟠")
 function labelFor(axis: LabelAxis): string {
   const labels = cfg().labels;
   switch (axis) {
@@ -212,68 +146,44 @@ function labelFor(axis: LabelAxis): string {
     case "memUsed": return labels.labelMemUsed;
     case "memTotal": return labels.labelMemTotal;
     case "hitRate": return labels.labelTokenHitRate;
-    // v0.8.23+ — context-window prefix knobs (were hardcoded
-    // "size:" / "size:" / "used:" / "remain:" in v0.8.22).
+    // Context-window prefixes ("size:" / "used:" / "remain:").
     case "contextSize": return labels.labelContextSize;
     case "contextWindowSize": return labels.labelContextWindowSize;
     case "contextUsedPercent": return labels.labelContextUsedPercent;
     case "contextRemainingPercent": return labels.labelContextRemainingPercent;
     case "contextUsage": return labels.labelContextUsage;
-    // v0.8.24+ — start/end of the tick statistics window.
-    // m_accStartTime / m_sumStartTime use labelStartTime;
-    // m_sumEndTime uses labelEndTime. Defaults "start:" / "end:"
-    // (per config.ts:DEFAULT_CONFIG.labels).
+    // Start/end of the tick statistics window. Defaults "start:" / "end:".
     case "startTime": return labels.labelStartTime;
     case "endTime": return labels.labelEndTime;
-    // v0.9.0+ — quota module prefix. Default "quota: " (trailing
-    // space, set in config.ts:DEFAULT_CONFIG.labels.labelQuota).
-    // Reads "used/limit" in `m_quota|term|short`'s body, e.g.
-    // "quota: 123/500".
+    // Quota module prefix, default "quota: " (trailing space).
     case "quota": return labels.labelQuota;
-    // vX.X.X+ — token cost module prefix. Default "cost:" (set in
-    // config.ts:DEFAULT_CONFIG.labels.labelTokenCost). Read by
-    // m_tokenCost / m_accTokenCost / m_sumTokenCost.
+    // Token cost module prefix, default "cost:".
     case "cost": return labels.labelTokenCost;
-    // vX.X.X+ — periodic quota estimate prefix. Default "est:" (set
-    // in config.ts:DEFAULT_CONFIG.labels.labelEstQuota). Read by
-    // m_sumEstQuota.
+    // Periodic quota estimate prefix, default "est:".
     case "est": return labels.labelEstQuota;
-    // vX.X.X+ — m_pluginSource glyph axes. Defaults "📌" / "🎨" /
-    // "🔖" / "❗" (set in config.ts:DEFAULT_CONFIG.labels). Users
-    // override via labels.labelPluginSystem /
-    // labels.labelPluginUserDefined / labels.labelPluginCC /
-    // labels.labelPluginMissing — anything string-shaped works
-    // (e.g. "B:", "🔧", "[built-in]").
+    // m_pluginSource glyphs, defaults "📌" / "🎨" / "🔖" / "❗".
     case "pluginSystem":       return labels.labelPluginSystem;
     case "pluginCC":           return labels.labelPluginCC;
     case "pluginMissing":      return labels.labelPluginMissing;
     case "pluginUserDefined":  return labels.labelPluginUserDefined;
-    // vX.X.X+ — m_branch|withStatus:true clean/dirty suffix glyphs.
-    // Defaults "✅" / "🟠" (config.ts:DEFAULT_CONFIG.labels).
+    // m_branch|withStatus:true clean/dirty suffix glyphs, defaults "✅" / "🟠".
     case "gitClean": return labels.labelGitClean;
     case "gitDirty": return labels.labelGitDirty;
   }
 }
 
-// vX.X.X+ — for the bare MODULES render path (which receives a
-// pre-prefixed string from helpers like computeTickDelta /
-// computeTickSpeed / accBody): strip the leading label verbatim
-// when ctx.passThrough?.valueOnly === "true". Cheap string-prefix
-// check — label defaults are short ASCII ("in:", "out:", etc.)
-// and the value-only path is opt-in. Falls through to the original
-// value when the prefix doesn't match (defensive: the placeholder
-// path might emit "n/a" without a label, and we don't want to
-// chop it).
+// For the bare MODULES render path (which receives a pre-prefixed string from
+// helpers like computeTickDelta / computeTickSpeed / accBody): strip the
+// leading label when valueOnly. Falls through when the prefix doesn't match
+// (the placeholder path may emit "n/a" without a label).
 function stripLabelIfValueOnly(value: string, axis: LabelAxis, strip: boolean): string {
   if (!strip) return value;
   const prefix = labelFor(axis);
   return value.startsWith(prefix) ? value.slice(prefix.length) : value;
 }
 
-// v0.8.17+ — system RAM byte formatter. 1024-base (matches
-// ccstatusline / htop / macOS Activity Monitor convention). G tier
-// uses .toFixed(1), M/K tiers use .toFixed(0). Returns "n/a" on
-// null so the call site can simply template-literal concat.
+// System RAM byte formatter (1024-base). G tier uses .toFixed(1), M/K use
+// .toFixed(0). Returns "n/a" on null so call sites can concat directly.
 export function formatMemBytes(bytes: number | null): string {
   if (bytes == null) return "n/a";
   const GB = 1024 ** 3;
@@ -285,20 +195,12 @@ export function formatMemBytes(bytes: number | null): string {
   return `${bytes}B`;
 }
 
-// v0.8.24+ — format a Unix-ms timestamp as `HH:MM:SS` local
-// time (or, with `opts.abs === true`, as `YYYY-MM-DD HH:MM:SS`).
-// Used by m_accStartTime / m_sumStartTime / m_sumEndTime to
-// render the start/end of the tick statistics window. The
-// sv-SE locale is the documented "give me an ISO8601-shaped
-// local time" idiom (same as diagnostics.ts:localIso) — it
-// produces a 24-hour clock, no AM/PM, no leading-zero drop, no
-// locale-dependent surprise formatting. With year/month/day
-// added it produces `YYYY-MM-DD` so the abs form reads
-// `YYYY-MM-DD HH:MM:SS` end-to-end — no `T` separator, just a
-// literal space, so ANSI layouts stay clean.
-//
-// Returns "n/a" on null / non-finite / non-positive inputs so
-// call sites can simply template-literal concat.
+// Format a Unix-ms timestamp as `HH:MM:SS` local time (or
+// `YYYY-MM-DD HH:MM:SS` with opts.abs). Used by m_accStartTime /
+// m_sumStartTime / m_sumEndTime. The sv-SE locale is the documented
+// "ISO8601-shaped local time" idiom (24h clock, no AM/PM) — same as
+// diagnostics.ts:localIso. Returns "n/a" on null / non-finite / non-positive
+// inputs so call sites can concat directly.
 export function formatAbsTime(
   epochMs: number | null | undefined,
   opts: { abs?: boolean } = {},
@@ -327,13 +229,10 @@ export function formatAbsTime(
   });
 }
 
-// v0.8.17+ — sample system memory. Darwin shells out to `vm_stat`
-// for active+wired pages (matches ccstatusline's htop-style
-// calculation; more accurate than os.freemem on macOS because it
-// includes inactive but reclaimable memory). Other platforms fall
-// back to os.totalmem() - os.freemem(). Returns null only when the
-// vm_stat output cannot be parsed on Darwin (sandbox / restricted
-// shell fall through to the os.* path inside the catch).
+// Sample system memory. Darwin shells out to `vm_stat` for active+wired pages
+// (more accurate than os.freemem on macOS); other platforms use os.totalmem() -
+// os.freemem(). Returns null only when vm_stat can't be parsed (the catch
+// falls through to the os.* path).
 function getMemUsage(): { used: number; total: number } | null {
   const total = os.totalmem();
   let used: number;
@@ -376,25 +275,15 @@ export const RED = configStore.get().colors.red;
 // Used for the stale-on-error annotation (" · 5m ago"). ANSI bright black
 // (\x1b[90m) reads as "dim gray" on both light and dark terminals.
 export const STALE_COLOR = configStore.get().colors.stale;
-// v0.6.0+ — distinct color for the BROKEN-chain "⛓️‍💥 X ago" annotation
-// emitted when the fetch failed AND we're rendering the last cached
-// value (formatStaleSuffix with healthy=false). Splits the gray stale
-// color into a two-axis vocabulary: gray for "informational / fresh
-// but stale-data" (🔗), dark red for "degraded / fetch failed" (⛓️‍💥).
-// Default `\x1b[31m` (basic dark red) — high contrast on light/dark
-// terminals, no 256-color palette dependence.
+// Distinct color for the BROKEN-chain "⛓️‍💥 X ago" annotation (fetch failed,
+// rendering cached value). Splits the gray stale vocabulary: gray for
+// informational 🔗, dark red for degraded ⛓️‍💥. Default `\x1b[31m`.
 export const BROKEN_COLOR = configStore.get().colors.broken;
 
-// v0.8.37.1 — thresholds.percentBands is indexed against usedPct
-// regardless of display mode. Both modes share the same danger axis
-// ("how much of the window have I spent?") so the color follows
-// usedPct-derived band 0..4 from paletteByUsed() alone. The
-// v0.8.36-era reverse-palette trick was removed: under the
-// asymmetric default [60,70,80,90] it produced non-intuitive colors
-// at the high-remaining end (remaining=60 → ORANGE when users
-// expected DARK_GREEN). Mode-symmetric semantic: remaining=N
-// mirrors used=100-N; both display modes agree at the same danger
-// level.
+// thresholds.percentBands is indexed against usedPct regardless of display
+// mode — both modes share the same danger axis ("how much have I spent?").
+// remaining=N mirrors used=100-N, so both display modes agree at the same
+// danger level.
 function colorThresholds(): readonly number[] {
   return cfg().thresholds.percentBands;
 }
@@ -409,12 +298,10 @@ function paletteByUsed(): readonly string[] {
 }
 
 function bandIndex(value: number, thresholds: readonly number[]): number {
-  // thresholds[i] is the upper bound for band i (exclusive on the low end).
-  // 5 bands total: [0, t0), [t0, t1), [t1, t2), [t2, t3), [t3, 100].
-  // Values exactly AT a threshold belong to the band above it (the less
-  // dangerous band) — this matches the natural reading of "0/20/40/60/80"
-  // where 20 itself marks the transition INTO dark green, not the end of
-  // bright green.
+  // thresholds[i] is the upper bound of band i (low-exclusive): 5 bands
+  // [0,t0)..[t3,100]. Values exactly AT a threshold fall in the band above
+  // (less dangerous) — matching "0/20/40/60/80" where 20 is the transition
+  // into dark green.
   const v = Math.max(0, Math.min(100, value));
   for (let i = 0; i < thresholds.length; i++) {
     if (v < thresholds[i]) return i;
@@ -423,27 +310,18 @@ function bandIndex(value: number, thresholds: readonly number[]): number {
 }
 
 export function colorFor(displayedPct: number, mode: DisplayMode): string {
-  // Index the palette against usedPct regardless of display mode.
-  // In "remaining" mode the user is staring at a remaining percentage,
-  // but the danger axis is still "how much have I spent?" — so flip
-  // to usedPct before banding. result: remaining=60 → used=40 →
-  // band 0 (bright green) under the [60,70,80,90] default.
+  // Index against usedPct regardless of mode: remaining=60 → used=40 →
+  // band 0 under the [60,70,80,90] default.
   const usedPct = mode === "remaining" ? 100 - displayedPct : displayedPct;
   const idx = bandIndex(usedPct, colorThresholds());
   return paletteByUsed()[idx];
 }
 
-// Split-bar with a fixed positional layout:
-//   [<USED cells>][<REMAINING cells>]
-// USED cells use the configured "filled" glyph (default ▓), REMAINING
-// cells use the configured "empty" glyph (default ░). The side that
-// gets COLORED depends on the mode:
-//   used mode      → color the LEFT (used cells)     — colored by used%
-//   remaining mode → color the RIGHT (remaining cells) — colored by remaining%
-// This is the unified rule "left = used, right = remaining; the metric the
-// user is thinking about as 'danger' is the one that gets the color".
+// Split-bar: [<USED cells>][<REMAINING cells>]. USED cells use the "filled"
+// glyph (▓), REMAINING use "empty" (░). The colored side is the "metric of
+// concern": left (used) in used mode, right (remaining) in remaining mode.
 type SplitBar = {
-  leftChunk: string; // LEFT half of bar — colored if mode==='used', plain otherwise
+  leftChunk: string;  // LEFT half of bar — colored if mode==='used', plain otherwise
   rightChunk: string; // RIGHT half of bar — colored if mode==='remaining', plain otherwise
   color: string;
 };
@@ -466,12 +344,10 @@ export function splitBar(
   const filled = cfg().bar.filled;
   const empty = cfg().bar.empty;
 
-  // Layout: left = used cells, right = remaining cells. The side that
-  // gets color wraps is the "metric of concern" (used in "used" mode,
-  // remaining in "remaining" mode). Glyphs flip in remaining mode so
-  // the bar reads left-to-right as "what's spent ▓▓▓░░░ what's left":
-  //   used      : left=used▓ (colored),  right=remaining░ (plain)
-  //   remaining : left=used░ (plain),    right=remaining▓ (colored)
+  // Left = used, right = remaining; the "metric of concern" side gets color.
+  // Glyphs flip in remaining mode so the bar reads "spent ▓▓▓░░░ left":
+  //   used      : left=used▓ (colored), right=remaining░ (plain)
+  //   remaining : left=used░ (plain),   right=remaining▓ (colored)
   if (mode === "used") {
     const left = filled.repeat(coloredSize);
     const right = empty.repeat(plainSize);
@@ -492,7 +368,7 @@ export function splitBar(
 }
 
 // Backwards-compatible simple "filled on left" bar — exported for tests but
-// not used by formatOne anymore.
+// not used by the render pipeline anymore.
 export function pctBar(usedPctValue: number, width = configStore.get().bar.width): { filled: string; empty: string } {
   const clamped = Math.max(0, Math.min(100, usedPctValue));
   const filledCount = Math.round((clamped / 100) * width);
@@ -503,30 +379,14 @@ export function pctBar(usedPctValue: number, width = configStore.get().bar.width
   };
 }
 
-// v0.9.0+ — project an `Interval` into the `Window` shape the
-// gauge / countdown renderers consume. Returns null when the
-// interval has no usable percent data (the same condition that
-// drives the v0.8.x `slotsToWindow` in src/plugins/parsers.ts:160-175 to return
-// null). Mirrors the v0.8.x projection rules:
-//
-//   pct             ← usedPercent (or 100 - remainingPercent if
-//                     usedPercent is null). Clamped to [0, 100].
-//   resetAt         ← ISO of endAt (null when endAt is null).
-//   resetStartAt    ← ISO of startAt (null when startAt is null).
-//   resetDurationMs ← endAt - startAt (null when either is null
-//                     or endAt <= startAt — same edge case as the
-//                     v0.8.x code path).
-//
-// Quota fields (remainingQuota / usedQuota / limitQuota) are NOT
-// projected — they're consumed by `m_quota` directly, never by the
-// gauge / countdown modules. Time-only intervals (no percent data)
-// still return a Window here so `m_countdown` can render the
-// `<label>--` placeholder against `iv.label` (no percent means
-// `m_windowQuota` falls back to its own placeholder).
+// Project an `Interval` into the `Window` shape the gauge / countdown renderers
+// consume. Returns null when the interval has no usable percent data.
+//   pct ← usedPercent (or 100 - remainingPercent), clamped [0,100]
+//   resetAt ← ISO of endAt; resetStartAt ← ISO of startAt
+//   resetDurationMs ← endAt - startAt (null when either is null or endAt <= startAt)
+// Quota fields are NOT projected — `m_quota` consumes them directly.
 function intervalToWindow(i: Interval): Window | null {
-  // Pick the used%. Mirrors the v0.8.x rule: used wins when both
-  // are populated; if only remainingPercent is non-null, derive
-  // used as 100 - x.
+  // used wins when both are populated; else derive from remainingPercent.
   let usedPct: number | null;
   if (i.usedPercent != null) {
     usedPct = i.usedPercent;
@@ -552,28 +412,15 @@ function intervalToWindow(i: Interval): Window | null {
   return w;
 }
 
-// v0.9.0+ — render the quota body for an `Interval`. Returns null
-// when neither quota nor limit is present (the caller falls back to
-// the placeholder). Renders per the user spec:
-//   used + limit  → "quota: 123/500"
-//   limit only    → "quota: 0/500"
-//   used only     → "quota: 123/--"
-//   none          → null
-// The leading `quota:` prefix is read from `labels.labelQuota` via
+// Split an Interval's quota axis into structural parts so the renderer can
+// color just the digit (the "metric of concern"), not the prefix/limit tail.
+// Returns null when there's no body to render. Renders per spec:
+//   used + limit → "quota: 123/500"; limit only → "quota: 0/500";
+//   used only → "quota: 123/--"; none → null
+// `axisPct` is the band index's percentage — null when no ratio can be derived
+// (e.g. `used/--`), and the caller falls back to STALE_COLOR / no color so the
+// digit never gets a spurious band tint. The `quota:` prefix comes from
 // `labelFor("quota")`.
-// v0.9.0+ — splits an Interval's quota axis into the structural
-// parts so the renderer can color just the digit (the "metric of
-// concern"), not the prefix / limit tail. Mirrors the
-// `m_windowQuota` / `m_windowContext` convention where only the
-// displayed value gets the band color and the static labels stay
-// plain.
-//
-// Returns null when there's no body to render (placeholder path
-// takes over). `axisPct` is the displayed percentage the band
-// index is computed against — null when no percent can be derived
-// (e.g. `used/--` or `--/1500` with no ratio); the caller then
-// falls back to STALE_COLOR or no color so the digit doesn't get
-// a spurious band tint.
 function renderQuotaParts(
   iv: Interval,
   mode: DisplayMode = "used",
@@ -661,15 +508,10 @@ function renderQuotaParts(
   return null;
 }
 
-// vX.X.X+ — band-color a quota body, mirroring m_windowQuota:
-// the displayed digit (the "metric of concern") gets the
-// `colorFor(displayedPct, mode)` band tint, the prefix / limit
-// tail stays plain. `userColor` overrides the band (same precedence
-// as every other inline module's :color| override). When the band
-// index can't be derived (axisPct == null), STALE_COLOR applies.
-// Default-mode users (no inline color) get the band's natural hue
-// instead of the legacy single tint from `DEFAULT_COLORS.m_quota`,
-// which is the behavior change the user asked for.
+// Band-color a quota body: the digit gets `colorFor(displayedPct, mode)`,
+// prefix/limit tail stays plain. `userColor` overrides the band (same
+// precedence as every inline module's :color|); axisPct==null → STALE_COLOR
+// (matches the m_window* "no percent → gray" convention).
 function wrapQuotaBody(
   parts: NonNullable<ReturnType<typeof renderQuotaParts>>,
   mode: DisplayMode,
@@ -688,17 +530,16 @@ function wrapQuotaBody(
   } else {
     tint = colorFor(parts.axisPct, mode);
   }
-  // vX.X.X+ — `(label)` tail dropped; valueOnly strips the prefix.
-  //   normal    → `quota: <axis>/<total>`  (e.g. `quota: 413.7/1500`)
-  //   valueOnly → `<axis>/<total>`          (e.g. `413.7/1500`)
+  // valueOnly strips the prefix:
+  //   normal → `quota: <axis>/<total>` (e.g. `quota: 413.7/1500`)
+  //   valueOnly → `<axis>/<total>` (e.g. `413.7/1500`)
   const body = `${tint}${parts.axisNumber}${RESET}/${total}`;
   return valueOnly ? body : `${parts.prefix}${body}`;
 }
 
-// v0.9.0+ — epoch-ms → ISO timestamp. Local to render.ts (same
-// impl as the v0.8.x src/plugins/parsers.ts:tsToIso; hoisted here so
+// v0.9.0+ — epoch-ms → ISO timestamp. Local to render.ts so
 // intervalToWindow can use it without dragging the api module
-// into render's hot path).
+// into render's hot path.
 function tsToIso(ms: number | null): string | null {
   if (ms == null) return null;
   try {
@@ -708,28 +549,17 @@ function tsToIso(ms: number | null): string | null {
   }
 }
 
-// v0.2.17: factor of formatOne() — returns the bar + colored-percent
-// portion only (no reset countdown, no window label). The reset
-// annotation is rendered by the m_countdown5h / m_countdown7d modules
-// independently so the lineTemplate can place them as separate tokens.
-// `formatOne` is kept as the canonical helper that joins these two
-// parts (plus a leading space) for callers that want the old combined
-// form (and for tests that assert on it).
+// Bar + colored-percent portion only (no countdown/label) — the reset
+// annotation is rendered independently by m_countdown. formatOneResetSuffix
+// is the companion helper that emits `<arrow><countdown>·<label>`.
 function formatOneChunk(
   w: Window,
   mode: DisplayMode,
   width = cfg().bar.width,
-  // v0.6.0+: when stale=true, the WHOLE colored span (bar chunks
-  // AND percent tail) wraps in STALE_COLOR instead of the band-based
-  // color — the gray sweep is meant to read as "this number is
-  // lying; the fetch failed". splitBar() itself is left untouched
-  // (tests assert on its .color field at render.test.ts:30-93), so
-  // we post-process its output here: rebuild the colored bar chunks
-  // directly with STALE_COLOR wrapping. The plain (uncolored) side
-  // of the bar stays plain — we only override the side that would
-  // have been band-colored. Inline :color| overrides still win
-  // (see formatOneChunkColored and the INLINE_RENDERERS no-:color|
-  // branch path below).
+  // stale=true → the WHOLE colored span (bar chunks + percent tail) wraps in
+  // STALE_COLOR ("this number is from a failed fetch"). splitBar() is left
+  // untouched (tests assert on its .color), so we rebuild the colored chunks
+  // here; the plain side stays plain. Inline :color| overrides still win.
   stale: boolean = false,
 ): string {
   const usedPct = Math.max(0, Math.min(100, Math.round(w.pct)));
@@ -739,11 +569,8 @@ function formatOneChunk(
   if (!stale) {
     return `${bar.leftChunk}${bar.rightChunk} ${bar.color}${displayedPct}%${RESET}`;
   }
-  // stale=true → rewrite the colored chunks AND the percent tail in
-  // STALE_COLOR. The plain side of the bar (whichever half is not
-  // the "metric of concern" for the active mode) stays plain so the
-  // user can still read the "what's used vs what's left" shape from
-  // the bar's filled/empty glyph pattern.
+  // Rewrite the colored chunks + percent tail in STALE_COLOR; the plain side
+  // stays plain so the used/remaining shape is still readable.
   const filled = cfg().bar.filled;
   const empty = cfg().bar.empty;
   const coloredSize = Math.round((displayedPct / 100) * width);
@@ -764,13 +591,9 @@ function formatOneChunk(
   return `${leftChunk}${rightChunk} ${STALE_COLOR}${displayedPct}%${RESET}`;
 }
 
-// v0.3.3+ variant: same layout, but the colored side of the bar AND
-// the percentage are wrapped in `override` instead of the band-based
-// color. The plain (uncolored) side of the bar stays plain. Used by
-// the inline-args path when the user supplied a `|color|<c>` override
-// on m_window5h / m_window7d — the user's color REPLACES the natural
-// band-based color (no "ignore on conflict" carve-out; the override
-// always wins). Returns the same string shape as `formatOneChunk`.
+// Same layout as formatOneChunk but the colored side + percentage wrap in
+// `override` (used by the inline-args `|color|<c>` path on gauge modules).
+// The user's color REPLACES the band-based color — the override always wins.
 function formatOneChunkColored(
   w: Window,
   mode: DisplayMode,
@@ -797,11 +620,8 @@ function formatOneChunkColored(
   return `${left}${rightChunk} ${override}${displayedPct}%${RESET}`;
 }
 
-// vX.X.X+ — |valueOnly|true variant: returns just the colored
-// percentage (e.g. "81%") without the bar chunks. The color is either
-// the user-supplied override or the band-based color from splitBar.
-// Used by the three gauge modules (m_windowQuota, m_windowContext,
-// m_windowMemUsage) when |valueOnly|true is set.
+// |valueOnly|true variant: just the colored percentage (e.g. "81%"), no bar
+// chunks. Color is the user override or the band color from splitBar.
 function formatPercentOnly(w: Window, mode: DisplayMode, overrideColor?: string): string {
   const usedPct = Math.max(0, Math.min(100, Math.round(w.pct)));
   const displayedPct = mode === "remaining" ? 100 - usedPct : usedPct;
@@ -809,13 +629,10 @@ function formatPercentOnly(w: Window, mode: DisplayMode, overrideColor?: string)
   return `${color}${displayedPct}%${RESET}`;
 }
 
-// Decide whether a window's countdown should be displayed as the
-// `n/a` placeholder — when ctx.stale (fetch failed; serving cached
-// data) AND the cached resetAt is already in the past. AND-only
-// because:
-//   - stale=true, future reset: cached countdown still useful.
-//   - stale=false, past-due reset: a fresh fetch is due any
-//     moment; the next tick will roll the countdown forward.
+// Whether a window's countdown becomes the `n/a` placeholder: stale (fetch
+// failed, serving cached) AND the cached resetAt is already in the past.
+// AND-only — stale+future reset is still useful; fresh+past-due means the next
+// tick will roll the countdown forward.
 function isStaleAndPastDue(w: Window, stale: boolean, nowMs: number): boolean {
   if (!stale) return false;
   if (!w.resetAt) return false;
@@ -824,13 +641,9 @@ function isStaleAndPastDue(w: Window, stale: boolean, nowMs: number): boolean {
   return t <= nowMs;
 }
 
-// Build the `<arrow>n/a·<label>` body that replaces the regular
-// past-due "<arrow>0m·<label>" body when ctx.stale AND resetAt
-// is in the past. The arrow still comes from pickResetArrow so the
-// user sees the same fill-state glyph they would have seen for
-// that elapsed ratio — index 0 when ratio ≤ 0 (matches the
-// fresh-data past-due path). Caller is responsible for wrapping
-// the body in STALE_COLOR.
+// Build the `<arrow>n/a·<label>` body used when stale AND resetAt is past-due.
+// Arrow still comes from pickResetArrow (index 0 when ratio ≤ 0). Caller wraps
+// in STALE_COLOR.
 function formatStalePastDueResetSuffix(
   windowLabel: string,
   w: Window,
@@ -845,14 +658,10 @@ function formatOneResetSuffix(
   nowMs: number = Date.now(),
 ): string {
   if (!windowLabel) return "";
-  // Two pieces: the arrow (e.g. "🕛") and the countdown (e.g. "2h3m").
-  // Both are derived from the same Window + nowMs; the arrow is the
-  // single thing we always have even when the countdown is empty
-  // (e.g. "<1m" or just the arrow alone if resetAt is present but
-  // remaining is 0). Template:
+  // Template:
   //   resetAt present → "<arrow><countdown>·<windowLabel>"
-  //   resetAt missing  → "<windowLabel>" (DeepSeek / legacy — no
-  //   reset info at all, don't fake it with a default arrow)
+  //   resetAt missing → "<windowLabel>" (DeepSeek / legacy — no reset info,
+  //                     don't fake it with a default arrow)
   const resetSuffix = formatResetSuffix(w.resetAt, nowMs);
   const arrow = pickResetArrow(nowMs, w.resetStartAt, w.resetDurationMs);
   return w.resetAt
@@ -860,25 +669,17 @@ function formatOneResetSuffix(
     : windowLabel;
 }
 
-// vX.X.X+ — |valueOnly|true variant: returns just the arrow +
-// countdown (e.g. "🕑25d20h") without the `·` window label.
-// Returns "" when no reset time is available (DeepSeek / legacy —
-// nothing to show in value-only mode).
+// |valueOnly|true variant: just the arrow + countdown (e.g. "🕑25d20h"), no
+// `·` window label. Returns "" when no reset time is available.
 function formatCountdownValueOnly(w: Window, nowMs: number): string {
   const resetSuffix = formatResetSuffix(w.resetAt, nowMs);
   const arrow = pickResetArrow(nowMs, w.resetStartAt, w.resetDurationMs);
   return w.resetAt ? `${arrow}${resetSuffix}` : "";
 }
 
-// Compact "remaining time until reset" formatter. Returns the countdown
-// portion of the reset annotation (no arrow, no parens) — e.g. "2h3m",
-// "<1m" for sub-minute, or "0m" for past-due. The caller (`formatOne`)
-// appends the window label and the fill-state arrow glyph picked by
-// `pickResetArrow`.
-//
-// The actual formatting rules live in `formatRemainingMs` (shared with
-// the stale-age suffix). See that function's doc comment for the full
-// `minUnit` × `maxUnitCount` matrix.
+// Countdown portion of the reset annotation (no arrow/label) — e.g. "2h3m",
+// "<1m", "0m". Formatting rules live in `formatRemainingMs` (shared with the
+// stale-age suffix).
 export function formatResetSuffix(
   resetAt: string | null | undefined,
   nowMs: number = Date.now(),
@@ -891,31 +692,12 @@ export function formatResetSuffix(
   return formatRemainingMs(remainingMs);
 }
 
-// Pure helper: format a non-negative number of milliseconds as a
-// `1d2h3m4s` style countdown, respecting `timeFormat.minUnit` (the
-// smallest unit that may appear) and `timeFormat.maxUnitCount` (how
-// many non-zero units to show). Top-level config so the formatting
-// is consistent across reset countdowns and stale-age suffixes.
-//
-// Unified algorithm:
-//   1. Extract [days, hours, minutes, seconds] from remainingMs.
-//   2. Drop units below minUnit (so "m" drops s, "h" drops m+s).
-//   3. Drop leading zero units from the trimmed list.
-//   4. If the trimmed list is empty → "<1<minUnit>" (positive) or
-//      "0<minUnit>" (past-due).
-//   5. Slice the remaining list to maxUnitCount, join as `1d2h3m4s`.
-//
-// Examples (maxUnitCount=2):
-//   remaining=2h3m45s minUnit="m" → "2h3m"   (s dropped by minUnit)
-//   remaining=2h3m45s minUnit="s" → "2h3m"   (slice cuts s — s > maxUnitCount budget)
-//   remaining=2h3m45s minUnit="s", maxUnitCount=3 → "2h3m45s"
-//   remaining=2h3m0s  minUnit="s", maxUnitCount=3 → "2h3m0s" (internal zeros kept)
-//   remaining=50s      minUnit="m" → "<1m"
-//   remaining=50s      minUnit="s" → "50s"
-//   remaining=50m      minUnit="h" → "<1h"
-//   remaining=2h0m     minUnit="m" → "2h0m"   (internal zero kept)
-//   remaining=1d2h3m4s minUnit="m", maxUnitCount=2 → "1d2h"
-//   remaining=0        → "0m" / "0s" / "0h" depending on minUnit
+// Format remaining ms as a `1d2h3m4s` countdown honoring
+// `timeFormat.minUnit` (smallest unit shown) and `timeFormat.maxUnitCount`
+// (non-zero units to show). Algorithm: extract d/h/m/s → drop units below
+// minUnit → drop leading zeros → empty ⇒ "<1<minUnit>" (positive) or
+// "0<minUnit>" (past-due) → slice to maxUnitCount. Internal zeros are kept
+// ("2h0m"); a minUnit-excluded tail is dropped (50s, minUnit="m" → "<1m").
 export function formatRemainingMs(remainingMs: number): string {
   if (!Number.isFinite(remainingMs)) return "";
 
@@ -973,24 +755,10 @@ export function formatRemainingMs(remainingMs: number): string {
   return nonzero.slice(0, maxUnitCount).map(([v, u]) => `${v}${u}`).join("");
 }
 
-// v0.9.x — Fixed-second TTL formatter for m_cacheTtlStatus /
-// m_statTtlStatus. UNLIKE formatRemainingMs, this ignores
-// `timeFormat.minUnit` (and global minUnit): the user explicitly
-// asked for a fixed-second suffix on the TTL gauge regardless of
-// what timeFormat the rest of the statusline uses. Same shape as
-// formatRemainingMs's edge cases so the two paths read alike:
-//
-//   remainingMs = 23_500  → "23s"
-//   remainingMs =  1_000  → "1s"
-//   remainingMs =   500   → "<1s"   (sub-second floor; about-to-expire)
-//   remainingMs = 60_000  → "60s"
-//   remainingMs <= 0      → "0s"    (past-due; mirrors "0<minUnit>")
-//   remainingMs = NaN     → ""
-//
-// `Math.floor(remainingMs / 1000)` truncates so a 23.5s TTL shows
-// as "23s" — the bar gauge already encodes the fractional state,
-// the suffix reports the full seconds the user can reliably rely
-// on (the conservative floor — never overstate remaining TTL).
+// Fixed-second TTL suffix for m_cacheTtlStatus / m_statTtlStatus. Ignores
+// `timeFormat.minUnit` — the TTL gauge is always second-granular.
+//   >= 1s → "Ns" (floor); 500..999ms → "<1s"; <= 0 → "0s"; NaN → ""
+// The floor never overstates remaining TTL (the bar gauge carries the fraction).
 export function formatTtlSeconds(remainingMs: number): string {
   if (!Number.isFinite(remainingMs)) return "";
   if (remainingMs <= 0) return "0s";
@@ -999,16 +767,10 @@ export function formatTtlSeconds(remainingMs: number): string {
   return `${secs}s`;
 }
 
-// Pick a reset-countdown glyph from the configured array by how full the
-// window still is. Index = floor(remainingMs / resetDurationMs * length),
-// so the array reads left-to-right as "fresh → about to reset":
-//   index 0        : right after the window reset (ratio = 0)
-//   last index     : just before the next reset    (ratio ≈ 1)
-// `min(…, length-1)` clamps ratio=1.0 to the last entry instead of
-// running off the end. Falls back to index 0 when the interval data is
-// missing (DeepSeek, legacy shape, clock skew) — same "neutral" reading
-// for any unknown state, so users don't see a glyph swap just because
-// we couldn't parse the new fields.
+// Pick a reset-countdown glyph by how full the window is: index =
+// floor(remainingMs / resetDurationMs * length), clamped so the array reads
+// left-to-right as "fresh → about to reset". Falls back to index 0 when the
+// interval data is missing (DeepSeek, legacy shape, clock skew).
 function pickResetArrow(
   nowMs: number,
   resetStartAt: string | null | undefined,
@@ -1022,35 +784,20 @@ function pickResetArrow(
     return first;
   }
   const elapsed = nowMs - startMs;
-  // Clamp ratio to [0, 1] — negative remaining means we're past the
-  // window end (formatResetSuffix already filters those, but defense in
-  // depth). Slightly-above-1 (clock skew) clamps to the last index.
+  // Clamp to [0, 1] — past-the-end (negative) and clock-skew (>1) both clamp.
   const ratio = Math.max(0, Math.min(1, (resetDurationMs - elapsed) / resetDurationMs));
   const idx = Math.min(arrows.length - 1, Math.floor(ratio * arrows.length));
   return arrows[idx];
 }
 
-// Compact "age of cached value" formatter for the trailing annotation.
-// The `healthy` flag toggles the emoji: 🔗 for fresh (data is current,
-// within-TTL cache hit) or ⛓️‍💥 for stale (fetch failed, showing
-// cached data). SGR-wrapped in STALE_COLOR and RESET-terminated.
-// Returns "" only when ageMs is non-finite (NaN / ±Infinity).
-//
-// The X time uses the SAME template as the reset countdown
-// (formatRemainingMs) with the same `timeFormat.minUnit` and
-// `timeFormat.maxUnitCount` knobs:
-//   ageMs = 0          → "0<minUnit> ago"   (e.g. "0m ago", "0s ago")
-//   sub-minute (0..59s) → "<1<minUnit> ago" or "${seconds}s ago"
-//   minUnit="m" → "<1m ago"  (the "<" floor reads "less than 1 minute")
-//   minUnit="s" → "${seconds}s ago" (no spurious round-up — second
-//                                  granularity is fine-grained enough
-//                                  that we don't need to lie about it)
-//
-// Visibility is gated by the caller: the m_age module emits whenever
-// `ageMs != null` (the user explicitly opted in by listing it in the
-// lineTemplate); renderProviderLine's forced-visibility block emits
-// only when `stale === true` (the user did NOT list m_age but the
-// renderer still wants a broken-chain indicator on real outages).
+// "age of cached value" formatter for the trailing annotation. `healthy`
+// toggles the emoji: 🔗 fresh / ⛓️‍💥 stale (fetch failed). Wrapped in
+// STALE_COLOR and RESET-terminated; returns "" only for non-finite ageMs.
+// Uses the same template as the reset countdown (formatRemainingMs +
+// timeFormat knobs): 0 → "0<minUnit> ago"; sub-minute → "<1m ago"
+// (minUnit="m") or "${s}s ago" (minUnit="s").
+// Visibility is caller-gated: m_age emits whenever ageMs != null;
+// renderProviderLine's forced-visibility block emits only when stale === true.
 export function formatStaleSuffix(
   ageMs: number,
   healthy: boolean = false,
@@ -1059,32 +806,25 @@ export function formatStaleSuffix(
   if (!Number.isFinite(ageMs)) return "";
   const emoji = healthy ? cfg().stale.ageEmoji.healthy : cfg().stale.ageEmoji.broken;
   const label = `${formatRemainingMs(ageMs)} ago`;
-  // v0.3.3+: `override` replaces the default color when supplied
-  // (used by the inline-args m_age|color|… path; override always
-  // wins regardless of broken/fresh).
-  // v0.6.0+: split the default into two — STALE_COLOR (gray) for the
-  // informational 🔗 annotation on fresh ticks, BROKEN_COLOR (red)
-  // for the ⛓️‍💥 annotation when the fetch failed and the cache is
-  // serving stale data.
+  // Default color split: STALE_COLOR (gray) for the informational 🔗 on fresh
+  // ticks, BROKEN_COLOR (red) for ⛓️‍💥 when the fetch failed. An explicit
+  // m_age|color| override always wins regardless of broken/fresh.
   const color = override ?? (healthy ? STALE_COLOR : BROKEN_COLOR);
   return `${color}${emoji} ${label}${RESET}`;
 }
 
-// Read the configured display mode. The earlier CREDITGAUGE_DISPLAY env
-// var is gone (per the v0.2.0 config-file migration); anyone using it
-// must move to config.json's `display` field.
+// Read the configured display mode (config.json `display`; the old
+// CREDITGAUGE_DISPLAY env var is gone).
 export function resolveDisplayMode(): DisplayMode {
   return cfg().display;
 }
 
 // ----- DeepSeek balance line -------------------------------------------------
 //
-// Distinct from the MiniMax percentage thresholds (0/20/40/60/80): a balance
-// is an ABSOLUTE amount, not a percentage, so the bands live at the
-// configured thresholds (default 5/10/20/50 — red / orange / yellow / dark
-// green / bright green). Lower balance = more urgent, so the lowest band
-// (red) corresponds to the LOWEST value — same intuitive direction as the
-// "remaining" mode of the MiniMax render.
+// A balance is an ABSOLUTE amount, so the bands live at the configured
+// thresholds (default 5/10/20/50 — red / orange / yellow / dark green /
+// bright green). Lower balance = more urgent, so the lowest band (red) is the
+// lowest value — same direction as "remaining" mode.
 
 function balanceThresholds(): readonly number[] {
   return cfg().thresholds.balanceBands;
@@ -1117,27 +857,16 @@ function formatBalanceValue(v: number): string {
   return v.toFixed(2).replace(/\.?0+$/, "");
 }
 
-// Display prefix for one balance entry. The `label` field was retired
-// from the BalanceEntry schema; `currencySymbol(code)` resolves the
-// display prefix from the currency code, with a hard-coded fallback
-// to the uppercased code (e.g. "EUR10.50") for unmapped codes —
-// never blanks, so a new provider currency never silently disappears.
+// Display prefix for one balance entry: `currencySymbol(code)` resolves it,
+// with a fallback to the uppercased code for unmapped codes — never blanks.
 function formatBalanceChunk(currency: string, v: number): string {
   return `${currencySymbol(currency)}${formatBalanceValue(v)}`;
 }
 
-// Currency-code → display-symbol lookup. Hard-coded default map covers
-// the currencies DeepSeek + the most common USD-denominated providers
-// expose; unmapped codes fall back to the uppercased code so a plugin
-// for a less common currency still renders something readable
-// (e.g. `currencySymbol("EUR") → "EUR"`).
-//
-// The host deliberately does NOT carry this map in config (per the
-// "全部通过插件进行独立解析" directive): a plugin that wants a custom
-// symbol for a non-default currency can emit a different currency
-// code, or surface its own m_label module. Renaming the mapped
-// symbols (e.g. user prefers `"$"` for CNY too) requires editing this
-// one helper.
+// Currency-code → display-symbol lookup. Covers DeepSeek + common
+// USD-denominated currencies; unmapped codes fall back to the uppercased code.
+// Deliberately NOT in config (per "全部通过插件进行独立解析"): a plugin wanting
+// a custom symbol can emit a different code or surface its own m_label module.
 function currencySymbol(code: string): string {
   switch (code) {
     case "CNY":
@@ -1152,31 +881,17 @@ function currencySymbol(code: string): string {
 
 type BalanceLike = {
   isAvailable: boolean;
-  // vX.X.X+ — entries are now `{ currency, totalBalance }` only; the
-  // display prefix is derived from `currency` via `currencySymbol`.
-  // Plugin authors emitting pre-built Balance objects must not ship
-  // a `label` field — the schema no longer carries it.
+  // Entries are `{ currency, totalBalance }` only; the display prefix comes
+  // from `currency` via `currencySymbol`. No `label` field in the schema.
   entries: ReadonlyArray<{ currency: string; totalBalance: number }>;
   minValue: number | null;
 };
 
-// v0.2.17: refactor of the balance-line renderer so the m_balance module can
-// produce a complete colored chunk (prefix + " · "-joined entries
-// wrapped in a single SGR block). Returns "" when there's nothing to
-// render so the m_balance module can return null and the template
-// renderer skips the surrounding s_0 separators cleanly.
-//
-// v0.3.3+ `override` parameter: when supplied, replaces the band-based
-// `colorForBalance` choice (used by the inline-args m_balance path).
-//
-// v2026.07.17+ — per-entry 5-band color: each entry is rendered as its
-// own `<color><text>${RESET}` block, joined by ` · `. Color follows
-// each entry's totalBalance through colorForBalance, NOT minValue.
-// This means a multi-currency account reflects each currency's own
-// urgency (CNY 110 → BRIGHT_GREEN, USD 3.5 → RED, both visible
-// independently). `override` (when supplied) is applied to every
-// entry — preserves the "force whole account one color" semantic
-// while mechanically operating per-entry.
+// Render the balance line as a " · "-joined set of per-entry colored chunks.
+// Each entry is colored by its own totalBalance via colorForBalance (NOT
+// minValue), so a multi-currency account reflects each currency's urgency
+// (CNY 110 → bright green, USD 3.5 → red). `override` forces one color on
+// every entry. Returns "" when there's nothing to render (module drops).
 export function formatBalanceEntriesColored(b: BalanceLike, override?: string): string {
   if (!b.isAvailable || b.entries.length === 0 || b.minValue == null) {
     return "";
@@ -1189,45 +904,26 @@ export function formatBalanceEntriesColored(b: BalanceLike, override?: string): 
     .join(" · ");
 }
 
-// ----- lineTemplate / module renderer (v0.2.17) -------------------------
+// ----- lineTemplate / module renderer ------------------------------------
 //
-// A lineTemplate is an ordered list of tokens. Two token kinds:
-//   m_<name>  — a display module (registered in MODULES below)
-//   s_<name>  — a built-in separator literal (s_space / s_dot / s_newline / s_tab / s_colon / s_pipe)
-//
-// The renderer walks the template left-to-right, concatenating each
-// module's output. Modules return null to signal "hidden in this
-// context" — a null return SKIPS the surrounding separators too, so a
-// hidden window doesn't leave orphan spaces or "·" in the output. This
-// is what makes "drop the 7d window by removing m_window7d from the
-// template" a clean operation rather than producing
-// "Usage: <5h> ·  " with a trailing orphan separator.
-//
-// Unknown module names (typos) expand to "" and emit ONE stderr
-// warning per render — capped at once-per-render to avoid log spam
-// since the renderer runs on every statusline tick.
+// A lineTemplate is an ordered list of tokens: `m_<name>` display modules
+// (registered in MODULES below) and `s_<name>` separator literals. The
+// renderer concatenates module output left-to-right. A module returning null
+// is "hidden in this context" — the surrounding separators are SKIPPED too, so
+// no orphan spaces or "·" remain. Unknown module names (typos) expand to ""
+// and emit ONE stderr warning per render (capped to avoid tick spam).
 type RenderContext = {
   mode: DisplayMode;
   nowMs: number;
-  // v0.9.4 — open-ended `intervals` dict replaces the v0.9.0 trio
-  // of fixed slots (`shortInterval` / `midInterval` / `longInterval`).
-  // The three reserved keys ("short" / "mid" / "long") are always
-  // seeded by `ensureQuota` so legacy `m_windowQuota|term|short`
-  // / `mid` / `long` lookups keep working byte-for-byte. New
-  // plugins can declare arbitrary keys (e.g. "monthly") and
-  // reference them via `m_windowQuota|term|monthly`. `Window` is
-  // still the shape `formatOneChunk` / `formatOneResetSuffix`
-  // consume; `intervalToWindow` projects an `Interval` →
-  // `Window` when the gauge / countdown rendering path needs to
-  // fire. Old code paths (m_sum* align-aware scans) read
-  // `Object.values(intervals)` to find a matching `windowId`.
+  // Open-ended `intervals` dict. The reserved keys ("short" / "mid" / "long")
+  // are seeded by `ensureQuota` so legacy `|term|short`/`mid`/`long` lookups
+  // keep working; plugins may declare arbitrary keys. m_sum* align-aware scans
+  // read `Object.values(intervals)` to find a matching `windowId`.
   intervals?: Record<string, Interval | null>;
-  // v0.9.4 — legacy back-compat. Test helpers and a handful of internal
-  // call sites still construct ctx with flat `shortInterval` /
-  // `midInterval` / `longInterval` fields. `renderTemplate` and
-  // `renderProviderLine` fold these into the reserved dict keys
-  // (`short` / `mid` / `long`) when `intervals` is absent. The
-  // canonical ctx has only `intervals`.
+  // Legacy back-compat: callers/tests still construct ctx with flat
+  // `shortInterval` / `midInterval` / `longInterval`; renderTemplate /
+  // renderProviderLine fold them into the reserved dict keys when `intervals`
+  // is absent. Canonical ctx has only `intervals`.
   shortInterval?: Interval | null;
   midInterval?: Interval | null;
   longInterval?: Interval | null;
@@ -1235,182 +931,92 @@ type RenderContext = {
   ageMs: number | null;
   stale: boolean;
   version: string;
-  // v0.4.0+ — live stdin snapshot for the m_token* modules. Always
-  // present on the main flow (index.ts builds one before invoking
-  // renderProviderLine); tests inject a fake via __resetForTest.
+  // Live stdin snapshot for the m_token* modules. Always present on the main
+  // flow (index.ts builds one before invoking renderProviderLine).
   tokens: TokenSnapshot | null;
-  // v0.4.0+ — synthetic Window for the m_windowContext module.
-  // Synthesized from tokens.contextWindow.contextUsedPercent; only `pct` is
-  // read by formatOneChunk. Null when stdin lacks used_percentage.
+  // Synthetic Window for m_windowContext, synthesized from
+  // tokens.contextWindow.contextUsedPercent (only `pct` is read). Null when
+  // stdin lacks used_percentage.
   contextWindow: Window | null;
-  // v0.4.x — the provider's TYPE discriminator. Populated by
-  // renderProviderLine from providerTypeFor. `"quota"` for
-  // Quota providers, `"balance"` for BALANCE providers, and
-  // `"unknown"` when ANTHROPIC_BASE_URL doesn't match any
-  // supported provider.
-  // configured provider (the entry-tolerant dispatch path).
-  // Used by per-module `type` filters and by m_modeLabel's label
-  // routing. Renamed from the v0.4.x-beta `providerModeKey` to
-  // avoid collision with the display-mode field `mode` (`used` /
-  // `remaining` / `balance`); the type discriminator is a TYPE, not
-  // a mode.
+  // The provider TYPE discriminator (providerTypeFor): "quota" / "balance" /
+  // "unknown". Used by per-module `type` filters and m_modeLabel's label
+  // routing. (Renamed from `providerModeKey` to avoid collision with the
+  // display-mode field `mode`.)
   providerType: "quota" | "balance" | "unknown";
-  // v0.9.0+ — the active provider INSTANCE id (e.g. `"minimax"` /
-  // `"deepseek"`). Populated by renderProviderLine
-  // from the `provider` arg; null when ANTHROPIC_BASE_URL didn't
-  // match any configured entry. Distinct from `providerType`
-  // (which is the category discriminator `quota` / `balance` /
-  // `unknown`). Used by `m_template|<key>|providers:<id1,id2>` to gate a
-  // fragment to one or more specific providers (where `type:quota` matches
-  // every quota-mode provider).
+  // The active provider INSTANCE id (e.g. "minimax"); null when no configured
+  // entry matched. Distinct from `providerType` (the category). Used by
+  // `m_template|<key>|providers:<id1,id2>` gates.
   currentProvider?: import("./types.ts").Provider;
-  // v0.9.0+ — current column cursor for `s_move|pos:<n>` column-
-  // advance. Initialized to 0 by renderTemplate at the start of
-  // each render; reset to 0 on every `\n` (newline in a chunk
-  // closes the line); bumped by the ANSI-stripped display width of
-  // every emitted chunk. Width is measured in UTF-16 code units
-  // (JavaScript `String.length`) — not east-asian display columns
-  // — but that's a deliberate simplification: statusline cells
-  // round to the JS-string length closely enough for `s_move` to
-  // act as a printable-cell column pad, and full wcwidth is a
-  // heavier dep than this single-param construct warrants. ANSI
-  // SGR sequences are stripped before counting so the cursor
-  // tracks visible cells, not raw byte length.
+  // Column cursor for `s_move|pos:<n>`. Initialized to 0 by renderTemplate,
+  // reset to 0 on `\n`, bumped by each chunk's ANSI-stripped display width
+  // (per-code-point via charDisplayWidth — emoji/CJK = 2, narrow = 1).
   lineCursor?: number;
-  // v0.6.0+ — mutable cross-recursion dedup ref for the m_age module.
-  // Initialized to `{ value: false }` by renderProviderLine and
-  // propagated by reference through any nested `m_template:`
-  // expansions (m_template passes ctx as-is; only the inner template
-  // array is sliced). The first m_age instance to emit sets .value
-  // = true; subsequent m_age instances (and the forced-visibility
-  // append in renderProviderLine) see .value=true and skip. Replaces
-  // the older templateHasAgeModule string-match which only scanned
-  // the top-level token list and missed m_age nested inside
-  // lineTemplates.* fragments.
+  // Cross-recursion dedup ref for m_age. Initialized to `{ value: false }` by
+  // renderProviderLine and propagated by reference through nested m_template
+  // expansions; the first m_age to emit claims the slot, later instances skip.
   ageEmittedRef?: { value: boolean };
-  // v0.8.7+ — passthrough args from an outer `m_template|<key>|...`
-  // expansion. Populated by the m_template renderer with its own
-  // parsed `params` (minus the `key` and `mode` intrinsics) before
-  // recursing into `renderTemplate(inner, ctx)`. Downstream
-  // `INLINE_RENDERER`s read `ctx.passThrough?.[<name>]` as a
-  // fallback when their local `params[<name>]` is undefined — so an
-  // inner module's own explicit arg always wins. See
-  // `passThroughOr()` below. The field is created fresh per
-  // m_template invocation; nested m_template is impossible because
-  // config.ts strips them at load time.
+  // Passthrough args from an outer `m_template|<key>|...` expansion. Built by
+  // the m_template renderer (minus key/type/providers intrinsics) before
+  // recursing; INLINE_RENDERERs read it as a fallback when their local param
+  // is undefined (inner-explicit wins). Fresh per m_template invocation;
+  // nested m_template is impossible (config.ts strips them at load time).
   passThrough?: Record<string, ResolvedValue>;
-  // v0.8.21+ — quote bodies pre-fetched by `preFetchQuotes` in
-  // `index.ts:main()` (see `src/api.quote.ts`). Keyed by raw
-  // address string. A missing key (or undefined map) means the
-  // fetch failed / was skipped / the active template had no
-  // `m_quote|address|…` token — the renderer's address-mode path
-  // falls back to local QUOTES in that case. Lifetime is one tick;
-  // built fresh by `preFetchQuotes` and threaded into ctx here.
+  // Quote bodies pre-fetched by `preFetchQuotes` (index.ts:main), keyed by raw
+  // address. Missing key → the address-mode path falls back to local QUOTES.
+  // One-tick lifetime.
   quoteBodies?: Map<string, string>;
-  // v0.9.0+ — which side of the user-vs-builtin fence the active
-  // provider's plugin was loaded from on the most recent fetch.
-  // Populated by index.ts:main() from cache.json row
-  // `<provider>:pluginSource` (set by fetchProviderData right after
-  // a successful pluginTransportWithKind call). `null` when no
-  // provider matched, no cache row was ever written (fresh install),
-  // or the row has been evicted — m_pluginSource drops to no-op in
-  // all three cases per the "Drop 整个 module" decision 2026-07-11.
-  // Optional on the type so test fixtures and older callers (which
-  // never knew about plugin sources) can build a ctx without it;
-  // renderProviderLine normalizes missing → null at construction.
+  // Which side of the user-vs-builtin fence the active provider's plugin was
+  // loaded from on the most recent fetch (cache row `<provider>:pluginSource`).
+  // null → m_pluginSource drops to no-op. Optional so test fixtures / older
+  // callers can build a ctx without it; renderProviderLine normalizes → null.
   pluginSource?: "user" | "builtin" | "missing" | null;
-  // vX.X.X+ — default provider filter: normalized ANTHROPIC_BASE_URL
-  // at render time, used by m_sum* modules to filter JSONL rows to
-  // the current provider. Computed by renderProviderLine from
-  // process.env.ANTHROPIC_BASE_URL. undefined when no provider is
-  // configured (empty env var), which skips the provider filter.
+  // Normalized ANTHROPIC_BASE_URL, used by m_sum* to filter JSONL rows to the
+  // current provider. undefined (no provider configured) skips the filter.
   providerBaseUrl?: string;
 };
 
-// v0.4.x — modules may declare a `type` filter so they only render
-// for one provider kind. With the unification of `renderPlanLine`
-// (and the legacy `formatBalanceLine` shim, dropped in v0.9.x) into
-// a single `renderDataLine`, the per-provider gate that used to
-// live in dispatch.ts:buildProviderLine now lives here: a bare
-// `m_window5h` in a balance provider's template silently drops (the
-// module is type:`"quota"`), and `m_balance` in a
-// quota provider's template silently drops too. Modules without a
-// type tag (m_token*, m_age, m_version, …) are provider-agnostic
-// and emit on every ctx.
-//
-// The renderer applies the filter by inspecting `mod.type` and
-// comparing against `ctx.providerType`. A module function is still
-// canonical; the `type` field is read-only metadata on the same
-// record.
-//
-// v0.4.x — `type` widened to include `"unknown"` (a hypothetical
-// `m_xxx:type:"unknown"` would only emit when ANTHROPIC_BASE_URL
-// doesn't match any configured provider). No module currently
-// uses this — quota-only and balance-only modules drop on unknown
-// because their `type` value doesn't match. Reserved for future
-// modules that want to render only in the unregistered case
-// (e.g. an m_setupHint module that nudges the user toward running
-// `/creditgauge:install`).
+// Modules may declare a `type` filter so they only render for one provider
+// kind: a `type:"quota"` module (m_windowQuota) silently drops on a balance
+// provider's template and vice-versa; untagged modules (m_token*, m_age, …)
+// are provider-agnostic. The renderer compares `mod.type` against
+// `ctx.providerType`. `"unknown"` is reserved for modules that want to render
+// only when ANTHROPIC_BASE_URL matches no configured provider (no module
+// currently uses it).
 type Module = ((ctx: RenderContext) => string | null) & {
   type?: "quota" | "balance" | "unknown";
 };
 
-// v0.8.x — cwf-tickStatus-v2. Per-tick state lives in
-// `state/<projectHash>/status.json` (managed by src/status-store.ts).
-// Two slot families with clearly separated roles:
+// v0.8.x cwf-tickStatus-v2. Per-tick state lives in
+// `state/<projectHash>/state.json` (managed by src/status-store.ts).
+// Two slot families:
 //
-//   (A) tickStatus:<...>  — PURE ACCUMULATORS (the user-defined
-//       rule: "tickStatus 只表示累计状态"). Three dimensions, all
-//       written by setAvg's atomic path:
-//
+//   (A) tickStatus:<...> — PURE ACCUMULATORS (只表示累计状态). Three
+//       dimensions, all written by setAvg's atomic path:
 //         tickStatus:<sessionId>   per-session (clear-bounded)
-//         tickStatus:<projectHash> per-project (cwd-bounded, NO prefix)
+//         tickStatus:<projectHash> per-project (cwd-bounded, no prefix)
 //         tickStatus:<model>       per-model (modelDisplayName)
+//       value shape (acc-only, no per-tick fields):
+//         accTokenIn / accTokenOut / accTokenCachedIn — accumulated
+//           current.input / output / cacheRead
+//         accTokenTotalIn — per-tick-delta-accumulator of totalIn
+//         accApiMs — += deltaApiMs (delta-accumulator across all three
+//           scopes; a sessionId/project/model change naturally zeros the slot)
+//         accApiCalls — accumulated API-call count
 //
-//       value shape (TickStatusValue, acc-only — no per-tick fields):
-//         accTokenIn         — accumulated current.input
-//         accTokenOut        — accumulated current.output
-//         accTokenCachedIn   — accumulated current.cacheRead
-//         accTokenTotalIn    — per-tick-delta-accumulator of totalIn
-//         accApiMs           — += deltaApiMs (delta-accumulator
-//                              across all three scopes; the
-//                              sessionId change naturally zeros
-//                              the session slot, the projectHash
-//                              change naturally zeros the project
-//                              slot, and a brand-new model name
-//                              starts the model slot from 0)
-//         accApiCalls        — accumulated API-call count
+//   (B) prevTickStatus — SINGLETON (not per-dimension). Last tick's
+//       snapshot, used to compute the per-tick delta and detect a regression
+//       (totalApiMs < prev means the CC process restarted; the tick is
+//       dropped from the sample row). Shape: in/out/cachedIn/totalIn/
+//       totalApiMs + sessionId/cwd/model.
 //
+// accApiCalls AND-gate: on a tick where deltaApiMs > 0 AND input_tokens > 0
+// (a real API call that produced input tokens), accApiCalls += 1. A tick with
+// deltaApiMs > 0 but input_tokens == 0 does NOT count.
 //
-//   (B) prevTickStatus  — SINGLETON, NOT per-dimension. Holds the
-//       last tick's stdin snapshot. Used by the writer to (i)
-//       compute the per-tick delta and (ii) detect a regression
-//       (current totalApiMs < prevTickStatus.totalApiMs means the
-//       Claude Code process restarted; the tick is dropped from
-//       the sample row, since the baseline no longer applies).
-//
-//       value shape (PrevTickStatusValue):
-//         in/out/cachedIn/totalIn/totalApiMs — previous tick's values
-//         sessionId/cwd/model                 — identity for debug
-//
-// accApiCalls contract (unchanged from v0.8.0):
-//   On a tick where deltaApiMs > 0 AND input_tokens > 0 (a real
-//   API call that produced input tokens), accApiCalls += 1. The
-//   gate is AND, not OR — a tick with deltaApiMs > 0 but
-//   input_tokens == 0 does NOT count.
-//
-// v1.0 — PrevTickSnapshot lives in src/status-store.ts; the
-// re-export at the top of this file preserves the test fixture
-// import surface.
-//
-// v1.0 — peekPrevTick lives in src/status-store.ts. Render is
-// read-only; the re-export below preserves the test fixture
-// import surface.
-export { peekPrevTick } from "./status-store.ts";// v1.0 — setPrevTick / setLastSpeed / setLastApiMs /
-// setLastTokenHitRate live in src/status-store.ts. Render is
-// read-only; these are the writer-side helpers. The re-exports
-// below preserve the test fixture import surface (e.g. tests
-// importing setPrevTick from "../src/render.ts").
+// Re-exported for the test fixture import surface (implementations live in
+// src/status-store.ts — the writer-side helpers are called by the -processor,
+// not render).
+export { peekPrevTick } from "./status-store.ts";
 
 export {
   setPrevTick as setPrevTick,
@@ -1419,61 +1025,36 @@ export {
   setLastTokenHitRate as setLastTokenHitRate,
 } from "./status-store.ts";
 
-// ----- lastActive (v0.4.x) --------------------------------------------
+// ----- lastActive (v0.4.x) -----
 //
-// Stores the LAST active-tick tps per direction (in / out), so an
-// idle tick (deltaApi == 0) that would otherwise render "--/s"
-// can fall back to the cached value. Stored in status.json under
-// the `lastActive:in` / `lastActive:out` keys (no sessionId in the
-// key — project-wide singleton per direction). 60s TTL is enforced
-// inside status-store.ts; writes happen ONLY on active ticks so the
-// cached value is always "the last thing I measured".
-//
-// Reads ignore the per-session dimension: caller passes the
-// session-agnostic tps and reads a project-wide value. Different
-// from the old tickSpeedDisplay:<direction>:<sessionId> model
-// which partitioned by session — the user explicitly asked for
-// the session dimension to be dropped (the last-active signal is
-// a "what was the overall rate we last saw" reading, useful
-// across sessions). The sessionId argument is kept in the
-// signature for back-compat with existing test fixtures.
-//
-// v1.0 — read side (peekLastSpeed / peekLastApiMs /
-// peekLastTokenHitRate) re-exported from -processor.
+// Stores the LAST active-tick tps per direction (in / out) so an idle tick
+// (deltaApi == 0) falls back to the cached value instead of "--/s". Stored in
+// state.json under `lastActive:in` / `lastActive:out` (project-wide singleton).
+// R7 — 60s TTL gate DISABLED: cache is permanent last-known-good, idle ticks
+// always surface the cached value STALE_COLORed and never expire. Writes happen
+// ONLY on active ticks; sessionId arg kept for test-fixture back-compat.
 export {
   peekLastSpeed,
   peekLastApiMs,
   peekLastTokenHitRate,
 } from "./status-store.ts";
 
-// Test-only: clear the in-memory + disk tickStatus:<sid> entry.
-// Production code never calls this. No-op stub: same rationale as
-// __resetLastSpeedForTest above.
+// Test-only no-op stub (production never calls this); tests should use
+// setPrevTick (still exported) or processTick directly.
 export function __resetPrevTickForTest(
   _sessionId: string,
   _cwd?: string | null,
-): void {
-  // v1.0 — in v0.9.x the seed pattern was
-  // stashPrevTick(..., {apiMs:0, in:0, out:0, cacheRead:0}). Now
-  // tests should use setPrevTick (still exported) or
-  // processTick directly.
-}
+): void {}
 
-// v1.0 — peekAvg moved to src/status-store.ts. Render is
-// read-only; the re-export below preserves the test fixture
-// import surface.
+// Re-exported for tests (implementation lives in status-store.ts).
 export { peekAvg } from "./status-store.ts";
 
-// v0.8.x cwf-tickStatus-v2 — read the three-layer accumulator at
-// a chosen scope. Used by the m_acc* module family. The three
-// scopes:
-//
-//   session  → tickStatus:<sessionId>          (clear-bounded)
-//   project  → tickStatus:<projectHash(cwd)>   (cwd-bounded; no prefix)
-//   model    → tickStatus:<modelId>   (per-model)
-//
-// Returns null when the slot has never been written, so the
-// module can render a placeholder rather than fabricating a "0".
+// Read the three-layer accumulator at a chosen scope (m_acc* family):
+//   session → tickStatus:<sessionId> (clear-bounded)
+//   project → tickStatus:<projectHash(cwd)> (cwd-bounded)
+//   model   → tickStatus:<modelId> (per-model)
+// Returns null when the slot has never been written (module renders a
+// placeholder rather than fabricating a "0").
 function peekAcc(
   scope: "session" | "project" | "model",
   ctx: RenderContext,
@@ -1487,94 +1068,45 @@ function peekAcc(
   return statusStore.readAccumulator(scope, {
     sessionId: t?.sessionId,
     cwd,
-    // v0.9.x — pass the active-model id (stdin.model.id) so the
-    // per-model slot lookup uses the same identifier as the new
-    // sample.model stamp and the new tokenPrices keys.
+    // Per-model slot lookup uses stdin.model.id (matches sample.model + tokenPrices keys).
     modelId: t?.modelId,
   });
 }
 
-// Canonical write path was retired to src/status-store.ts (see
-// `setAvg` there). The -processor (processTick Stages 4 + 4b) is
-// the sole caller; this module is read-only. Re-exported below
-// for back-compat with test fixtures.
-//
-// Scope contract (post-ccsession cleanup): the three surviving
-// scopes all DELTA-ACCUMULATE the in/out/cached/totalIn/apiMs/
-// apiCount scalars. The ccsession-specific regression-reset
-// quirk was removed: a Claude Code process restart no longer
-// zeroes a separate per-process slot, because that slot no
-// longer exists. The relevant regression detection in
-// detectRegression still fires (it gates sample-row emission);
-// it just no longer needs a ccsession-specific mark path.
+// setAvg re-exported for back-compat with test fixtures (the -processor is
+// the sole caller; render is read-only). The three surviving scopes all
+// DELTA-ACCUMULATE the in/out/cached/totalIn/apiMs/apiCount scalars; there is
+// no per-process slot to zero on CC-process restart (detectRegression still
+// fires — it gates sample-row emission).
 export { setAvg } from "./status-store.ts";
-// AvgSnapshot / peekAvg re-exports sit at the top of the file.
 
-// v1.0 — _tickDeltaMemo / _tickAvgWriteMemo / _tickCacheWriteMemo
-// are GONE. The -processor (src/status-store.ts) calls
-// computeAndCacheTickDeltaPure once per tick and stashes the result
-// on tickState.delta. Render reads it via getDeltaForRender() —
-// no per-render memoization needed because there's a single
-// producer per tick.
-
-// v1.0 — the deferred setPrevTick queue / _pendingPrevTick /
-// commitPrevTickOnce / _renderDepth are GONE. The -processor
-// (src/status-store.ts:processTick) sets PREV_TICK_KEY once per
-// tick BEFORE render begins, so all render contexts (outer,
-// m_template inner) see the same baseline via peekPrevTick. No
-// per-render memo or queue needed.
+// v1.0 — per-render memoization is GONE: the -processor calls
+// computeAndCacheTickDeltaPure once per tick and stashes the result on
+// tickState.delta; render reads it via getDeltaForRender() (single producer
+// per tick). PREV_TICK_KEY is set once before render, so all contexts (outer,
+// m_template inner) see the same baseline via peekPrevTick.
 //
-// For back-compat with test fixtures that imported
-// __resetPendingPrevTickForTest, the stub below is preserved as a
-// no-op (see tests using it).
-
-// v1.0 — computeAndCacheTickDelta is GONE. The -processor
-// (src/status-store.ts:computeAndCacheTickDeltaPure) owns the
-// pure delta math; it stashes the result on tickState.delta.
-// Render modules read via getDeltaForRender(). No per-render
-// memoization needed — single producer per tick.
-//
-// Per-API-call delta semantics (unchanged from v0.9.x):
-//   - current_usage.* is the per-turn delta (NOT subtracted from
-//     prev). Only deltaApiMs is a TRUE subtraction (cost.totalApi-
-//     DurationMs is session-cumulative).
-//   - Gating is deltaApi > 0 ONLY. In/out/cache_read don't need
-//     to all move together.
+// Per-API-call delta semantics:
+//   - current_usage.* IS the per-turn delta (NOT subtracted from prev); only
+//     deltaApiMs is a TRUE subtraction (totalApiDurationMs is session-cumulative).
+//   - Gating is deltaApi > 0 ONLY — in/out/cache_read don't need to move together.
 //   - First tick assumes prev=0 so the first turn still contributes.
 
-// Compute the per-API-call throughput for one of {in, out}. v0.4.0+
-// — always returns a non-null value. The module occupies a stable
-// slot in the user's lineTemplate; a missing-data render is
-// "in:--/s", not a drop. This keeps the line layout stable across
-// ticks — the user always sees the module where they put it, and
-// learns to read "--" as "no data / nothing to report".
+// Compute the per-API-call throughput for one of {in, out}. Always returns a
+// non-null value — a missing-data render is "in:--/s", not a drop, so the
+// module keeps its stable slot in the lineTemplate.
 //
-// math (when hasDelta):
-//   tps = current_in_or_out / delta_api * 1000
+// math (when hasDelta): tps = current_in_or_out / delta_api * 1000
 //
-// Missing-data conditions (render "in:--/s"):
-//   - no current snapshot data
-//   - delta_api <= 0 (no API call between ticks) AND no cached
-//     value from a previous active tick to fall back to
+// Missing-data conditions (render "in:--/s"): no snapshot, or delta_api <= 0
+// AND no cached tps from a previous active tick to fall back to. IN and OUT
+// don't need to move together — a synthesized-message turn adds 0 input but
+// real output, so the truthful rate 0.0/s renders as "0.0/s", not "--/s".
 //
-// v0.4.0+ (revised 2026-06-29 + 2026-06-29): per-turn deltas
-// don't need a direction-specific zero-rejection gate. IN and
-// OUT don't have to move together — a thinking-only turn adds
-// 0 input tokens but 0 output tokens too; a synthesized-message
-// turn adds 0 input but real output. The truthful rate is
-// 0.0/s, not "--/s". We render 0.0 directly so the user
-// sees the real measurement and learns the difference between
-// "0/s" (real zero) and "in:--/s" (no data).
-//
-// v0.4.0+ second revision: cache the last ACTIVE-tick tps per
-// session. On an idle tick (no API call this turn), fall back
-// to the cached tps so the speed module doesn't blink
-// in:--/s between real measurements during fast statusline
-// ticks. The cache is only written on active ticks (idle ticks
-// preserve the previous measurement). Returns an `active` flag
-// so the caller can pick color: active = scale band, inactive
-// = STALE_COLOR (the user reads the gray as "this is a stale
-// measurement from a previous API call, not a real one now").
+// The last ACTIVE-tick tps is cached per session; idle ticks fall back to it
+// (no in:--/s blink between measurements). Returns an `active` flag so the
+// caller picks color: active = scale band, inactive = STALE_COLOR (gray reads
+// "measurement from a previous API call").
 function computeTickSpeed(
   ctx: RenderContext,
   direction: "in" | "out",
@@ -1584,14 +1116,8 @@ function computeTickSpeed(
   active: boolean;
   tps: number | null;
 } {
-  // v0.8.10-alpha.2 — render reads `getDeltaForRender()` which now
-  // returns TickSnapshot ({ hasMeasurement, in, out, ..., apiMs }).
-  // No writeBack field — there is no prev-writeBack payload anymore.
-  // v0.8.13+ — speed prefix routes through labelFor
-  // (labels.labelInSpeed / labels.labelOutSpeed) so the per-turn
-  // speed module is independently configurable from the in/out
-  // token-axis labels. Defaults remain "in:" / "out:" matching
-  // today's literal strings byte-for-byte.
+  // Speed prefix routes through labelFor (labels.labelInSpeed / labelOutSpeed),
+  // independent of the in/out token-axis labels. Defaults "in:" / "out:".
   const prefix = labelFor(direction === "in" ? "inSpeed" : "outSpeed");
   const t = ctx.tokens;
   if (!t || !t.sessionId) {
@@ -1628,20 +1154,12 @@ function computeTickSpeed(
   };
 }
 
-// v0.8.13+ — m_accTokenInSpeed / m_accTokenOutSpeed helper. Reads
-// from the chosen scope's accumulator (session / project / model)
-// and computes the throughput as accToken* / accApiMs * 1000
-// (t/s). Mirrors the structure of computeTickSpeed (the per-turn
-// twin), but pulls values from peekAcc rather than the per-tick
-// delta. Returns:
-//   - "n/a" placeholder when scope has never been written
-//     (no v from peekAcc) — same `direction:n/a` shape as
-//     the per-turn sibling.
-//   - "0/s" plain when accApiMs > 0 but accToken* === 0
-//     (the value-zero rule at [[render-value-zero-rule]]).
-//   - scale-colored "N/s" when accApiMs > 0 AND the chosen
-//     token accumulator is positive (the active, measurable
-//     case).
+// m_accTokenInSpeed / m_accTokenOutSpeed helper. Reads the chosen scope's
+// accumulator and computes accToken* / accApiMs * 1000 (t/s). Mirrors
+// computeTickSpeed (the per-turn twin) but pulls from peekAcc. Returns:
+//   - "direction:n/a" when the scope has never been written
+//   - "0/s" plain when accApiMs > 0 but accToken* === 0 (value-zero rule)
+//   - scale-colored "N/s" when accApiMs > 0 AND the token accumulator is positive
 function computeAccSpeed(
   ctx: RenderContext,
   scope: "session" | "project" | "model",
@@ -1652,20 +1170,14 @@ function computeAccSpeed(
   active: boolean;
   tps: number | null;
 } {
-  // v0.8.13+ — speed prefix routes through labelFor
-  // (labels.labelInSpeed / labels.labelOutSpeed) so the per-acc
-  // speed module is independently configurable from the in/out
-  // token-axis labels. Defaults remain "in:" / "out:" matching
-  // today's literal strings byte-for-byte.
+  // Speed prefix via labelFor (labelInSpeed / labelOutSpeed), defaults "in:" / "out:".
   const prefix = labelFor(direction === "in" ? "inSpeed" : "outSpeed");
   const v = peekAcc(scope, ctx);
   if (!v) {
     return { value: `${prefix}n/a`, active: false, tps: null };
   }
   if (v.accApiMs === 0) {
-    // No API duration accumulated yet → "direction:0/s" plain
-    // (the natural zero state — the value-zero rule says count:0
-    // is real data, not a placeholder).
+    // No API duration yet → "direction:0/s" plain (zero is real data, not a placeholder).
     return {
       value: `${prefix}${formatSpeed(0)}`,
       active: false,
@@ -1681,151 +1193,75 @@ function computeAccSpeed(
   };
 }
 
-// Per-API-call raw token delta. v6.x — distinguishes three states:
-//
-//   - snapshot data missing (tokens / sessionId / current.tokenIn
-//     absent)         → `${direction}:n/a`  (no stdin at all)
-//   - idle tick       → `${direction}:0`    (stdin present, no
-//                                             delta this tick —
-//                                             truthful "0 this turn")
-//   - active tick     → `${direction}:${formatCompactToken(n)}`
-//
-// v0.4.0+ previously collapsed the first two into "in:0", which
-// conflated "no data" with "real zero". The new rule (per user
-// direction): 0 renders as "0" (never hidden); null renders as
-// "n/a". Idle ticks (hasDelta=false) still return "in:0" because
-// the snapshot was read but the per-turn delta genuinely is 0 —
-// that IS a zero value, not missing data.
-//
-// Uses formatCompactToken so single-call token counts read the
-// same as the cumulative modules (e.g. "in:140", "in:12.3k").
+// Per-API-call raw token delta. Distinguishes three states:
+//   - snapshot missing (tokens / sessionId / current.tokenIn absent) → "in:n/a"
+//   - idle tick (stdin present, no delta this turn) → "in:0" (truthful zero)
+//   - active tick → "in:<formatCompactToken(n)>"
+// Rule: 0 renders as "0" (never hidden); null renders as "n/a". Uses
+// formatCompactToken so single-call counts match the cumulative modules.
 function computeTickDelta(
   ctx: RenderContext,
   direction: "in" | "out",
 ): { value: string; numeric: number | null; stale: boolean } {
   const t = ctx.tokens;
   const prefix = labelFor(direction);
-  // v0.8.10-alpha.2 — `hasMeasurement` mirrors the validity gate
-  // (totals.tokenTotalIn > 0 AND totals.tokenTotalOut > 0 AND apiMs > 0).
-  // v0.8.30+ — `numeric` carries the live-stdin value
-  // (`tokens.current.tokenIn` / `tokenOut`) so the renderer can
-  // still surface a real number on idle ticks (apiMs=0) instead
-  // of collapsing to a processed "0". The gate is independent
-  // from the value: an idle tick has `numeric > 0` AND
-  // `stale === true`, which the renderer maps to STALE_COLOR
-  // (matching the v0.8.x R7 convention of "live stdin's
-  // last-known measurement, gray-wrapped"). `numeric: null`
-  // means no stdin at all (placeholder path).
-  // v0.8.30.1+ — `stale` is the explicit hasMeasurement mirror
-  // (true = the per-tick pipeline rejected this tick, so the
-  // number shown is from stdin, not from a measured delta).
+  // `hasMeasurement` mirrors the validity gate (tokenTotalIn > 0 AND
+  // tokenTotalOut > 0 AND apiMs > 0). `numeric` carries the live-stdin value
+  // so idle ticks (apiMs=0) still surface a real number, mapped to STALE_COLOR
+  // (live stdin's last-known measurement, gray-wrapped). `numeric: null` means
+  // no stdin at all (placeholder). `stale` = hasMeasurement mirror.
   if (!t || !t.sessionId) {
     return { value: `${prefix}n/a`, numeric: null, stale: false };
   }
   const r = getDeltaForRender();
-  // Pull the live stdin value directly. The processed delta
-  // (`r.in` / `r.out`) collapses to 0 on idle ticks; we want
-  // the user to see the actual stdin number, not the zero
-  // that the validation gate writes to the snapshot.
+  // Pull the live stdin value directly — the processed delta collapses to 0
+  // on idle ticks, but the user should see the actual stdin number.
   const liveN = direction === "in" ? t.current.tokenIn : t.current.tokenOut;
   const liveNumeric =
     typeof liveN === "number" && Number.isFinite(liveN) ? liveN : 0;
   if (!r.hasMeasurement) {
-    // Idle tick — hasMeasurement is false, so the displayed
-    // body is the live stdin number prefixed with the
-    // direction label. numeric carries the same value so the
-    // renderer's color gate sees a positive number; the
-    // `stale` flag routes the wrap to STALE_COLOR instead of
-    // brightGreen / red.
+    // Idle tick — display the live stdin number (numeric carries the same
+    // value); `stale` routes the wrap to STALE_COLOR instead of the band color.
     return { value: `${prefix}${formatCompactToken(liveNumeric)}`, numeric: liveNumeric, stale: true };
   }
   const n = direction === "in" ? r.in : r.out;
   return { value: `${prefix}${formatCompactToken(n)}`, numeric: n, stale: false };
 }
 
-// Per-session running average speed across all valid API
-// calls. Combines the prevTick (per-API-call math) with the
-// AvgSnapshot (running totals). The math across the session:
-//   sum_in  / sum_api  * 1000  (and same for out)
-// Only valid-API-call ticks contribute (deltaApi > 0 AND
-// deltaTokenIn / deltaTokenOut >= 0); idle and regression ticks don't.
-// Renders "--" when no valid tick has accumulated yet (sumApi
-// is still 0 after this tick — i.e. nothing usable came in).
-// Color defaults to STALE_COLOR; the inline :color| path
-// overrides it.
-//
-// Side effects: fires BOTH the prevTick write (so the next
-// tick's computeAndCacheTickDelta sees a fresh baseline) AND
-// the avg accumulate write. This means computeTickAvg is
-// self-sufficient — putting m_tokenInAvg alone in a template
-// with no speed / raw-delta modules still works.
+// m_tokenInAvg / m_tokenOutAvg / computeTickAvg REMOVED — session-averaged
+// speed is now m_accTokenInSpeed / m_accTokenOutSpeed (see computeAccSpeed).
 
-// v0.8.x cwf-tickStatus-v2 — the m_totalToken* / m_totalTokenWithCacheIn
-// module family (and its computeTickTotals helper) was REMOVED
-// in this version. The accumulator access for "session-cumulative
-// in/out/cache" now goes through the m_acc* family with
-// scope=session (the default). For example:
-//   m_totalTokenIn          → m_accTokenIn
-//   m_totalTokenOut         → m_accTokenOut
-//   m_totalTokenWithCacheIn → m_accTokenCachedIn
-// No alias is provided — the old names drop with the
-// v0.8.x cwf-tickStatus-v2 rename (consistent with the v0.8.0
-// removal of m_token5h / m_token7d / m_tokenInAvg / m_tokenOutAvg).
+// The m_totalToken* family is REMOVED — use the m_acc* family with
+// scope=session (default): m_totalTokenIn → m_accTokenIn,
+// m_totalTokenOut → m_accTokenOut, m_totalTokenWithCacheIn → m_accTokenCachedIn.
+// No aliases are provided.
 
-// v1.0 — body factory for the m_acc* family. Renders the
-// chosen accumulator field at a chosen scope. Output shape:
-//
-//   scope=session (default) → "acc:N"
-//   scope=project           → "acc(total):N"
-//   scope=model             → "acc(<modelId>):N"
-//
-// Reads the three-layer accumulator via peekAcc. The -processor
-// (src/status-store.ts:processTick) has already written the
-// per-tick deltas to tickState.pending BEFORE render begins, so
-// this is a pure read. Placeholder when the chosen slot has never
-// been written (no prior tick, no model for the model scope, no
-// sessionId for the session scope). Zero accumulator renders as
-// "acc:0" (value-zero rule, never dropped).
-
-// v1.0 — accPrimer / accCachePrimer are GONE. The -processor
-// (processTick Stages 4 + 4b) owns the accumulator writes now.
-// Render is pure read.
-
+// Body factory for the m_acc* family. Renders the chosen accumulator field at
+// a chosen scope (default session). The -processor has already written the
+// per-tick deltas to tickState.pending before render, so this is a pure read.
+// Placeholder when the chosen slot has never been written; zero renders as
+// "0" (value-zero rule). (accPrimer / accCachePrimer are GONE — the
+// -processor owns the accumulator writes.)
 function accBody(
   ctx: RenderContext,
   field: "in" | "out" | "cached" | "total" | "apiMs" | "apiCalls",
   scope?: "session" | "project" | "model",
   stripLabel?: boolean,
 ): string {
-  // vX.X.X+ — |valueOnly|true propagates from a bare m_acc* module
-  // (read via ctx.passThrough?.valueOnly) or from an inline-form
-  // m_acc* renderer (explicit stripLabel arg from passThroughOr).
-  // When set, every prefix below collapses to "" so the rendered
-  // body is the bare number.
+  // valueOnly collapses every prefix below to "" (bare number).
   const strip = stripLabel ?? ctx.passThrough?.valueOnly === "true";
   const useScope = scope ?? "session";
   const v = peekAcc(useScope, ctx);
   if (!v) {
-    // v0.8.x cwf-tickStatus-v2 — the accTokenCachedIn track only writes
-    // when stdin carries the cache field. m_accTokenCachedIn /
-    // m_accTokenTotalIn / m_accTokenHitRate must still honor
-    // the "field not shipped" → "--" contract, so we don't fire
-    // accCachePrimer here on a missing slot — the placeholder
-    // shape is the only honest signal in that case.
+    // Missing slot → placeholder (the only honest signal — the cachedIn track
+    // only writes when stdin ships the cache field).
     return placeholderAcc(field, useScope, strip);
   }
-  // v0.8.10-alpha.3 — removed the "field not shipped" cache guard.
-// cache_read_input_tokens absence on the current stdin does not
-// imply an empty slot at any scope (session / project / model
-// all accumulate across ticks). Renderers that hit a missing
-// slot fall through to the existing `if (!v)` branch above and
-// produce `prefix:n/a` via placeholderAcc.
-  // v1.0 — accCachePrimer is gone. The -processor already
-  // wrote accTokenCachedIn (Stage 4b) when stdin shipped
-  // cache_read_input_tokens. Re-read after Stage 4b in case the
-  // first peekAcc fired before the -processor's writes (rare
-  // in production — processTick runs before renderTemplate — but
-  // tests sometimes interleave).
+  // cache_read absence on the current stdin does NOT imply an empty slot at any
+  // scope (all scopes accumulate across ticks) — a missing slot falls through
+  // to the `if (!v)` branch above → placeholderAcc. Re-read once in case the
+  // first peekAcc fired before the -processor's writes (tests sometimes
+  // interleave; in production processTick runs before renderTemplate).
   const v2 = peekAcc(useScope, ctx) ?? v;
   let n: number;
   switch (field) {
@@ -1836,99 +1272,45 @@ function accBody(
     case "apiCalls": n = v2.accApiCalls; break;
     case "total": n = v2.accTokenIn + v2.accTokenCachedIn; break;
   }
-  // v0.8.0+ — acc* family prefixes use the same label axes as their
-  // per-turn siblings. m_accTokenIn/Out/CachedIn/TotalIn share
-  // labelIn / labelOut / labelCacheIn / labelTotalIn;
-  // m_accApiMs routes through labelFor("apiMs") (= labels.labelApi)
-  // and m_accApiCalls through labelFor("apiCalls") (= labels.labelApiCalls).
-  // Both render via formatRemainingMs / String(n) so the accumulator
-  // matches m_apiMs's "api:1m" dhms shape and m_apiCalls's "calls:N"
-  // count shape (rather than the v0.7.x raw-ms `acc:60.0k` literal).
-  // Honors the same timeFormat.minUnit / maxUnitCount knobs as the
-  // per-turn sibling. Defaults reproduce the v0.7.x literal "acc:"
-  // prefix for the in/out/cached/total fields via the corresponding
-  // label.* defaults, and "api:" / "calls:" for the apiMs / apiCalls
-  // fields via labels.labelApi / labels.labelApiCalls.
+  // The acc* family uses the same label axes as its per-turn siblings
+  // (labelIn / labelOut / labelCacheIn / labelTotalIn / labelApi /
+  // labelApiCalls). apiMs renders via formatRemainingMs ("api:1m" dhms shape),
+  // apiCalls via String(n) ("calls:N") — both honoring timeFormat knobs.
   let prefix: string;
   let body: string;
-  // vX.X.X+ — when stripLabel is on, every prefix resolves to ""
-  // so the rendered body is the bare number / dhms / count.
+  // stripLabel → every prefix resolves to "" (bare number / dhms / count).
   const p = (axis: LabelAxis): string => strip ? "" : labelFor(axis);
   switch (field) {
     case "in": prefix = p("in"); body = formatCompactToken(n); break;
     case "out": prefix = p("out"); body = formatCompactToken(n); break;
     case "cached": prefix = p("cacheIn"); body = formatCompactToken(n); break;
     case "total": prefix = p("totalIn"); body = formatCompactToken(n); break;
-    // v0.8.x — m_accApiMs now renders `api:<dhms>` to mirror m_apiMs.
-    // The accumulator value (accApiMs) is session-cumulative
-    // totalApiMs, so the formatted string grows monotonically as
-    // the session ages (e.g. "api:5m", "api:1h12m").
-    // v0.8.13+ — prefix is configurable via labels.labelApi
-    // (labelFor("apiMs")); default "api:" preserves the v0.8.x
-    // literal so existing renders stay byte-identical.
+    // apiMs → `api:<dhms>` mirroring m_apiMs (accApiMs is session-cumulative,
+    // so the string grows monotonically: "api:5m", "api:1h12m").
     case "apiMs": prefix = p("apiMs"); body = formatRemainingMs(n); break;
-    // v0.8.x — m_accApiCalls mirrors m_apiCalls's `calls:N` shape
-    // (the value-zero rule says count:0 still renders, since
-    // zero is a real measured count, not a "no data" signal).
-    // v0.8.13+ — prefix is configurable via labels.labelApiCalls
-    // (labelFor("apiCalls")); default "calls:" preserves the
-    // v0.8.x literal so existing renders stay byte-identical.
+    // apiCalls → `calls:N` mirroring m_apiCalls (count:0 still renders — zero
+    // is a real count, not a "no data" signal).
     case "apiCalls": prefix = p("apiCalls"); body = String(n); break;
   }
   return `${prefix}${body}`;
 }
 
-// m_accTokenHitRate — session-aggregate formula
-// (accTokenCachedIn / (accTokenCachedIn + accTokenIn) * 100). Colored via the
-// cacheHitColor palette (good ≥ 80%, warn ≥ 50%, bad < 50%).
-// Zero denominator (no input and no cache reads) renders
-// "hit:0.0%"; missing-acc placeholder when the slot has never
-// been written.
-//
-// v0.8.x R8 — prefix unified with m_tokenHitRate: both modules
-// now render "hit:N%" (was "acc:N%" for the acc variant). The
-// acc/sum/per-turn triple shares the same "hit:" prefix so
-// users can compose them in a lineTemplate without having to
-// re-bind the prefix. The scope distinction is still visible
-// via the surrounding context (m_acc* siblings use the same
-// default session scope, m_tokenHitRate is per-turn).
-//
-// v0.8.10-alpha.3 — collapsed. The render pipeline no longer
-// computes the ratio (it was: accTokenCachedIn / (accTokenCachedIn
-// + accTokenIn) * 100). The data-processor now writes the
-// pre-computed ratio to TickStatusValue.accTokenHitRate at every
-// setAvg scope (session / project / model) and the module reads
-// it straight. Zero-acc case maps to 0 (rendered as "hit:0.0%").
-// Missing-slot case → placeholderAcc("hitRate", …).
+// m_accTokenHitRate — session-aggregate hit rate. status-store
+// pre-computes the ratio into TickStatusValue.accTokenHitRate at every setAvg
+// scope; the module reads it straight. Colored via cacheHitColor (good ≥ 80%,
+// warn ≥ 50%, bad < 50%). Zero-acc → "hit:0.0%"; missing slot →
+// placeholderAcc. Shares the "hit:" prefix with m_tokenHitRate / m_sumTokenHitRate.
 
-// m_acc* placeholder shape: "acc:n/a" for plain fields, "acc:n/a%"
-// for the hit-rate module. Used when the chosen scope has no
-// accumulator written yet. The `scope` arg is currently unused (we
-// render the same placeholder regardless of scope) — included so
-// the call site is self-documenting and a future tweak that
-// distinguishes scopes (e.g. "acc(total):n/a") has a hook.
+// m_acc* placeholder: "prefix:n/a" for plain fields, "prefix:n/a%" for
+// hit-rate. Used when the chosen scope has no accumulator yet. `_scope` is
+// unused (same placeholder regardless of scope) — kept as a future hook.
 function placeholderAcc(
   field: "in" | "out" | "cached" | "total" | "apiMs" | "apiCalls" | "hitRate" | "startTime",
   _scope: "session" | "project" | "model",
   stripLabel?: boolean,
 ): string {
-  // v0.8.0+ labels.* — the four token-axis fields read their
-  // prefix from labelFor so the placeholder matches the user's
-  // configured labelTokenIn / labelTokenOut / labelTokenCachedIn
-  // / labelTokenTotalIn.
-  // v0.8.13+ — apiMs / apiCalls also go through labelFor so the
-  // "api:n/a" / "calls:n/a" placeholders follow the configured
-  // labelApiMs / labelApiCalls defaults.
-  // v0.8.22+ — hitRate joined the labels namespace too
-  // (labels.labelTokenHitRate, default "hit:"), so users can
-  // override the per-turn / acc / sum hit-rate prefix as a single
-  // knob instead of the v0.8.x hardcoded literal.
-  // v0.8.24+ — startTime joined for m_accStartTime. The
-  // "start:n/a" placeholder mirrors the in/out/apiMs shape.
-  // vX.X.X+ — when stripLabel is on (forwarded from the m_acc*
-  // MODULES entry that read ctx.passThrough?.valueOnly === "true"),
-  // every prefix collapses to "" so the placeholder reads "n/a" /
-  // "n/a%" with no leading label — mirrors the live-render path.
+  // All prefixes route through labelFor (labels.label*). stripLabel → every
+  // prefix collapses to "" so the placeholder reads "n/a" / "n/a%".
   const p = (axis: LabelAxis): string => stripLabel ? "" : labelFor(axis);
   let prefix: string;
   switch (field) {
@@ -1941,11 +1323,8 @@ function placeholderAcc(
     case "hitRate": prefix = p("hitRate"); break;
     case "startTime": prefix = p("startTime"); break;
   }
-  // v0.8.10-alpha.3 — placeholderAcc simplified: no fieldNotShipped
-// branch. cache_read absence on stdin no longer triggers the "--"
-// shape — the simpler rule is: missing slot → `prefixn/a` for plain
-// fields and `prefixn/a%` for hit-rate. Stale color wrapping is
-// preserved.
+  // Missing slot → "prefixn/a" for plain fields, "prefixn/a%" for hit-rate,
+  // wrapped in STALE_COLOR.
   let body: string;
   if (field === "hitRate") {
     body = `${prefix}n/a%`;
@@ -1955,18 +1334,12 @@ function placeholderAcc(
   return `${STALE_COLOR}${body}${RESET}`;
 }
 
-// vX.X.X+ — build the m_memUsage body as a two-tone string. With the
-// user's |color|<c>, the whole "<prefix><used>/<total>" line is wrapped
-// in that color (override always wins, same contract as
-// wrapPlainDefault). With NO color, the used chunk (left of "/") gets
-// band color via colorFor(pct, "used") — thresholds.percentBands
-// (default [60,70,80,90]) — and prefix and total keep the module's
-// DEFAULT_COLORS entry (bright cyan); the "/" is a plain separator
-// between the band-colored used chunk and the cyan total. mode is pinned
-// to "used" because
-// a RAM-bytes display has no used/remaining semantics: the danger axis
-// is always "how much RAM is spent", so the color always indexes by
-// usedPct (mirrors m_windowMemUsage's color rule).
+// Build the m_memUsage body as a two-tone string. With |color|<c>, the whole
+// "<prefix><used>/<total>" line wraps in that color (override always wins).
+// Without color, the used chunk gets the band color via colorFor(pct, "used")
+// (thresholds.percentBands) and prefix/total keep the module's default tint
+// (cyan). Mode is pinned to "used" — a RAM display has no used/remaining
+// semantics; the danger axis is always "how much RAM is spent".
 function renderMemUsageBody(
   prefix: string,
   used: number,
@@ -1984,21 +1357,13 @@ function renderMemUsageBody(
   return `${prefixSpan}${usedColor}${usedStr}${RESET}/${wrap(totalStr)}`;
 }
 
-// vX.X.X+ — build the m_contextUsage body as a two-tone string,
-// mirroring renderMemUsageBody but for context-window tokens. With
-// the user's |color|<c>, the whole "<prefix><used>/<total>" line is
-// wrapped in that color (override always wins, same contract as
-// wrapPlainDefault). With NO color, the used chunk (left of "/")
-// gets band color via colorFor(pct, "used") — thresholds.percentBands
-// (default [60,70,80,90]) — and prefix and total keep the module's
-// DEFAULT_COLORS entry (blue); the "/" is a plain separator between
-// the band-colored used chunk and the blue total. mode is pinned to
-// "used" because an occupancy x/y display has no used/remaining
-// semantics: the danger axis is always "how much context is spent",
-// so the color always indexes by usedPct (mirrors m_memUsage).
-// NOTE: the pct "else 0" and wrap ": s" fallbacks are unreachable —
-// callers pre-filter total <= 0 and the blue default is always
-// truthy; kept for diff-parity with renderMemUsageBody.
+// Build the m_contextUsage body as a two-tone string, mirroring
+// renderMemUsageBody but for context tokens. |color|<c> wraps the whole line;
+// without color, the used chunk gets the band color (colorFor(pct, "used"))
+// and prefix/total keep the module's default tint (blue). Mode pinned to
+// "used" — an x/y occupancy display has no used/remaining semantics.
+// NOTE: the pct "else 0" and wrap ": s" fallbacks are unreachable (callers
+// pre-filter total <= 0 and the blue default is truthy); kept for diff-parity.
 function renderContextUsageBody(
   prefix: string,
   used: number,
@@ -2017,47 +1382,34 @@ function renderContextUsageBody(
 }
 
 const MODULES: Record<string, Module> = {
-  // v0.4.x — body routes on ctx.providerType. providerType === "balance"
-  // gets the dedicated Balance label; providerType === "quota" or
-  // "unknown" both get the display-mode label (`used` / `remaining`).
-  // "unknown" sharing the quota label is intentional — there's no
-  // quota-shaped provider configured, but if the user's display mode
-  // is "used" we still want "Usage:" as the prefix. The surrounding
-  // m_windowQuota / m_balance modules carry the per-provider `type`
-  // filter; m_modeLabel doesn't need to. Returns the label WITHOUT a
-  // trailing space — the surrounding s_0 separator token provides spacing.
+  // Body routes on ctx.providerType: balance → the dedicated Balance label;
+  // quota AND unknown → the display-mode label ("used"/"remaining") — an
+  // unconfigured provider still wants "Usage:" when mode is "used". Returns
+  // the label WITHOUT a trailing space (the separator token provides spacing).
   m_modeLabel: (c) => wrapPlainDefault("m_modeLabel",
     c.providerType === "balance"
       ? cfg().modeLabels.balance
       : cfg().modeLabels[c.mode],
     undefined),
-  // v0.9.0+ — unified m_windowQuota module (replaces v0.5.0–v0.8.x
-// `m_window5h` + `m_window7d`). Reads `c.intervals["short"]` (the
-// 5-hour default term) and projects it through `intervalToWindow`
-// for the gauge render. Inline form accepts `|term|<key>` to pick
-// a different interval (legacy `short` / `mid` / `long` still
-// work; arbitrary keys like `monthly` are also fine as long as the
-// plugin populates that dict slot). The hard-coded "5h" / "7d"
-// labels from the v0.8.x renderers are gone — the gauge is data-
-// driven, driven entirely by the Interval's `pct` field.
+  // Unified m_windowQuota gauge. Reads `c.intervals["short"]` (default term;
+  // `|term|<key>` picks another — legacy short/mid/long or any declared key)
+  // and projects it through `intervalToWindow`. Gauge is data-driven entirely
+  // by the Interval's `pct` field (no hard-coded "5h"/"7d" labels).
 m_windowQuota: Object.assign(
   ((c: RenderContext) => {
     const iv = (c.intervals ?? {})["short"] ?? null;
     if (!iv) return placeholderBare("m_windowQuota", c);
     const w = intervalToWindow(iv);
     if (!w) return placeholderBare("m_windowQuota", c);
-    // vX.X.X+ — |valueOnly|true strips the bar, showing just the colored percent.
+    // |valueOnly|true strips the bar, showing just the colored percent.
     if (c.passThrough?.valueOnly === "true") return formatPercentOnly(w, c.mode);
     return formatOneChunk(w, c.mode, cfg().bar.width, c.stale);
   }),
   { type: "quota" as const },
 ),
-  // Reset-suffix portion of the shortInterval (default term). The
-  // label is read from the live `Interval.label` rather than being
-  // hard-coded — so a user with `intervals.shortInterval.label =
-  // "5h🕐"` sees their custom label in the placeholder too. The
-  // stale+past-due branch reads the same label so the
-  // "<arrow>n/a·<label>" body stays in sync with the active renderer.
+  // Reset-suffix portion of the default-term interval. Label is read from the
+  // live `Interval.label` (not hard-coded) so custom labels appear in the
+  // placeholder and the stale+past-due "<arrow>n/a·<label>" body too.
 m_countdown: Object.assign(
   ((c: RenderContext) => {
     const iv = (c.intervals ?? {})["short"] ?? null;
@@ -2071,15 +1423,11 @@ m_countdown: Object.assign(
   }),
   { type: "quota" as const },
 ),
-  // v0.9.0+ — quota module. Reads the quota group from
-  // `c.intervals["short"]` (default term; bare form), and the
-  // chosen `term` slot for the inline form. Renders
-  // `<labelQuota><axis>/<limit>` shape (e.g. "quota: 123/500";
-  // the `(label)` tail is gone in vX.X.X+), where `<axis>` is
-  // `used` by default and `remaining` when `c.mode ===
-  // "remaining"` (mirrors `m_windowQuota`). The placeholder
-  // (rendered when no quota data is present) is term-agnostic:
-  // `${labelFor("quota")}n/a` (e.g. "quota: n/a").
+  // Quota module. Reads the quota group from `c.intervals["short"]` (bare) or
+  // the chosen `term` slot (inline). Renders `<labelQuota><axis>/<limit>`
+  // (e.g. "quota: 123/500"), where `<axis>` is `used` by default and
+  // `remaining` when `c.mode === "remaining"`. Placeholder is term-agnostic:
+  // "quota: n/a".
 m_quota: Object.assign(
   ((c: RenderContext) => {
     const iv = (c.intervals ?? {})["short"] ?? null;
@@ -2090,169 +1438,95 @@ m_quota: Object.assign(
   }),
   { type: "quota" as const },
 ),
-  // The DeepSeek balance chunk. v6.x: when there's nothing to
-  // render (unavailable / empty / no min), emit a "balance:n/a"
-  // placeholder instead of dropping. Aligns with the bare-vs-inline
-  // parity rule.
+  // The DeepSeek balance chunk. When there's nothing to render, emit a
+  // "balance:n/a" placeholder instead of dropping (bare-vs-inline parity).
   m_balance: Object.assign(
     ((c: RenderContext) => c.balance ? formatBalanceEntriesColored(c.balance) || placeholderBare("m_balance", c) : placeholderBare("m_balance", c)),
     { type: "balance" as const },
   ),
-  // Stale-age annotation. v6.x: when ageMs is missing, emit
-  // "age:n/a" placeholder (was: drop). The :nulldrop|true inline
-  // override still drops for users wanting v0.3.x semantics.
+  // Stale-age annotation. When ageMs is missing, emit "age:n/a" placeholder
+  // (:nulldrop|true restores the drop behavior).
   m_age: (c) => {
     if (c.ageMs == null) return placeholderBare("m_age", c);
-    // v0.6.0+ — dedup against any other m_age that already emitted
-    // anywhere in the recursive render tree. The forced-visibility
-    // append in renderProviderLine reads the same ref; the FIRST
-    // m_age to fire (whichever instance it is) claims the slot,
-    // all subsequent instances return null.
+    // Dedup against any m_age that already emitted anywhere in the recursive
+    // render tree — the first instance claims the slot, later ones return null.
     if (c.ageEmittedRef?.value) return null;
     if (c.ageEmittedRef) c.ageEmittedRef.value = true;
     return formatStaleSuffix(c.ageMs, !c.stale);
   },
-  // Plugin version (e.g. "v0.2.17"). v6.x: empty version → emit
-  // "v:n/a" placeholder (was: drop). Aligns with the bare-vs-inline
-  // parity rule.
+  // Plugin version. Empty version → "v:n/a" placeholder (was: drop).
   m_version: (c) => (c.version ? wrapPlainDefault("m_version", `v${c.version}`, undefined) : placeholderBare("m_version", c)),
-  // v0.9.0+ — visual indicator of whether the active provider's
-  // plugin was loaded from the bundled built-in tree, from the
-  // user's query_plugins/ override dir, or was missing entirely
-  // (matched provider id has no plugin — neither user override
-  // nor built-in). Glyph comes from the labels namespace
-  // (labels.labelPluginSystem / .labelPluginUserDefined /
-  // .labelPluginMissing) so users can override via config.json
-  // — defaults 📌 / 🎨 / ❗ preserve the v0.9.x ship literals
-  // (the ❗ default is new in this round; previously the missing
-  // case was silent-drop). No default tint — the symbol carries
-  // the meaning on its own, and the statusline has limited color
-  // budget. When the source is unknown (no provider matched, or
-  // cache row hasn't been written yet), the module returns null
-  // and the template drops it. Per the user's "Drop 整个 module"
-  // decision 2026-07-11 — we don't emit a "source:n/a"
-  // placeholder, so an unconfigured user with this token in
-  // their template sees no noise on the statusline.
-  // (A 4th branch, "cc" / 🔖, is reserved for the future
-  // claude-官方 case — the type axis + default glyph are wired,
-  // but the dispatch table doesn't yet read it per the user's
-  // "CC 分支暂不做实现" decision 2026-07-12.)
+  // Visual indicator of which side of the user-vs-builtin fence the active
+  // provider's plugin was loaded from: built-in 📌, user override 🎨, or
+  // missing ❗ (matched id has no plugin). Glyphs come from labels.* (config-
+  // overridable). No default tint — the symbol carries the meaning. Unknown
+  // source (no provider matched / no cache row) → null, so the template drops
+  // it (no "source:n/a" noise). A 4th branch, "cc" / 🔖, is reserved for the
+  // future claude-官方 case but not yet wired into the dispatch table.
   m_pluginSource: (c) => {
     if (c.pluginSource === "builtin") return labelFor("pluginSystem");
     if (c.pluginSource === "user")    return labelFor("pluginUserDefined");
     if (c.pluginSource === "missing") return labelFor("pluginMissing");
     return null;
   },
-  // ----- v0.4.0+ token-usage modules -----
-  // Each module is independent and returns null when its source data
-  // isn't available, so users compose freely via lineTemplate. The
-  // default plan / balance templates do NOT include any of these —
-  // existing users see no change on upgrade.
+  // ----- token-usage modules -----
+  // Each module is independent and returns null when its source data is
+  // unavailable; the default plan / balance templates do NOT include any of
+  // these (existing users see no change on upgrade).
 
-  // Per-API-call input tokens. v0.4.0+ — semantics changed
-  // again: from "raw current_usage.input_tokens (absolute)" to
-  // "delta of current.input vs the previous tick's snapshot, but
-  // ONLY when an actual API call happened between ticks". The
-  // same prevTick cache that m_tokenInSpeed uses is read here;
-  // the gate is identical (delta_api > 0). When no API call
-  // landed, this module renders "in:--" — same stable-slot
-  // pattern as the speed modules — so the user can SEE whether
-  // the current turn produced output or just sat idle. For the
-  // session-cumulative intent, see m_tokenInTotal / m_tokenTotalOut
-  // / m_tokenTotalIn.
+  // Per-API-call input tokens: the delta of current.input vs the previous
+  // tick's snapshot, but ONLY when an API call happened between ticks (the
+  // same gate + prevTick cache as m_tokenInSpeed). No API call landed → the
+  // live stdin number (or "in:0"), gray-wrapped as stale. For session-
+  // cumulative totals see m_tokenInTotal / m_tokenTotalOut / m_tokenTotalIn.
   m_tokenIn: (c) => {
     const r = computeTickDelta(c, "in");
-    // vX.X.X+ — |valueOnly|true strips the leading label from
-    // the pre-prefixed r.value (computeTickDelta builds
-    // `${labelFor("in")}${body}`).
+    // valueOnly strips the leading label from the pre-prefixed r.value.
     const body = stripLabelIfValueOnly(r.value, "in", c.passThrough?.valueOnly === "true");
-    // v1.0 — setPrevTick moved to status-store.ts:processTick
-    // Stage 3. Render is read-only.
-    // v0.8.30+ — bare default tint (brightGreen) on positive
-    // value when the tick is active (hasMeasurement=true).
-    // Idle ticks (hasMeasurement=false) get STALE_COLOR
-    // instead, even when stdin still ships a positive number
-    // — the value-zero rule + the per-turn-delta-contract
-    // (delta_api=0 → no API call landed) both apply, so the
-    // number shown is "live stdin, not a measured delta" and
-    // gray-wraps to flag that. 0 and n/a stay plain.
+    // Active tick → bare default tint (brightGreen) on positive value; idle
+    // ticks (hasMeasurement=false) get STALE_COLOR even when stdin ships a
+    // positive number ("live stdin, not a measured delta"). 0 and n/a stay plain.
     if (r.numeric == null || r.numeric === 0) return body;
     if (r.stale) return `${STALE_COLOR}${body}${RESET}`;
     return wrapValueDefault("m_tokenIn", r.numeric, body, undefined);
   },
-  // Per-API-call output tokens (see m_tokenIn for the gate
-  // rationale — output-only turns, thinking-only turns, idle
-  // turns all produce different "out:--" / "out:N" signals).
-  // v0.8.30+ — bare default tint (red) on positive value; see
-  // m_tokenIn for the wrap contract and the STALE_COLOR rule.
-  // vX.X.X+ — |valueOnly|true strips the leading label.
+  // Per-API-call output tokens (see m_tokenIn for the gate). Bare default
+  // tint (red) on positive value; idle → STALE_COLOR. |valueOnly| strips label.
   m_tokenOut: (c) => {
     const r = computeTickDelta(c, "out");
     const body = stripLabelIfValueOnly(r.value, "out", c.passThrough?.valueOnly === "true");
-    // v1.0 — setPrevTick moved to status-store.ts:processTick
-    // Stage 3. Render is read-only.
     if (r.numeric == null || r.numeric === 0) return body;
     if (r.stale) return `${STALE_COLOR}${body}${RESET}`;
     return wrapValueDefault("m_tokenOut", r.numeric, body, undefined);
   },
-  // v0.8.0+ — renamed from `m_ctx`. The new semantic: "context
-  // size" = `context_window.total_input_tokens` (the cumulative
-  // amount of input tokens currently in the context window).
-  // Previously `m_ctx` computed `current.input + current.cacheCreation
-  // + current.cacheRead` (the per-turn context length). The new
-  // semantic is what users mean when they say "size" — the actual
-  // occupancy, sourced from the cumulative `total_input_tokens`
-  // field. Prefix: `size:<N>`. The capacity (upper bound) is a
-  // separate module: `m_contextWindowSize` (typo fixed per
-  // user direction). See [[token-modules-redesign-v0-8-0]].
-  //
-  // v6.x: zero length renders as "size:0" (the user's "0 直接显示"
-  // rule). The placeholder path is reserved for the truly
-  // missing-data case (no totals.tokenTotalIn at all).
-  // v0.8.23+ — prefix routes through labelFor("contextSize")
-  // (labels.labelContextSize; default "size:") so the user can
-  // override the context-occupancy prefix without touching the
-  // v0.8.22 hardcoded literal.
+  // Context occupancy = `context_window.total_input_tokens` (cumulative input
+  // tokens currently in the window; the old m_ctx per-turn length semantic is
+  // gone). Prefix "size:N"; capacity is a separate module (m_contextWindowSize).
+  // Zero renders "size:0"; placeholder only when totals.tokenTotalIn is absent.
   m_contextSize: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "size:" prefix.
+    // |valueOnly|true drops the "size:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("contextSize");
     const total = c.tokens?.totals?.tokenTotalIn;
     if (total == null) return placeholderBare("m_contextSize", c);
     return `${prefix}${formatCompactToken(total)}`;
   },
-  // v0.8.0+ — semantic change: per-turn hit rate, not session-aggregate.
-  // New formula: m_tokenCachedIn / m_tokenTotalIn (per-turn snapshot)
-  //   = current_usage.cache_read_input_tokens / context_window.total_input_tokens
-  // The session-aggregate formula
-  //   (accTokenCachedIn / (accTokenCachedIn + accTokenIn), v0.4.x semantics) is now
-  // exposed as a separate module: m_accTokenHitRate (see
-  // [[token-modules-redesign-v0-8-0]]). Coloring still uses the
-  // cacheHitColor palette (good ≥ 80%, warn ≥ 50%, bad < 50%).
-  //
-  // Zero denominator (no input and no cache reads) renders as
-  // "hit:0.0%" — the "0 直接显示" rule. Missing-totals or
-  // missing-cacheRead → "hit:n/a" placeholder.
+  // Per-turn hit rate: m_tokenCachedIn / m_tokenTotalIn =
+  // current.cacheRead / totals.totalIn. (The session-aggregate formula is a
+  // separate module: m_accTokenHitRate.) Colored via cacheHitColor (good ≥ 80%,
+  // warn ≥ 50%, bad < 50%). Zero denominator → "hit:0.0%"; missing totals or
+  // cacheRead → "hit:n/a" placeholder.
   m_tokenHitRate: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "hit:" prefix from
-    // every branch (cached fallback, idle-stale, live, zero).
-    // v0.9.x — prefix routes through labels.labelTokenHitRate
-    // (was hardcoded literal "hit:" in v0.8.x). placeholderBare
-    // path already goes through labelFor("hitRate") so the
-    // data path catches up here.
+    // |valueOnly|true drops the "hit:" prefix from every branch (cached
+    // fallback, idle-stale, live, zero); otherwise prefix = labelFor("hitRate").
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("hitRate");
     const t = c.tokens;
     if (!t) return placeholderBare("m_tokenHitRate", c);
     const total = t.totals?.tokenTotalIn;
     const cacheRead = t.current?.tokenCachedIn;
     if (total == null || cacheRead == null) {
-      // v0.8.x — mirror m_apiMs / m_tokenInSpeed / m_tokenOutSpeed:
-      // when the field is not shipped this tick but a prior
-      // measurement sits in the lastActive:tokenHitRate slot
-      // within the 60s TTL window, surface it STALE_COLORed
-      // instead of dropping to the "hit:n/a" placeholder. The
-      // user-facing rationale: the per-turn hit rate is a
-      // reading that decays slowly; an idle tick should display
-      // the last known value, not blank.
+      // Field not shipped this tick → surface the cached lastActive:tokenHitRate
+      // value STALE_COLORed instead of "hit:n/a" (R7 — the TTL gate is disabled,
+      // cache is permanent last-known-good; an idle tick shows the last value).
       if (c.tokens?.sessionId) {
         const cached = peekLastTokenHitRate(c.tokens.sessionId, c.tokens.cwd);
         if (cached != null) {
@@ -2267,25 +1541,11 @@ m_quota: Object.assign(
     }
     if (total === 0) return `${STALE_COLOR}${prefix}0.0%${RESET}`;
     const pct = (cacheRead / total) * 100;
-    // v0.8.x — cache the active measurement so subsequent ticks
-    // that lack cacheRead can fall back to it (mirrors setLastSpeed
-    // / setLastApiMs). Only persist when the per-tick delta is
-    // actually present (the gate above already required cacheRead
-    // v1.0 — setLastTokenHitRate moved to status-store.ts:processTick
-    // Stage 5. Render is read-only.
-    // v0.8.x — "active" coloring: the per-turn hit rate is only
-    // a fresh reading when the API actually did work this tick
-    // (hasDelta=true from computeAndCacheTickDelta, the same
-    // signal m_tokenInSpeed / m_tokenOutSpeed / m_apiMs use to
-    // decide STALE_COLOR vs band-color). An idle tick's
-    // current.cacheRead is the same value the prior tick had
-    // (the field doesn't change when the API is idle), so the
-    // displayed rate is "from a previous API call" — gray it,
-    // matching the tps siblings. The setLastTokenHitRate above
-    // already idempotently overwrites with the same value, so
-    // the cache is unaffected by an idle re-render.
+    // "Active" coloring: the per-turn hit rate is only a fresh reading when the
+    // API did work this tick (hasDelta=true, same signal as the tps siblings).
+    // An idle tick's current.cacheRead is unchanged, so the rate is "from a
+    // previous API call" — gray it, matching the tps convention.
     const r = getDeltaForRender();
-    // v1.0 — setPrevTick moved to status-store.ts:processTick Stage 3. Render is read-only.
     if (!r.hasMeasurement) {
       return wrapPlainDefault(
         "m_tokenHitRate",
@@ -2296,40 +1556,16 @@ m_quota: Object.assign(
     const color = cacheHitColor(pct);
     return `${color}${prefix}${pct.toFixed(cachePctPrecision())}%${RESET}`;
   },
-  // v0.8.0+ — renamed from `m_cacheRead`. The old name's `cache`
-  // prefix collided conceptually with m_tokenHitRate (which is the
-  // session-aggregate hit-rate percentage). The new name lives in
-  // the `m_token*` family: it's "this turn's cache-read input
-  // tokens", a sibling of m_tokenIn / m_tokenOut / m_tokenTotalIn.
-  // See [[token-modules-redesign-v0-8-0]] for the rename rationale.
-  //
-  // Source: `current_usage.cache_read_input_tokens` (per-turn snapshot,
-  // not session-cumulative). Single-color (STALE_COLOR). v6.x: zero
-  // reads now render as "cache:0"; null cacheRead field on a present
-  // snapshot falls back to placeholder "cache:n/a". The bare-token
-  // shape dropped the `(XX%)` share suffix in v0.8.6+ — the
-  // dedicated m_tokenHitRate module renders the ratio for users who
-  // want it, keeping m_tokenCachedIn focused on the raw token count.
+  // This turn's cache-read input tokens (current_usage.cache_read_input_tokens,
+  // per-turn snapshot). Zero reads render "cache:0"; null cacheRead on a present
+  // snapshot → placeholder "cache:n/a". No `(XX%)` share suffix — m_tokenHitRate
+  // renders the ratio; this module stays on the raw token count.
   m_tokenCachedIn: (c) => {
-    // v0.8.13 — color unified with the m_token* sibling family:
-    // bare form emits PLAIN text (no STALE_COLOR wrap). Matches
-    // m_tokenIn / m_tokenOut / m_tokenInTotal / m_tokenTotalOut /
-    // m_tokenTotalIn, which all delegate to wrapPlain and render
-    // with no SGR by default. The user's `:color|<c>` inline
-    // override still applies.
-    //
-    // v0.8.13 — cacheRead=null (field not shipped by stdin) renders
-    // as "cache:0" (same as the real-zero case). The truly
-    // missing-snapshot case (tokens=null) also returns "cache:0"
-    // (not the placeholder) so the module always reads "cache:N".
-    //
-    // v0.8.13+ — non-zero / non-null default tint: when
-    // cacheRead is a positive number, wrap the chunk in the
-    // brown SGR (DEFAULT_COLORS.m_tokenCachedIn). value=0
-    // stays plain (the value-zero rule); null already collapsed
-    // to "cache:0" above and is also plain.
-    // vX.X.X+ — |valueOnly|true drops the leading "cache:" prefix
-    // from every branch (live, zero, null-fallback).
+    // Bare form emits PLAIN text (matches the m_token* siblings; the user's
+    // :color|<c> override still applies). cacheRead=null (field not shipped)
+    // and a missing snapshot both render "cache:0" so the module always reads
+    // "cache:N". Positive value gets the brown default tint; 0 stays plain.
+    // |valueOnly|true drops the "cache:" prefix on every branch.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("cacheIn");
     const t = c.tokens?.current;
     if (!t) return `${prefix}0`;
@@ -2341,16 +1577,12 @@ m_quota: Object.assign(
       undefined,
     );
   },
-  // v0.8.40+ — per-turn token cost. Computed from current.* × the
-  // active model's price entry (cfg().tokenPrices[ctx.tokens.modelId]).
-  // When no entry exists for the active model (the default), the
-  // module falls back to placeholder "cost:n/a". Idle ticks mirror
-  // m_tokenIn's "live but stale" pattern: cost is calculated from
-  // live stdin values and wrapped in STALE_COLOR.
+  // Per-turn token cost from current.* × the active model's price entry. No
+  // entry for the active model → "cost:n/a" placeholder. Idle ticks mirror
+  // m_tokenIn's "live but stale" pattern (STALE_COLOR-wrapped).
   m_tokenCost: (c) => {
-    // vX.X.X+ — reads per-tick cost from the snapshot (computed
-    // at processTick time from stdin deltas × tokenPrices).
-    // No longer resolves tokenPrices at render time.
+    // Per-tick cost from the snapshot (computed at processTick time from stdin
+    // deltas × tokenPrices — no render-time price resolution).
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("cost");
     const t = c.tokens;
     if (!t || !t.sessionId) return placeholderBare("m_tokenCost", c);
@@ -2364,39 +1596,27 @@ m_quota: Object.assign(
     const cost = parseFloat(snapshotCost.value);
     return wrapValueDefault("m_tokenCost", cost, `${prefix}${formatCostDict(snapshotCost)}`, undefined);
   },
-  // v0.4.0+ — per-API-call input speed. Reads the previous-tick
-  // snapshot from cache (keyed by sessionId) and computes
-  // delta(current.input) / delta(cost.totalApiDurationMs) * 1000.
-  // The bare form (and `:color|scale`) applies the 5-band scale
-  // color via speedScaleColor: faster = greener, slower = redder;
-  // the `:color|<shortcut|SGR>` form overrides with a single color
-  // (e.g. `:color|red`). computeTickSpeed handles the cached /
-  // idle case by switching to STALE_COLOR regardless of the
-  // caller's color — gray signals "inactive: this measurement is
-  // from a previous API call, not this tick".
+  // Per-API-call input speed: delta(current.input) / delta(totalApiDurationMs)
+  // * 1000. The bare form (and `:color|scale`) applies the 5-band scale color
+  // (faster = greener); `:color|<shortcut|SGR>` overrides with a single color.
+  // computeTickSpeed switches the cached/idle case to STALE_COLOR regardless of
+  // the caller's color — gray signals "inactive measurement".
   m_tokenInSpeed: (c) => {
-    // First call with a temporary color to discover the tps
-    // (for the active case); the actual rendered value comes
-    // from a second call with the proper color. Two
-    // computeAndCacheTickDelta calls is fine — the per-render
-    // memo makes the second call free.
+    // Probe call discovers the tps, then a second call renders with the right
+    // color (the second delta call is free — single producer per tick).
     const probe = computeTickSpeed(c, "in", STALE_COLOR);
     const color = probe.active
       ? speedScaleColor("in", probe.tps ?? 0)
       : STALE_COLOR; // unused — computeTickSpeed forces STALE
     const r = computeTickSpeed(c, "in", color);
-    // vX.X.X+ — |valueOnly|true strips the leading label from
-    // computeTickSpeed's pre-prefixed output (e.g. STALE_COLOR
-    // + "in:" + format + RESET). The "in:" label sits between
-    // the SGR opener and the value; we strip the literal
-    // labelFor("inSpeed") substring when valueOnly is set.
+    // |valueOnly|true strips the labelFor("inSpeed") literal from the
+    // pre-prefixed output (it sits between the SGR opener and the value).
     if (c.passThrough?.valueOnly !== "true") return r.value;
     const lbl = labelFor("inSpeed");
     return r.value.includes(lbl) ? r.value.replace(lbl, "") : r.value;
   },
-  // v0.4.0+ — per-API-call output speed (see m_tokenInSpeed for
-  // the math + drop conditions).
-  // vX.X.X+ — |valueOnly|true strips the leading label.
+  // Per-API-call output speed (see m_tokenInSpeed for math + drop conditions).
+  // |valueOnly|true strips the leading label.
   m_tokenOutSpeed: (c) => {
     const probe = computeTickSpeed(c, "out", STALE_COLOR);
     const color = probe.active
@@ -2407,49 +1627,18 @@ m_quota: Object.assign(
     const lbl = labelFor("outSpeed");
     return r.value.includes(lbl) ? r.value.replace(lbl, "") : r.value;
   },
-  // v0.8.x cwf-tickStatus-v2 — m_totalToken* / m_totalTokenWithCacheIn
-  // REMOVED. Use the m_acc* family with scope=session (default):
-  //   m_totalTokenIn          → m_accTokenIn
-  //   m_totalTokenOut         → m_accTokenOut
-  //   m_totalTokenWithCacheIn → m_accTokenCachedIn
-  // v0.8.0+ — six per-session/per-model/per-project accumulators
-  // (m_accTokenIn / m_accTokenOut / m_accTokenCachedIn /
-  // m_accTokenTotalIn / m_accApiMs / m_accTokenHitRate). They all
-  // read the three-layer accumulator (session / project / model)
-  // via peekAcc and render in the same shape:
+  // The m_totalToken* family is REMOVED — use the m_acc* family (m_totalTokenIn
+  // → m_accTokenIn, m_totalTokenOut → m_accTokenOut, m_totalTokenWithCacheIn →
+  // m_accTokenCachedIn).
   //
-  //   m_accTokenIn                 → "in:163.5k"        (session default)
-  //   m_accTokenIn:scope:project   → "in:42.3k"         (project cross-session)
-  //   m_accTokenIn:scope:model     → "in:12.4k"         (model cross-session)
-  //   m_accTokenIn:scope:ccsession → badarg             (REMOVED in this rev)
-  //
-  // The acc value is a real measured number, not a delta — 0 is
-  // rendered as "acc:0" (the value-zero rule). The placeholder path
-  // is reserved for the truly-missing-data case (no session, no
-  // model for the model scope, no prior accumulator write).
-  //
-  // These six modules re-use the same accumulator that m_totalToken*
-  // / m_tokenInAvg / m_tokenOutAvg maintain — no new tick-side
-  // writes. The first valid tick of a session primes the slot;
-  // until then, the placeholder fires.
-  // v0.8.0+ — the bare m_acc* forms render at the default scope
-  // (session if a sessionId exists in the live snapshot, else
-  // project). The inline form `m_acc*:scope:<session|project|model>`
-  // overrides; the inline path is wired in INLINE_RENDERERS below
-  // and uses the same accBody helper for raw fields plus a direct
-  // v.accTokenHitRate read for the hit-rate module.
-  // v0.8.7+ — when a `scope` is on `ctx.passThrough` (i.e. an outer
-  // m_template forwarded it), the bare form honors it the same way
-  // the inline form does, so `m_template|<key>|scope|project` can
-  // route a bare `m_accTokenIn` (no inline args) to the project
-  // scope. Inner-explicit-wins: when the inner token is the inline
-  // form `m_accTokenIn|scope|...`, that arg beats the passthrough.
+  // Six accumulators read the three-layer accumulator (session / project /
+  // model) via peekAcc. 0 renders as "0" (value-zero rule); the placeholder
+  // fires only on the truly-missing case. Bare forms default to session; inline
+  // `m_acc*|scope:<session|project|model>` overrides, and an outer m_template's
+  // forwarded `scope` is honored too (inner-explicit wins).
   m_accTokenIn: (c) => {
-    // v0.8.30+ — bare default tint (brightGreen) on positive
-    // accumulator value. accBody returns the rendered string
-    // (or placeholderAcc on a null slot); we read the same slot
-    // through peekAcc to drive the wrap decision so the tint
-    // matches what gets rendered.
+    // Bare default tint (brightGreen) on positive accumulator value; we read
+    // the same slot through peekAcc so the tint matches what gets rendered.
     const scope = passThroughScope(c);
     const useScope = scope ?? "session";
     const v = peekAcc(useScope, c);
@@ -2457,19 +1646,15 @@ m_quota: Object.assign(
     return wrapValueDefault("m_accTokenIn", n, accBody(c, "in", scope), undefined);
   },
   m_accTokenOut: (c) => {
-    // v0.8.30+ — bare default tint (red) on positive value; see
-    // m_accTokenIn for the wrap contract.
+    // Bare default tint (red) on positive value; see m_accTokenIn for the contract.
     const scope = passThroughScope(c);
     const useScope = scope ?? "session";
     const v = peekAcc(useScope, c);
     const n = v ? v.accTokenOut : 0;
     return wrapValueDefault("m_accTokenOut", n, accBody(c, "out", scope), undefined);
   },
-  // v0.8.13+ — non-zero, non-null default tint. accBody returns
-  // plain `${prefix}${body}`; the wrap below paints the chunk
-  // brown/blue when the underlying slot is a positive number,
-  // leaves value=0 plain (value-zero rule), and is unreachable
-  // on the null placeholder branch (placeholderAcc already
+  // Non-zero, non-null default tint (brown) on a positive slot; value=0 stays
+  // plain; unreachable on the null placeholder branch (placeholderAcc already
   // returned inside accBody).
   m_accTokenCachedIn: (c) => {
     const scope = passThroughScope(c);
@@ -2482,9 +1667,8 @@ m_quota: Object.assign(
     const scope = passThroughScope(c);
     const useScope = scope ?? "session";
     const v = peekAcc(useScope, c);
-    // accBody computes total as accTokenIn + accTokenCachedIn;
-    // mirror that here for the wrap decision so the tint
-    // matches the rendered value.
+    // accBody computes total as accTokenIn + accTokenCachedIn; mirror that here
+    // for the wrap decision so the tint matches the rendered value.
     const n = v ? v.accTokenIn + v.accTokenCachedIn : 0;
     return wrapValueDefault("m_accTokenTotalIn", n, accBody(c, "total", scope), undefined);
   },
@@ -2495,14 +1679,9 @@ m_quota: Object.assign(
     const n = v ? v.accApiMs : 0;
     return wrapValueDefault("m_accApiMs", n, accBody(c, "apiMs", scope), undefined);
   },
-  // v0.8.x — m_accApiCalls mirrors m_apiCalls (`calls:N`) but reads
-  // the chosen scope's accApiCalls slot from status.json. Default
-  // scope is session (per-session accumulator; clear-bounded).
-  // Inline `m_accApiCalls|scope|project` etc. to widen or narrow.
-  // value=0 still renders as `calls:0` (the value-zero rule —
-  // count:0 is real data, not a placeholder).
-  // v0.8.13+ — non-zero, non-null default tint wraps the chunk
-  // cyan via DEFAULT_COLORS.m_accApiCalls.
+  // Mirrors m_apiCalls (`calls:N`) but reads the scope's accApiCalls slot from
+  // state.json (default scope session; |scope| to widen/narrow). value=0 still
+  // renders `calls:0` (value-zero rule). Non-zero default tint: cyan.
   m_accApiCalls: (c) => {
     const scope = passThroughScope(c);
     const useScope = scope ?? "session";
@@ -2510,14 +1689,9 @@ m_quota: Object.assign(
     const n = v ? v.accApiCalls : 0;
     return wrapValueDefault("m_accApiCalls", n, accBody(c, "apiCalls", scope), undefined);
   },
-  // vX.X.X+ — accumulated token cost. Computed at render time from
-  // peekAcc(scope).{accTokenIn,accTokenOut,accTokenCachedIn} × tokenPrice.
-  // When all prices are zero (the default) the module falls back to
-  // placeholder "cost:n/a". Scope resolved via passThrough (default session).
+  // Accumulated token cost from peekAcc (each tick's cost frozen at processTick).
+  // All prices zero (default) → "cost:n/a" placeholder. Scope via passThrough.
   m_accTokenCost: (c) => {
-    // vX.X.X+ — reads accumulated costs from peekAcc. Each
-    // tick's cost was frozen at processTick time, so the
-    // accumulator holds per-currency cost strings.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("cost");
     const scope = passThroughScope(c);
     const useScope = scope ?? "session";
@@ -2529,28 +1703,18 @@ m_quota: Object.assign(
     const total = v.costs.reduce((s, e) => s + parseFloat(e.value), 0);
     return wrapValueDefault("m_accTokenCost", total, `${prefix}${formatCostsArray(v.costs)}`, undefined);
   },
-  // v0.8.13+ — m_accTokenInSpeed / m_accTokenOutSpeed — session-
-  // cumulative throughput (t/s) computed from the chosen scope's
-  // accumulator: accTokenIn / accApiMs * 1000 (or accTokenOut).
-  // Mirrors the m_tokenInSpeed / m_tokenOutSpeed contract:
-  //   bare form / `:color|scale` / no `:color|` → 5-band scale
-  //   color via speedScaleColor (DEFAULT_SPEED_SCALE_BANDS),
-  //   faster = greener.
-  //   `:color|<shortcut|SGR>` → that exact color.
-  //   passive reading (peekAcc returned null → no scope ever
-  //   primed) → "direction:n/a" placeholder.
-  // Default scope session matches the rest of the m_acc* family;
-  // inline `|scope|project` etc. widens/narrows the rollup.
-  // Two-call pattern (probe + render) mirrors m_tokenInSpeed so
-  // the active case picks the band color from the actual tps.
+  // Session-cumulative throughput (accToken* / accApiMs * 1000) from the
+  // chosen scope's accumulator. No color → 5-band scale (faster = greener);
+  // |color|<c> → that color; unprimed scope → "direction:n/a". Default scope
+  // session; probe+render picks the band color from the actual tps.
   m_accTokenInSpeed: (c) => {
     const scope = passThroughScope(c) ?? "session";
     const probe = computeAccSpeed(c, scope, "in", STALE_COLOR);
     const color = probe.active
       ? speedScaleColor("in", probe.tps ?? 0)
-      : STALE_COLOR; // unused — computeAccSpeed emits "direction:n/a"
+      : STALE_COLOR;
     const r = computeAccSpeed(c, scope, "in", color);
-    // vX.X.X+ — |valueOnly|true strips the leading label.
+    // |valueOnly|true strips the leading label.
     if (c.passThrough?.valueOnly !== "true") return r.value;
     const lbl = labelFor("inSpeed");
     return r.value.includes(lbl) ? r.value.replace(lbl, "") : r.value;
@@ -2566,20 +1730,10 @@ m_quota: Object.assign(
     const lbl = labelFor("outSpeed");
     return r.value.includes(lbl) ? r.value.replace(lbl, "") : r.value;
   },
-  // m_accTokenHitRate — session-aggregate formula
-  // (accTokenCachedIn / (accTokenCachedIn + accTokenIn) * 100), the v0.4.x semantic
-  // that m_tokenHitRate (per-turn) replaced. Coloring uses the
-  // cacheHitColor palette. v0.8.x — renamed from m_accCacheHitRate
-  // to align the namespace with m_tokenHitRate (per-turn) and
-  // m_sumTokenHitRate (cross-project).
-  // v0.8.10-alpha.3 — reads TickStatusValue.accTokenHitRate directly
-  // (data-processor pre-computes at setAvg time).
+  // Session-aggregate hit rate (status-store pre-computes accTokenHitRate at
+  // setAvg time). Colored via cacheHitColor. Renamed from m_accCacheHitRate.
   m_accTokenHitRate: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "hit:" prefix.
-    // v0.9.x — prefix routes through labels.labelTokenHitRate
-    // (was hardcoded literal "hit:" in v0.8.x). placeholderAcc
-    // path already goes through labelFor("hitRate") so the
-    // data path catches up here.
+    // |valueOnly|true drops the "hit:" prefix; else prefix = labelFor("hitRate").
     const stripLabel = c.passThrough?.valueOnly === "true";
     const useScope = passThroughScope(c) ?? "session";
     const v = peekAcc(useScope, c);
@@ -2589,19 +1743,12 @@ m_quota: Object.assign(
     const prefix = stripLabel ? "" : labelFor("hitRate");
     return `${color}${prefix}${pct.toFixed(cachePctPrecision())}%${RESET}`;
   },
-  // v0.8.24+ — start of the tick statistics window. Reads
-  // TickStatusValue.startAt for the chosen scope (default
-  // session, matching the other m_acc* modules) and renders
-  // `<labelStartTime>HH:MM:SS` (sv-SE locale, 24h clock). The
-  // startAt field is first-write-stamped by setAvg; a legacy
-  // state.json with no startAt falls through to the
-  // `start:n/a` placeholder.
-  // v0.8.25+ — bare form honors `passThrough.abs === "true"`
-  // (set by an outer `m_template|...|abs|true`) to widen the
-  // body to YYYY-MM-DD HH:MM:SS. Default stays HH:MM:SS so
-  // existing renders are byte-identical.
+  // Start of the tick statistics window: renders TickStatusValue.startAt at the
+  // chosen scope as `<labelStartTime>HH:MM:SS`. startAt is first-write-stamped
+  // by setAvg; a legacy state.json without startAt → "start:n/a" placeholder.
+  // `abs` (via passThrough) widens the body to YYYY-MM-DD HH:MM:SS.
   m_accStartTime: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "start:" prefix.
+    // |valueOnly|true drops the "start:" prefix.
     const stripLabel = c.passThrough?.valueOnly === "true";
     const useScope = passThroughScope(c) ?? "session";
     const v = peekAcc(useScope, c);
@@ -2611,30 +1758,19 @@ m_quota: Object.assign(
     const prefix = stripLabel ? "" : labelFor("startTime");
     return `${prefix}${formatAbsTime(startAt, { abs })}`;
   },
-  // v0.8.0+ — sum/avg advanced statistics. 5 plain sums (in/out/
-  // cached/total/apiMs) + 3 ratios (tokenHitRate + tokenInSpeed +
-  // tokenOutSpeed). All default to "|model|active" + "|window|5h"
-  // + "|align|true" — the inline form `m_sumTokenIn|window|7d` etc
-  // overrides. See parseWindowScope + fetchSumAggregate for the
-  // resolution path; results are cached in state/cache.json under
-  // the "stat:<model>:<window>:<align>" key (window ∈ {"5h","7d",
-  // "all"}) with TTL=300s. sinceMs is derived but not part of the
-  // key, capping the cache at 12 entries.
+  // Sum/avg cross-project scan. 5 plain sums + 3 ratios; defaults
+  // |model|all + |window|all + |align|false (see parseWindowScope +
+  // fetchSumAggregate; results cached under "stat:<model>:<window>:<align>"
+  // with TTL=300s).
   m_sumTokenIn: (c) => {
-    // v0.8.7+ — bare m_sum* reads passThrough from ctx (set by an
-    // outer `m_template|<key>|window|...|model|...|align|...`)
-    // so the outer axes reach the inner modules without per-token
-    // re-declaration. v0.8.14+ — zero-row aggregate renders the
-    // "in:n/a" placeholder (was: drop) to mirror m_accTokenIn's
-    // placeholderAcc. Empty filter (bad window key) still drops
-    // (NOT placeholder — the whole axis is unusable).
-    // v0.8.30+ — bare default tint (brightGreen) on positive sum;
-    // sum=0 stays plain (value-zero rule).
+    // Bare m_sum* reads passThrough from an outer m_template. Zero-row
+    // aggregate → "in:n/a" placeholder; an empty filter (bad window key)
+    // still drops. Bare default tint (brightGreen) on positive sum; 0 plain.
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumTokenIn", c);
-    // vX.X.X+ — |valueOnly|true drops the "in:" prefix.
+    // |valueOnly|true drops the "in:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("in");
     return wrapValueDefault(
       "m_sumTokenIn",
@@ -2644,14 +1780,12 @@ m_quota: Object.assign(
     );
   },
   m_sumTokenOut: (c) => {
-    // v0.8.7+ — bare m_sum* reads c.passThrough (forwarded by an outer m_template); v0.8.14+ — zero-row renders placeholder (was: drop)
-    // v0.8.30+ — bare default tint (red) on positive sum; see
-    // m_sumTokenIn for the wrap contract.
+    // Reads c.passThrough; zero-row → placeholder. Bare default tint (red) on positive sum.
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumTokenOut", c);
-    // vX.X.X+ — |valueOnly|true drops the "out:" prefix.
+    // |valueOnly|true drops the "out:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("out");
     return wrapValueDefault(
       "m_sumTokenOut",
@@ -2661,62 +1795,45 @@ m_quota: Object.assign(
     );
   },
   m_sumTokenCachedIn: (c) => {
-    // v0.8.7+ — bare m_sum* reads c.passThrough (forwarded by an outer m_template); v0.8.14+ — zero-row renders placeholder (was: drop)
+    // Reads c.passThrough (outer m_template); zero-row → placeholder (was: drop)
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumTokenCachedIn", c);
-    // vX.X.X+ — |valueOnly|true drops the "cache:" prefix.
+    // |valueOnly|true drops the "cache:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("cacheIn");
-    // v0.8.13+ — non-zero, non-null default tint (brown) on
-    // positive sums; value=0 stays plain (value-zero rule).
+    // Non-zero positive sums get the brown default tint; value=0 stays plain.
     return wrapValueDefault("m_sumTokenCachedIn", agg.sumCached, `${prefix}${formatCompactToken(agg.sumCached)}`, undefined);
   },
   m_sumTokenTotalIn: (c) => {
-    // v0.8.7+ — bare m_sum* reads c.passThrough (forwarded by an outer m_template); v0.8.14+ — zero-row renders placeholder (was: drop)
+    // Reads c.passThrough (outer m_template); zero-row → placeholder.
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumTokenTotalIn", c);
-    // vX.X.X+ — |valueOnly|true drops the "total:" prefix.
+    // |valueOnly|true drops the "total:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("totalIn");
     return wrapValueDefault("m_sumTokenTotalIn", agg.sumTotalIn, `${prefix}${formatCompactToken(agg.sumTotalIn)}`, undefined);
   },
-  // v0.8.40+ — windowed token cost. Computed from sumIn/Out/Cached ×
-  // the model's price entry. When no entry exists for the resolved
-  // model id (default) → placeholder.
+  // Windowed token cost from sumIn/Out/Cached × the model's price entry.
+  // No entry for the resolved model id (default) → placeholder.
   m_sumTokenCost: (c) => {
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumTokenCost", c);
-    // vX.X.X+ — reads costs from the aggregate (summed at
-    // aggregateSamples time from JSONL samples). No longer
-    // resolves tokenPrices at render time.
+    // Costs summed from JSONL samples at aggregateSamples time.
     if (!agg.costs || agg.costs.length === 0) return placeholderBare("m_sumTokenCost", c);
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("cost");
     const total = agg.costs.reduce((s, e) => s + parseFloat(e.value), 0);
     return wrapValueDefault("m_sumTokenCost", total, `${prefix}${formatCostsArray(agg.costs)}`, undefined);
   },
-  // vX.X.X+ — periodic quota estimate. Same price math as
-  // m_sumTokenCost (sumIn*in + sumOut*out + sumCached*cachedIn) but
-  // divided by the aligned plan window's used% (captured on the
-  // StatAggregate by getStatAggregate when alignActive=true) to
-  // project the spent cost up to a full-period spend:
-  //   est = cost / (alignedUsedPercent / 100)
-  // Output uses fixed 2dp ("$30.20") regardless of magnitude so
-  // the render stays stable across a window's lifetime. Three
-  // short-circuit cases:
-  //   - rows === 0            → placeholder (m_sum* family default)
-  //   - alignedUsedPercent==null (non-aligned / no percent) → "n/a"
-  //   - alignedUsedPercent==0                              → "--"
-  // m_sumEstQuota requires alignActive=true to read the aligned
-  // used%; non-aligned / "all" / dhms scans render "n/a". Users
-  // who want a usable estimate must pass |window|<declared id>|
-  // align|true so parseWindowScope returns a filter with
-  // alignActive=true and the matched interval.
-  // vX.X.X+ — multi-currency costs are consolidated via exchange
-  // rates from config.tokenPrices.json default block.
+  // Periodic quota estimate: same price math as m_sumTokenCost but divided by
+  // the aligned plan window's used% to project spent cost up to a full period —
+  // est = cost / (alignedUsedPercent / 100). Fixed 2dp output ("$30.20").
+  // Short-circuits on rows===0 or alignedUsedPercent null/0. Requires
+  // alignActive=true (|window|<declared id>|align|true). Multi-currency costs
+  // consolidate via exchange rates from config.tokenPrices.json.
   m_sumEstQuota: (c) => {
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
@@ -2726,7 +1843,7 @@ m_quota: Object.assign(
     const pct = agg.alignedUsedPercent;
     if (pct == null) return placeholderBare("m_sumEstQuota", c);
     if (pct === 0) return placeholderBare("m_sumEstQuota", c);
-    // vX.X.X+ — resolve target currency via exchange rates
+    // Resolve target currency via exchange rates.
     const rates = cfg().exchangeRates;
     const baseCurrency = cfg().tokenPrices.default?.currency ?? "CNY";
     const providerId = c.currentProvider ?? null;
@@ -2739,127 +1856,85 @@ m_quota: Object.assign(
     return wrapValueDefault("m_sumEstQuota", est, `${prefix}${formatEstCostWithCurrency(est, single.currency)}`, undefined);
   },
   m_sumApiMs: (c) => {
-    // v0.8.7+ — bare m_sum* reads c.passThrough (forwarded by an outer m_template); v0.8.14+ — zero-row renders placeholder (was: drop)
+    // Reads c.passThrough (outer m_template); zero-row → placeholder.
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumApiMs", c);
-    // vX.X.X+ — |valueOnly|true drops the "api:" prefix.
+    // |valueOnly|true drops the "api:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("apiMs");
-    // v0.8.13+ — prefix routes through labelFor(labels.labelApi);
-    // default "api:" preserves the v0.8.x literal.
     return wrapValueDefault("m_sumApiMs", agg.sumApiMs, `${prefix}${formatRemainingMs(agg.sumApiMs)}`, undefined);
   },
-  // v0.8.x — m_avg* renamed to m_sum* to align the namespace with
-  // the cross-project JSONL scan family (m_sumTokenIn/Out/...).
-  // m_sumTokenHitRate replaces m_avgCacheHitRate (the SUM-OF-
-  // CACHED-OVER-TOTAL formula, NOT the per-turn m_tokenHitRate);
-  // m_sumTokenInSpeed / m_sumTokenOutSpeed replace the
-  // m_avgTokenInSpeed / m_avgTokenOutSpeed tps averages. The old
-  // m_avg* names are REMOVED with no alias (consistent with the
-  // v0.8.0 major-bump).
+  // m_sumTokenHitRate replaces m_avgCacheHitRate — SUM-OF-CACHED-OVER-TOTAL,
+  // NOT the per-turn m_tokenHitRate. Old m_avg* names REMOVED with no alias.
   m_sumTokenHitRate: (c) => {
-    // v0.8.7+ — bare m_sum* reads c.passThrough (forwarded by an outer m_template); v0.8.14+ — zero-row renders placeholder (was: drop)
+    // Reads c.passThrough; zero-row → placeholder.
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     const denom = agg.sumIn + agg.sumCached;
     if (agg.rows === 0 || denom === 0) return placeholderBare("m_sumTokenHitRate", c);
     const pct = (agg.sumCached / denom) * 100;
-    // vX.X.X+ — |valueOnly|true drops the "hit:" prefix.
-    // v0.9.x — prefix routes through labels.labelTokenHitRate
-    // (was hardcoded literal "hit:" in v0.8.x).
+    // |valueOnly|true drops the "hit:" prefix; else prefix = labelFor("hitRate").
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("hitRate");
     return `${cacheHitColor(pct)}${prefix}${pct.toFixed(cachePctPrecision())}%${RESET}`;
   },
   m_sumTokenInSpeed: (c) => {
-    // v0.8.7+ — bare m_sum* reads c.passThrough (forwarded by an outer m_template); v0.8.14+ — zero-row renders placeholder (was: drop)
+    // Reads c.passThrough (outer m_template); zero-row → placeholder (was: drop)
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.sumApiMs === 0) return placeholderBare("m_sumTokenInSpeed", c);
     const tps = (agg.sumIn / agg.sumApiMs) * 1000;
-    // v0.8.13+ — wrap with the 5-band scale color
-    // (DEFAULT_SPEED_SCALE_BANDS.in). Matches the m_tokenInSpeed
-    // convention: faster → green, slower → red.
-    // v0.8.13+ — prefix routes through labelFor(labels.labelInSpeed)
-    // so the speed module is independently configurable from
-    // labels.labelIn (default "in:" preserves today's literal).
-    // vX.X.X+ — |valueOnly|true drops the "in:" prefix.
+    // 5-band scale color via speedScaleColor (faster → green, slower → red);
+    // prefix via labelFor(labelInSpeed), default "in:".
     const color = speedScaleColor("in", tps);
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("inSpeed");
     return `${color}${prefix}${formatSpeed(tps)}${RESET}`;
   },
   m_sumTokenOutSpeed: (c) => {
-    // v0.8.7+ — bare m_sum* reads c.passThrough (forwarded by an outer m_template); v0.8.14+ — zero-row renders placeholder (was: drop)
+    // Reads c.passThrough; zero-row → placeholder.
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.sumApiMs === 0) return placeholderBare("m_sumTokenOutSpeed", c);
     const tps = (agg.sumOut / agg.sumApiMs) * 1000;
-    // v0.8.13+ — prefix routes through labelFor(labels.labelOutSpeed);
-    // default "out:" preserves today's literal.
+    // Prefix via labelFor(labelOutSpeed), default "out:".
     const color = speedScaleColor("out", tps);
-    // vX.X.X+ — |valueOnly|true drops the "out:" prefix.
+    // |valueOnly|true drops the "out:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("outSpeed");
     return `${color}${prefix}${formatSpeed(tps)}${RESET}`;
   },
-  // v0.8.x — total count of API calls (rows with apiMs > 0) in the
-  // window. Honors :model|, :window|, :align| like the other
-  // m_sum* modules. Despite the family being "sum" (cross-tick
-  // aggregate), the value is a COUNT, not a token — kept under the
-  // m_sum prefix because the rendering path is the same
-  // (windowed cross-project JSONL scan → single cached aggregate).
+  // Total count of API calls (rows with apiMs > 0) in the window. The value is
+  // a COUNT, not a token, but shares the m_sum rendering path.
   m_sumApiCalls: (c) => {
-    // v0.8.7+ — bare m_sum* reads c.passThrough (forwarded by an outer m_template); v0.8.14+ — zero-row renders placeholder (was: drop)
+    // Reads c.passThrough; zero-row → placeholder.
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.calls === 0) return placeholderBare("m_sumApiCalls", c);
-    // vX.X.X+ — |valueOnly|true drops the "calls:" prefix.
+    // |valueOnly|true drops the "calls:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("apiCalls");
-    // v0.8.13+ — non-zero, non-null default tint (cyan) on
-    // positive counts; value=0 short-circuits to null above.
-    // v0.8.13+ — prefix routes through labelFor(labels.labelApiCalls);
-    // default "calls:" preserves the v0.8.x literal.
+    // Cyan default tint on positive counts.
     return wrapValueDefault("m_sumApiCalls", agg.calls, `${prefix}${agg.calls}`, undefined);
   },
-  // v0.8.24+ — start of the tick statistics window across the
-  // filtered JSONL rows. Aggregates min(s.startAt) over the
-  // window/model/align-filtered sample set (read-once-per-tick
-  // from the head line + per-row from coerceSampleRow). Legacy
-  // rows (pre-v0.8.24, startAt: null) are filtered out by the
-  // aggregate's Number.isFinite gate, so an all-legacy window
-  // renders the `start:n/a` placeholder. Pass-through axes from
-  // an outer m_template|...| follow the same convention as the
-  // other m_sum* modules.
-  //
-  // v0.8.27+ — when align=true AND the matching ctx Window
-  // (fiveHour or weekly) ships resetStartAt, surface the plan
-  // window's open instant instead of the empirical
-  // min(s.startAt). The plan anchor is the authoritative answer
-  // to "when did this window open"; the empirical firstAt is
-  // only the oldest captured sample, which can drift earlier
-  // than the window for any number of reasons (claude-code
-  // process restart at the tail, JSONL rolls over, etc.).
-  // align=false (v0.8.26+ default) keeps the empirical reading.
-  // resetStartAt missing on the Window → fall back to
-  // agg.firstAt (the plan anchor is unavailable, not absent).
+  // Start of the tick statistics window across the filtered JSONL rows:
+  // min(s.startAt) (legacy null-startAt rows filtered by the Number.isFinite
+  // gate → "start:n/a"). With align=true AND a matched interval shipping
+  // resetStartAt, surfaces the plan window's open instant (the authoritative
+  // anchor; the empirical firstAt can drift — process restart at the tail,
+  // JSONL rollover). align=false (default) keeps the empirical min; missing
+  // resetStartAt → fall back to agg.firstAt.
   m_sumStartTime: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "start:" prefix.
+    // |valueOnly|true drops the "start:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("startTime");
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumStartTime", c);
     const abs = c.passThrough?.abs === "true";
-    // vX.X.X — align semantics gated on the new `|align|<true|false>`
-    // inline arg (default false). When align=true AND the resolved
-    // filter came from the declared-windowId branch
-    // (`alignActive=true` + `interval!=null`), render the plan's
-    // resetStartAt anchor. When align=false (default) OR the resolution
-    // fell through to dhms (alignActive=false), keep the empirical
-    // min(row.startAt) reading — matches v0.8.26+ default behavior.
+    // align=true + declared-windowId resolution → plan's resetStartAt anchor;
+    // otherwise (align=false default, or dhms/"all") → empirical firstAt.
     if (filter.alignActive && filter.interval != null) {
       const w = intervalToWindow(filter.interval);
       if (
@@ -2878,34 +1953,21 @@ m_quota: Object.assign(
     }
     return `${prefix}${formatAbsTime(agg.firstAt, { abs })}`;
   },
-  // v0.8.24+ — end of the tick statistics window across the
-  // filtered JSONL rows. Aggregates max(s.lastAt) over the
-  // window/model/align-filtered sample set. lastAt mirrors the
-  // row's `at` field (the wall-clock instant of that tick), so
-  // max(lastAt) is the "newest tick" in the window — the dual
-  // of m_sumStartTime. Empty / all-legacy window → `end:n/a`.
-  //
-  // v0.8.27+ — when align=true AND the matching ctx Window
-  // ships resetAt, surface the plan window's close instant
-  // instead of the empirical max(s.lastAt). resetAt is
-  // unconditional in slotsToWindow, so this branch fires for
-  // every aligned scan in practice (the only miss case is when
-  // the Window itself is null, which collapses to the
-  // empirical path).
+  // End of the tick statistics window across the filtered JSONL rows:
+  // aggregates max(s.lastAt) — the "newest tick" in the window, the dual of
+  // m_sumStartTime. Empty / all-legacy window → "end:n/a". With align=true AND
+  // a matching Window that ships resetAt, surfaces the plan window's close
+  // instant instead of the empirical max(s.lastAt).
   m_sumEndTime: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "end:" prefix.
+    // |valueOnly|true drops the "end:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("endTime");
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return null;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderBare("m_sumEndTime", c);
     const abs = c.passThrough?.abs === "true";
-    // vX.X.X — symmetric with m_sumStartTime above. align=true +
-    // declared-windowId resolution → plan's resetAt close instant;
-    // everything else (align=false default, or dhms / "all"
-    // resolution) → empirical max(s.lastAt) fallback. The v0.8.x
-    // `alignActive` flag is gone — the resolver emits `alignActive`
-    // directly off the resolution path.
+    // align=true + declared-windowId resolution → plan's resetAt close instant;
+    // otherwise → empirical max(s.lastAt) fallback.
     if (filter.alignActive && filter.interval != null) {
       const w = intervalToWindow(filter.interval);
       if (w != null && typeof w.resetAt === "string") {
@@ -2920,15 +1982,10 @@ m_quota: Object.assign(
     }
     return `${prefix}${formatAbsTime(agg.lastAt, { abs })}`;
   },
-  // v0.3.6+ — bare `m_quote` (no inline args). Picks a quote from
-  // the hourly window and renders it plain (no SGR wrapper). Opt-in
-  // — the default plan / balance templates do NOT include it.
-  //
-  // v0.8.21+ — also renders the entry's `author` as a
-  // `--<author>` suffix when one is supplied. Plain `<quote>` is
-  // the no-author case. Sanitize + 60-char-budget truncate apply
-  // (mirrors the inline renderer's default) so any local entry
-  // over the cap is clipped + suffixed with `...`.
+  // Bare `m_quote` (no inline args): picks a quote from the hourly window and
+  // renders it plain. Appends `--<author>` when the entry has one; sanitize +
+  // 60-char-budget truncate apply (any over-cap entry is clipped + suffixed
+  // with "..."). Opt-in — not in the default templates.
   m_quote: (c) => {
     const freq = parseFreq("h");
     if (!freq) return null; // unreachable — "h" is always valid
@@ -2943,17 +2000,13 @@ m_quota: Object.assign(
   // plan / balance templates do NOT include any of these — they are
   // strictly opt-in via lineTemplate.
 
-  // Session name (stdin.session_name). v6.x: bare form now emits
-  // "n/a" placeholder when missing (was: drop).
+  // Session name (stdin.session_name); missing → "n/a" placeholder.
   m_session: (c) => c.tokens?.sessionName ? wrapPlainDefault("m_session", c.tokens.sessionName, undefined) : placeholderBare("m_session", c),
-  // Model display name (stdin.model.display_name). v6.x: bare
-  // form emits "n/a" placeholder when missing.
+  // Model display name (stdin.model.display_name); missing → "n/a".
   m_model: (c) => c.tokens?.modelDisplayName ? wrapPlainDefault("m_model", c.tokens.modelDisplayName, undefined) : placeholderBare("m_model", c),
-  // vX.X.X+ — active provider instance id. When matched, displays
-  // the provider name (e.g. "minimax"). When unmatched but
-  // ANTHROPIC_BASE_URL is set, extracts the hostname (protocol,
-  // port, and sub-paths stripped). When both are absent, falls
-  // back to the "n/a" placeholder.
+  // Active provider instance id (e.g. "minimax"). When unmatched but
+  // ANTHROPIC_BASE_URL is set, extracts the hostname (protocol/port/sub-paths
+  // stripped). Both absent → "n/a" placeholder.
   m_provider: (c) => {
     if (c.currentProvider) return wrapPlainDefault("m_provider", c.currentProvider, undefined);
     const raw = process.env.ANTHROPIC_BASE_URL;
@@ -2963,12 +2016,9 @@ m_quota: Object.assign(
     }
     return placeholderBare("m_provider", c);
   },
-  // Effort level (stdin.effort, polymorphic — already coerced to
-  // string by parseTokenSnapshot). v6.x: bare form emits "n/a"
-  // placeholder when missing.
+  // Effort level (stdin.effort, already coerced to string); missing → "n/a".
   m_effort: (c) => c.tokens?.effort ? wrapPlainDefault("m_effort", c.tokens.effort, undefined) : placeholderBare("m_effort", c),
-  // Repository identity (stdin.workspace.repo). v6.x: when no
-  // component is available, emit "n/a" placeholder instead of drop.
+  // Repository identity (stdin.workspace.repo); no component → "n/a".
   m_repo: (c) => {
     const r = c.tokens?.repo;
     if (!r) return placeholderBare("m_repo", c);
@@ -2977,21 +2027,13 @@ m_quota: Object.assign(
     );
     return parts.length > 0 ? wrapPlainDefault("m_repo", parts.join("/"), undefined) : placeholderBare("m_repo", c);
   },
-  // Claude Code CLI version (stdin.version). v6.x: bare form
-  // emits "n/a" placeholder when missing.
+  // Claude Code CLI version (stdin.version); missing → "n/a".
   m_ccVersion: (c) => c.tokens?.ccversion ? wrapPlainDefault("m_ccVersion", c.tokens.ccversion, undefined) : placeholderBare("m_ccVersion", c),
-  // Current git branch. v6.x: cwd missing / not a git repo /
-  // detached HEAD now emit "branch:n/a" placeholder (was: drop).
-  // vX.X.X+ — |withStatus|<true|false> (default false): withStatus
-  // controls ONLY the status suffix and its color — clean → "✅"
-  // brightGreen, dirty → "🟠" brown (same colors as m_gitStatus). The
-  // branch body itself keeps its original color (teal default). With
-  // withStatus unset or "false" there is no suffix (pre-vX.X.X body).
-  // readGitInfo is called once per render (the pre-vX.X.X form called
-  // it twice).
-  // vX.X.X+ — the suffix glyphs read labels.labelGitClean /
-  // labels.labelGitDirty (defaults "✅" / "🟠") so the clean/dirty
-  // marker is user-overridable via config.json labels.*.
+  // Current git branch; missing git info → "branch:n/a" placeholder.
+  // |withStatus|<true|false> (default false): controls ONLY the status suffix
+  // and its color — clean → "✅" brightGreen, dirty → "🟠" brown (same colors
+  // as m_gitStatus); the branch body keeps its own color. Glyphs read
+  // labels.labelGitClean / labelGitDirty (defaults "✅" / "🟠").
   m_branch: (c) => {
     const info = readGitInfo(c.tokens?.cwd);
     if (info?.branch == null) return placeholderBare("m_branch", c);
@@ -3001,8 +2043,7 @@ m_quota: Object.assign(
     const glyph = info.dirty ? labelFor("gitDirty") : labelFor("gitClean");
     return `${body}${suffixColor}${glyph}${RESET}`;
   },
-  // Git working-tree cleanliness indicator. v6.x: missing git
-  // info → "git:n/a" placeholder (was: drop).
+  // Git working-tree cleanliness indicator; missing git info → "git:n/a".
   m_gitStatus: (c) => {
     const info = readGitInfo(c.tokens?.cwd);
     if (info == null) return placeholderBare("m_gitStatus", c);
@@ -3011,57 +2052,32 @@ m_quota: Object.assign(
   },
   // Deprecated alias — see m_ccVersion above.
   m_ccversion: (c) => c.tokens?.ccversion ? wrapPlainDefault("m_ccversion", c.tokens.ccversion, undefined) : placeholderBare("m_ccversion", c),
-  // Session elapsed wall-clock (stdin.cost.total_duration_ms).
-  // v6.x: missing field → "--" placeholder (was: drop). 0 ms is
-  // a real value and renders as "0s".
+  // Session elapsed wall-clock (stdin.cost.total_duration_ms); missing → "--".
+  // 0 ms is a real value and renders as "0s".
   m_sessionDuration: (c) => {
     const ms = c.tokens?.cost.totalDurationMs;
     return ms != null ? wrapPlainDefault("m_sessionDuration", formatRemainingMs(ms), undefined) : placeholderBare("m_sessionDuration", c);
   },
-  // Session API-call time (stdin.cost.total_api_duration_ms). v6.x:
-  // missing field → "--" placeholder.
+  // Session API-call time (stdin.cost.total_api_duration_ms); missing → "--".
   m_sessionApiDuration: (c) => {
     const ms = c.tokens?.cost.totalApiDurationMs;
     return ms != null ? wrapPlainDefault("m_sessionApiDuration", formatRemainingMs(ms), undefined) : placeholderBare("m_sessionApiDuration", c);
   },
-  // v0.8.0+ — per-turn delta of cost.totalApiDurationMs rendered
-  // as a dhms time string with the configurable labelApi prefix
-  // (v0.8.13+; default "api:"). Reuses the shared
-  // computeAndCacheTickDelta memo (same r.apiMs that
-  // m_tokenIn / m_tokenOut / m_tokenInSpeed read), so the
-  // prev-tick baseline is maintained regardless of which
-  // per-turn module appears in the user's template.
-  //
-  // Gate: hasDelta (deltaApi > 0). Idle ticks → "api:n/a"
-  // placeholder via PLACEHOLDERS; first tick with prev=0
-  // baseline → real value (per the per-turn-delta contract:
-  // current_usage IS the per-turn delta, so the safe assumption
-  // is prior=0). No snapshot / no sessionId → placeholder.
-  //
-  // The writeBack path mirrors m_tokenIn / m_tokenOut: when
-  // computeAndCacheTickDelta returns a non-null writeBack we
-  // fire setPrevTick so the NEXT tick has a fresh baseline.
-  // When this module is rendered alone in a template (no other
-  // per-turn module), the writeBack here is the only one —
-  // still sufficient because setPrevTick is idempotent and the
-  // next tick's computeAndCacheTickDelta will overwrite with
-  // the freshest snapshot.
+  // Per-turn delta of cost.totalApiDurationMs as a dhms string with the
+  // labelApi prefix (default "api:"). Reuses the shared delta baseline (same
+  // r.apiMs as m_tokenIn / m_tokenOut / m_tokenInSpeed). Gate: hasDelta
+  // (deltaApi > 0). Idle ticks → cached "api:<dhms>" STALE_COLORed (R7 —
+  // cache never expires); first tick assumes prev=0 (current_usage IS the
+  // per-turn delta). No snapshot / no sessionId → placeholder.
   m_apiMs: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "api:" prefix.
+    // |valueOnly|true drops the "api:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("apiMs");
     const t = c.tokens;
     if (!t || !t.sessionId) return placeholderBare("m_apiMs", c);
     const r = getDeltaForRender();
-    // v1.0 — setPrevTick moved to status-store.ts:processTick Stage 3. Render is read-only.
     if (!r.hasMeasurement) {
-      // v0.8.x — mirror m_tokenInSpeed/m_tokenOutSpeed: when this
-      // tick has no API-call delta, fall back to the last cached
-      // deltaApiMs within the 60s TTL window instead of dropping
-      // to "api:n/a". The cached value is rendered STALE_COLORed
-      // (gray) so the user sees the reading is from a previous
-      // API call, not this tick — same convention as the tps
-      // siblings. Outside the TTL or with no prior measurement,
-      // we still drop to the placeholder.
+      // Idle tick → fall back to the last cached deltaApiMs, STALE_COLORed
+      // (R7 — cache never expires); no prior measurement → placeholder.
       const cached = peekLastApiMs(t.sessionId, t.cwd);
       if (cached != null) {
         return wrapPlainDefault(
@@ -3072,35 +2088,25 @@ m_quota: Object.assign(
       }
       return placeholderBare("m_apiMs", c);
     }
-    // v1.0 — setLastApiMs moved to status-store.ts:processTick
-    // Stage 5. Render is read-only.
-    // v0.8.13+ — non-zero, non-null default tint: when the
-    // per-turn apiMs delta is a positive number the body is
-    // wrapped in the brown SGR (DEFAULT_COLORS.m_apiMs).
-    // value=0 stays plain (value-zero rule); STALE_COLOR still
-    // wins on the cached/idle branch above.
-    // v0.8.13+ — prefix routes through labelFor(labels.labelApi);
-    // default "api:" preserves the v0.8.x literal.
+    // Positive per-turn delta → brown default tint; 0 stays plain (STALE_COLOR
+    // still wins on the cached/idle branch above).
     return wrapValueDefault("m_apiMs", r.apiMs, `${prefix}${formatRemainingMs(r.apiMs)}`, undefined);
   },
-  // Session-cumulative lines added (stdin.cost.total_lines_added).
-  // v6.x: missing field → "+--" placeholder (was: drop). Zero is
-  // a real value and renders as "+0".
+  // Session-cumulative lines added (stdin.cost.total_lines_added); missing →
+  // "+--". Zero is a real value and renders as "+0".
   m_linesAdded: (c) => {
     const n = c.tokens?.cost.totalLinesAdded;
     return n != null ? wrapPlainDefault("m_linesAdded", `+${n}`, undefined) : placeholderBare("m_linesAdded", c);
   },
-  // Session-cumulative lines removed. v6.x: missing → "---".
+  // Session-cumulative lines removed; missing → "---".
   m_linesRemoved: (c) => {
     const n = c.tokens?.cost.totalLinesRemoved;
     return n != null ? wrapPlainDefault("m_linesRemoved", `-${n}`, undefined) : placeholderBare("m_linesRemoved", c);
   },
-  // Session-cumulative input tokens (stdin.context_window.total_input_tokens).
-  // v6.x: totals.tokenTotalIn=null → "in:n/a" placeholder (was: drop).
-  // v0.8.30+ — bare default tint (brightGreen) on positive value;
-  // 0 and n/a stay plain per the value-zero rule.
+  // Session-cumulative input tokens (stdin.context_window.total_input_tokens);
+  // null → "in:n/a". Bare default tint (brightGreen) on positive value; 0/n/a plain.
   m_tokenInTotal: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "in:" prefix.
+    // |valueOnly|true drops the "in:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("in");
     const n = c.tokens?.totals.tokenTotalIn;
     if (n == null) return placeholderBare("m_tokenInTotal", c);
@@ -3111,17 +2117,11 @@ m_quota: Object.assign(
       undefined,
     );
   },
-  // Session-cumulative output tokens. v6.x: totals.tokenTotalOut=null →
-  // "out:n/a" placeholder. v0.8.0+ — renamed from `m_tokenOutTotal`
-  // to `m_tokenTotalOut` so it sits in the `totalOut` family
-  // alongside `m_accTokenOut` (in-memory acc) / `m_sumTokenOut`
-  // (cross-project sum) / `totalOut` on-disk jsonl column. Source
-  // unchanged: reads `tokens.totals.tokenTotalOut` (= stdin
-  // `context_window.total_output_tokens`) directly, distinct from
-  // `m_accTokenOut`'s in-memory accumulator rollup.
-  // v0.8.30+ — bare default tint (red) on positive value.
+  // Session-cumulative output tokens: `tokens.totals.tokenTotalOut` (=
+  // stdin context_window.total_output_tokens), distinct from m_accTokenOut's
+  // in-memory rollup. Null → "out:n/a". Bare default tint (red) on positive value.
   m_tokenTotalOut: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "out:" prefix.
+    // |valueOnly|true drops the "out:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("out");
     const n = c.tokens?.totals.tokenTotalOut;
     if (n == null) return placeholderBare("m_tokenTotalOut", c);
@@ -3132,23 +2132,14 @@ m_quota: Object.assign(
       undefined,
     );
   },
-  // v0.8.0+ — new module added to fix the v0.8.0 contract gap.
-  // Source: same as m_tokenInTotal (stdin.context_window.
-  // total_input_tokens); the distinguishing semantics is that
-  // m_tokenTotalIn is in the total_input family alongside
-  // m_accTokenTotalIn / m_sumTokenTotalIn, all sharing the
-  // labelTotalIn label. The bare form below is identical to
-  // m_tokenInTotal's data path; the two names exist so callers
-  // can pick the family whose label matches their config.
+  // Same source as m_tokenInTotal (stdin.context_window.total_input_tokens),
+  // but in the `totalIn` family (labelTotalIn, alongside m_accTokenTotalIn /
+  // m_sumTokenTotalIn). The two names let callers pick the label family.
   m_tokenTotalIn: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "total:" prefix.
+    // |valueOnly|true drops the "total:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("totalIn");
     const n = c.tokens?.totals.tokenTotalIn;
-    // v0.8.13+ — non-zero, non-null default tint (blue). When
-    // totals.tokenTotalIn is a positive number the body is
-    // wrapped in DEFAULT_COLORS.m_tokenTotalIn; null → placeholder;
-    // 0 stays plain (value-zero rule — same convention as
-    // m_tokenCachedIn).
+    // Positive value → blue default tint; null → placeholder; 0 stays plain.
     if (n == null) return placeholderBare("m_tokenTotalIn", c);
     return wrapValueDefault(
       "m_tokenTotalIn",
@@ -3157,104 +2148,67 @@ m_quota: Object.assign(
       undefined,
     );
   },
-  // Project-wide count of valid API calls since first tick.
-  // v6.x: missing cwd → "calls:n/a" placeholder (was: "calls:0").
-  // Calls=0 still renders as "calls:0" — the v0.4.x always-render
-  // design stays intact. v0.8.13+ — prefix routes through
-  // labelFor(labels.labelApiCalls); default "calls:" preserves
-  // the v0.8.x literal so existing renders are byte-identical.
+  // Project-wide count of valid API calls since first tick. Missing cwd →
+  // "calls:n/a"; calls=0 still renders "calls:0" (always-render design).
   m_apiCalls: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "calls:" prefix.
+    // |valueOnly|true drops the "calls:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("apiCalls");
     const cwd = c.tokens?.cwd;
     if (!cwd) return placeholderBare("m_apiCalls", c);
     const acc = statusStore.readAccumulator("project", { cwd });
-    // v0.8.13+ — non-zero, non-null default tint: when the
-    // project-wide counter is a positive integer the body is
-    // wrapped in DEFAULT_COLORS.m_apiCalls (cyan). "calls:0"
-    // stays plain (the value-zero rule — same as
-    // m_tokenIn/m_tokenOut "in:0"/"out:0"; see
-    // [[render-value-zero-rule]]).
+    // Positive count → cyan default tint; "calls:0" stays plain (value-zero rule).
     if (!acc) return `${prefix}0`;
     return wrapValueDefault("m_apiCalls", acc.accApiCalls, `${prefix}${acc.accApiCalls}`, undefined);
   },
-  // v0.8.0+ — renamed from `m_contextSize`. The old name now lives
-  // at `m_contextSize` with a different source (the cumulative
-  // occupancy, see m_contextSize entry above). The new name holds
-  // the capacity (upper bound) of the context window. Typo
-  // `Widows` is preserved per user direction.
-  //
-  // Source: `context_window.context_window_size`. v6.x: size=null →
-  // "size:n/a" placeholder. v0.8.23+ — prefix routes through
-  // labelFor("contextWindowSize") (labels.labelContextWindowSize;
-  // default "size:").
+  // Capacity (upper bound) of the context window
+  // (context_window.context_window_size; the `Widows` typo is preserved).
+  // size=null → "size:n/a" placeholder.
   m_contextWindowSize: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "size:" prefix.
+    // |valueOnly|true drops the "size:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("contextWindowSize");
     const sz = c.tokens?.contextWindow?.contextWindowSize;
     return sz != null
       ? wrapPlainDefault("m_contextWindowSize", `${prefix}${formatCompactToken(sz)}`, undefined)
       : placeholderBare("m_contextWindowSize", c);
   },
-  // v0.8.0+ — renamed from `m_contextUsed` (the `Percent` suffix
-  // makes the unit explicit and matches m_tokenHitRate's % output
-  // style). Source: `context_window.used_percentage`. v6.x:
-  // contextUsedPercent=null → "n/a%" placeholder. Zero renders as "0%".
-  // v0.8.23+ — prefix routes through labelFor("contextUsedPercent")
-  // (labels.labelContextUsedPercent; default "used:").
+  // Context-window occupancy (context_window.used_percentage). null →
+  // "n/a%" placeholder; zero renders as "0%".
   m_contextUsedPercent: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "used:" prefix.
+    // |valueOnly|true drops the "used:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("contextUsedPercent");
     const pct = c.tokens?.contextWindow?.contextUsedPercent;
     return pct != null
       ? wrapPlainDefault("m_contextUsedPercent", `${prefix}${pct}%`, undefined)
       : placeholderBare("m_contextUsedPercent", c);
   },
-  // v0.8.0+ — new per-turn module. Sibling of m_contextUsedPercent,
-  // rendering the inverse: the unused share of the context window.
-  // Source: `context_window.remaining_percentage`. Zero renders
-  // as "0%"; null → "remain:n/a%" placeholder. v0.8.23+ — prefix
-  // routes through labelFor("contextRemainingPercent")
-  // (labels.labelContextRemainingPercent; default "remain:").
+  // The inverse of m_contextUsedPercent: the unused share of the context
+  // window (context_window.remaining_percentage). Zero renders "0%"; null →
+  // "remain:n/a%" placeholder.
   m_contextRemainingPercent: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "remain:" prefix.
+    // |valueOnly|true drops the "remain:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("contextRemainingPercent");
     const pct = c.tokens?.contextWindow?.contextRemainingPercent;
     return pct != null
       ? wrapPlainDefault("m_contextRemainingPercent", `${prefix}${pct}%`, undefined)
       : placeholderBare("m_contextRemainingPercent", c);
   },
-  // Context window bar + 5-band-colored percentage. v6.x: bare
-  // form now follows the placeholder rule — when the synthetic
-  // Window is missing, render the gray gauge placeholder. Zero
-  // pct still renders as a 0-value bar (the user's "0 直接显示"
-  // rule preserves the natural 0-value render path).
+  // Context-window bar + 5-band-colored percentage. Missing synthetic Window →
+  // gray gauge placeholder; zero pct still renders as a 0-value bar.
   m_windowContext: (c) =>
     c.contextWindow
       ? (c.passThrough?.valueOnly === "true"
           ? formatPercentOnly(c.contextWindow, c.mode)
           : formatOneChunk(c.contextWindow, c.mode, cfg().bar.width, false))
       : placeholderBare("m_windowContext", c),
-  // v0.8.16 — TTL gauge modules. Each picks a TTL-aware entry
-  // from its respective cache (response cache for m_cacheTtlStatus,
-  // stat cache for m_statTtlStatus), computes remainingFraction =
-  // (ttlMs - ageMs) / ttlMs, and emits one of TTL_BAR_CHARS picked
-  // by the fraction. Color is computed by ttlStatusColor (5-band
-  // palette). v0.9.x — also append a fixed-second TTL suffix
-  // ("▆ 23s") via formatTtlSeconds, which intentionally bypasses
-  // `timeFormat.minUnit` so the TTL gauge stays second-granular
-  // regardless of the global timeFormat. Missing / no-ttlMs
-  // entries fall through to the placeholder (single ▆ in
-  // STALE_COLOR) with no numeric suffix.
-  //
-  // v0.9.x — m_cacheTtlStatus reads the ACTIVE provider's cache row
-  // (keyed by ctx.currentProvider), NOT the cross-provider freshest.
-  // Each provider requests its quota/balance independently on its
-  // own clock; reading the freshest across providers leaks the
-  // freshness of one provider into another (e.g. a DeepSeek balance
-  // update hiding a stale MiniMax quota). The stat cache, by
-  // contrast, is process-shared and updated as a whole, so its
-  // "freshest" helper is still the right pick for m_statTtlStatus.
+  // TTL gauge modules. Each computes remainingFraction = (ttlMs - ageMs) /
+  // ttlMs, emits a TTL_BAR_CHARS glyph by fraction + a fixed-second suffix via
+  // formatTtlSeconds (bypasses timeFormat.minUnit — the gauge is always
+  // second-granular). Missing / no-ttlMs → placeholder (single ▆ in
+  // STALE_COLOR, no suffix). m_cacheTtlStatus reads the ACTIVE provider's row
+  // (keyed by ctx.currentProvider), NOT the cross-provider freshest — each
+  // provider fetches on its own clock, so freshest would leak one provider's
+  // freshness into another. The stat cache is process-shared and updated as a
+  // whole, so its freshest helper is right for m_statTtlStatus.
   m_cacheTtlStatus: (c) => {
     const key = c.currentProvider;
     if (key == null) return placeholderBare("m_cacheTtlStatus", c);
@@ -3271,15 +2225,10 @@ m_quota: Object.assign(
     const suffix = formatTtlSeconds(entry.ttlMs - entry.ageMs);
     return `${ttlStatusColor(remaining)}${ttlStatusChar(remaining)}${RESET} ${suffix}`;
   },
-  // v0.9.8+ — m_sumTtlStatus: per-filter TTL gauge. Sibling of
-  // m_statTtlStatus (which shows the freshest across all keys);
-  // m_sumTtlStatus shows the TTL of the EXACT stat-cache row
-  // that parseWindowScope resolves for the active m_sum* filter
-  // (model + window + align + term). Lets the user see how fresh
-  // the specific aggregate they care about is, not just the
-  // newest write to the cache. Same TTL_BAR_CHARS glyph +
-  // 5-band color + fixed-second suffix as m_statTtlStatus.
-  // Miss / ttlMs<=0 → placeholder (single ▆ in STALE_COLOR).
+  // m_sumTtlStatus: per-filter TTL gauge — shows the TTL of the EXACT
+  // stat-cache row that parseWindowScope resolves for the active m_sum* filter
+  // (model + window + align + term), not the freshest across keys. Same glyph
+  // + color + fixed-second suffix as m_statTtlStatus; miss → placeholder.
   m_sumTtlStatus: (c) => {
     const filter = parseWindowScope(c, c.passThrough ?? {});
     if (!filter) return placeholderBare("m_sumTtlStatus", c);
@@ -3290,46 +2239,32 @@ m_quota: Object.assign(
     const suffix = formatTtlSeconds(entry.ttlMs - entry.ageMs);
     return `${ttlStatusColor(remaining)}${ttlStatusChar(remaining)}${RESET} ${suffix}`;
   },
-  // v0.8.17+ — system RAM usage. Darwin reads vm_stat; other
-  // platforms fall back to os.totalmem() - os.freemem(). Format
-  // matches ccstatusline's "Mem:15.9G/63.7G" shape. query failure
-  // → "Mem:n/a" placeholder wrapped in STALE_COLOR. value=0 is
-  // impossible (os.totalmem is always > 0 on a real machine),
-  // so the value-zero rule does not apply here. The two-tone body
-  // (band-colored used chunk + cyan prefix/total) is built by
-  // renderMemUsageBody — the body is a string, not a numeric value
-  // that needs the value-zero/--branching.
+  // System RAM usage in ccstatusline's "Mem:15.9G/63.7G" shape. Query failure
+  // → "Mem:n/a" STALE_COLORed. value=0 is impossible (os.totalmem > 0), so the
+  // value-zero rule doesn't apply. Two-tone body built by renderMemUsageBody.
   m_memUsage: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "Mem:" prefix.
+    // |valueOnly|true drops the "Mem:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("memUsage");
     const m = getMemUsage();
     if (!m) return placeholderBare("m_memUsage", c);
     return renderMemUsageBody(prefix, m.used, m.total, undefined);
   },
-  // v0.8.36+ — system RAM used bar + 5-band-colored percentage.
-  // Parallel of m_windowContext (which renders the context-window
-  // bar+percent from stdin used_percentage). m_windowMemUsage
-  // reads the same getMemUsage() helper as m_memUsage (Darwin:
-  // vm_stat; else os.totalmem()/os.freemem()) but normalizes to a
-  // 0..100 ratio, wraps it in a synthetic Window, and emits
-  // formatOneChunk — so the value color is driven by
-  // colorFor(pct, "used") (i.e. thresholds.percentBands, default
-  // [60, 70, 80, 90]) and the bar chunk is sized by usedPct. NO
-  // label prefix — pure bar+percent shape, matches m_windowContext.
-  // m_total <= 0 guard is defensive — os.totalmem is always > 0 on
-  // a real machine, but a sandboxed test env could zero it.
+  // System RAM used bar + 5-band-colored percentage — the parallel of
+  // m_windowContext. Reads getMemUsage() (vm_stat on Darwin, else os.*),
+  // normalizes to a 0..100 ratio, wraps it in a synthetic Window, and emits
+  // formatOneChunk (value color via colorFor(pct, "used")). NO label prefix —
+  // pure bar+percent, matches m_windowContext. The m_total <= 0 guard is
+  // defensive (a sandboxed test env could zero os.totalmem).
   m_windowMemUsage: (c) => {
     const m = getMemUsage();
     if (!m || m.total <= 0) return placeholderBare("m_windowMemUsage", c);
     const pct = (m.used / m.total) * 100;
     const w = { pct } as Window;
-    // vX.X.X+ — |valueOnly|true strips the bar, showing just the colored percent.
+    // |valueOnly|true strips the bar, showing just the colored percent.
     if (c.passThrough?.valueOnly === "true") return formatPercentOnly(w, c.mode);
     return formatOneChunk(w, c.mode, cfg().bar.width, false);
   },
-  // vX.X.X+ — system RAM used bytes. Reads the same getMemUsage()
-  // helper as m_memUsage. Format: "used:X.XG" (label "used:" by
-  // default, configurable via labels.labelMemUsed).
+  // System RAM used bytes, "used:X.XG" (getMemUsage()).
   m_memUsed: (c) => {
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("memUsed");
     const m = getMemUsage();
@@ -3340,8 +2275,7 @@ m_quota: Object.assign(
       undefined,
     );
   },
-  // vX.X.X+ — system RAM total bytes. Same shape as m_memUsed but
-  // reads m.total. Format: "total:X.XG".
+  // System RAM total bytes, "total:X.XG".
   m_memTotal: (c) => {
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("memTotal");
     const m = getMemUsage();
@@ -3352,15 +2286,12 @@ m_quota: Object.assign(
       undefined,
     );
   },
-  // vX.X.X+ — context-window usage x/y (used/capacity). Data source
-  // mirrors m_contextSize (used = totals.tokenTotalIn) and
-  // m_contextWindowSize (capacity = contextWindow.contextWindowSize),
-  // formatted with formatCompactToken on both sides. The two-tone
-  // body (band-colored used chunk + blue prefix/total) is built by
-  // renderContextUsageBody. value=0 renders as "0" (value-zero rule);
-  // missing used/capacity → "ctx:n/a" placeholder.
+  // Context-window usage x/y (used = totals.tokenTotalIn, capacity =
+  // contextWindowSize), formatCompactToken on both sides, two-tone body built
+  // by renderContextUsageBody. value=0 renders "0"; missing used/capacity →
+  // "ctx:n/a" placeholder.
   m_contextUsage: (c) => {
-    // vX.X.X+ — |valueOnly|true drops the "ctx:" prefix.
+    // |valueOnly|true drops the "ctx:" prefix.
     const prefix = c.passThrough?.valueOnly === "true" ? "" : labelFor("contextUsage");
     const used = c.tokens?.totals?.tokenTotalIn;
     const total = c.tokens?.contextWindow?.contextWindowSize;
@@ -3369,19 +2300,15 @@ m_quota: Object.assign(
   },
 };
 
-// Cap unknown-module warnings to once per process so a template typo
-// doesn't spam stderr on every statusline tick (which is every few
-// seconds in active sessions). A one-shot warn is enough — the user
-// will see it on the first invocation.
+// Cap unknown-module warnings to once per process so a template typo doesn't
+// spam stderr on every statusline tick.
 let _unknownModuleWarned = false;
 
-// ----- v0.4.0+ token-module helpers -----
+// ----- token-module helpers -----
 
-// Compact token formatter: <thresholds[0] → raw integer, <thresholds[1]
-// → "<x.y>k", else "<x.y>M". Matches formatRemainingMs's tier shape
-// but uses token-specific thresholds (default 1k / 1M). Negative or
-// non-finite inputs fall back to "0". Exported so tests can pin the
-// behavior at threshold boundaries.
+// Compact token formatter: below thresholds[0] → raw integer, below
+// thresholds[1] → "<x.y>k", else "<x.y>M" (token-specific thresholds,
+// default 1k / 1M). Negative / non-finite → "0". Exported for tests.
 export function formatCompactToken(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0";
   const t = cfg().tokenFormat;
@@ -3402,11 +2329,9 @@ export function formatSpeed(tps: number | null): string {
   return `${tps.toFixed(precision)}/s`;
 }
 
-// v0.8.40+ — tiered-precision cost formatter for m_tokenCost family.
-// At least 2 decimal places, at most 5:
-//   < 0.01 → 5dp, < 0.1 → 4dp, < 1 → 3dp, >= 1 → 2dp
-// Non-finite / negative → "0.00". Currency-agnostic; the renderer
-// wraps with formatCostWithCurrency to attach the per-model prefix.
+// Tiered-precision cost formatter for the m_tokenCost family: < 0.01 → 5dp,
+// < 0.1 → 4dp, < 1 → 3dp, >= 1 → 2dp. Non-finite / negative → "0.00".
+// Currency-agnostic; formatCostWithCurrency attaches the prefix.
 export function formatCost(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0.00";
   if (n === 0) return "0.00";
@@ -3418,72 +2343,43 @@ export function formatCost(n: number): string {
   return n.toFixed(precision);
 }
 
-// vX.X.X+ — per-model token-price resolver. Delegates to the
-// 5-layer cascade in config.ts (resolveTokenPrice), passing the
-// active provider from the render context so provider-scoped
-// pricing (config.tokenPrices.json <provider>.<model> /
-// <provider>.default) and provider overrides (config.json
-// providers.<p>.config.tokenPrices) take effect. The local
-// lookup was inlined before vX.X.X; now it's a thin wrapper
-// around the canonical resolution in config.ts.
-// v0.9.x — currency-aware cost formatter. USD (the historical
-// default) renders bare to keep existing renders byte-identical;
-// any other currency is prepended with no separator (e.g.
-// "¥264.12", "CNY 264.12" — the trailing space is a v0.9.x
-// convenience for ASCII codes; v0.9.x drop it for symbol codes
-// where a space breaks the visual). Co-located with formatCost
-// because the two formatters are a matched pair — formatCost
-// produces the digits, this attaches the per-model currency
-// prefix.
-// vX.X.X+ — always uses currencySymbol for display. Previously
-// USD rendered bare (no prefix); now all currencies get their
-// symbol via currencySymbol (e.g. "$0.0012", "¥0.0012").
+// Currency-aware cost formatter: formatCost produces the digits, this attaches
+// the per-model currency symbol (always via currencySymbol — e.g. "$0.0012").
 function formatCostWithCurrency(cost: number, currency: string): string {
   return `${currencySymbol(currency)}${formatCost(cost)}`;
 }
 
-// vX.X.X+ — fixed-2dp cost formatter for m_sumEstQuota. The
-// m_tokenCost family uses tiered precision (2-5dp) because the
-// per-call cost can be tiny; the periodic-quota estimate lives at
-// a much larger magnitude (e.g. $30.20 / period) so always-2dp
-// matches the user's "保留2位小数" contract and keeps the render
-// stable across the lifetime of a window. Non-finite / negative
-// values collapse to "0.00" (matches formatCost's defensive
-// floor).
+// Fixed-2dp cost formatter for m_sumEstQuota — the estimate lives at a much
+// larger magnitude than per-call cost, so always-2dp matches the "保留2位小数"
+// contract and keeps the render stable across a window. Non-finite / negative
+// → "0.00".
 function formatEstCost(n: number): string {
   if (!Number.isFinite(n) || n < 0) return "0.00";
   return n.toFixed(2);
 }
 
-// vX.X.X+ — currency-aware wrapper for the periodic quota
-// estimate. Mirrors formatCostWithCurrency's "USD → bare body,
-// other currency → ${currency}${body}" rule so a user with
-// "CNY" / "¥" prices sees the same prefix shape for cost and
-// est. Co-located with formatEstCost.
-// vX.X.X+ — always uses currencySymbol for display. Mirrors
-// formatCostWithCurrency's "always symbol" rule.
+// Currency-aware wrapper for the periodic quota estimate (same symbol rule as
+// formatCostWithCurrency, so cost and est share the prefix shape).
 function formatEstCostWithCurrency(cost: number, currency: string): string {
   return `${currencySymbol(currency)}${formatEstCost(cost)}`;
 }
 
-// vX.X.X+ — format a single cost dict {currency, value} using
-// currencySymbol for the display prefix.
+// Format a single cost dict {currency, value} using currencySymbol for the
+// display prefix.
 function formatCostDict(cost: { currency: string; value: string }): string {
   return formatCostWithCurrency(parseFloat(cost.value), cost.currency);
 }
 
-// vX.X.X+ — format a costs array as comma+space-separated
-// entries, each with its own currency symbol. Empty array →
-// "n/a" for the caller's placeholder path. Single-currency
-// renders identically to formatCostDict (no trailing comma).
+// Format a costs array as comma+space-separated entries, each with its own
+// currency symbol. Empty array → "n/a" for the caller's placeholder path.
+// Single-currency renders identically to formatCostDict (no trailing comma).
 function formatCostsArray(costs: Array<{ currency: string; value: string }>): string {
   return costs.map((c) => formatCostDict(c)).join(", ");
 }
 
-// vX.X.X+ — convert a value from one currency to another using
-// exchange rates. Rates map: currency → rate (1 baseCurrency = rate
-// currency). Cross-currency pairs go via the base (typically CNY).
-// Missing rate → 1:1 fallback (no conversion).
+// Convert a value from one currency to another via exchange rates. Rates map:
+// currency → rate (1 baseCurrency = rate currency). Cross-currency pairs go
+// through the base (typically CNY). Missing rate → 1:1 fallback (no conversion).
 function convertCurrency(
   value: number,
   fromCurrency: string,
@@ -3507,12 +2403,9 @@ function convertCurrency(
   return rate != null && rate > 0 ? inBase * rate : inBase;
 }
 
-// vX.X.X+ — resolve the target currency for m_sumEstQuota projection.
-// Rules (per user spec 2026-07-22):
-//   1. Provider has CURRENCY field → use CURRENCY[0]
-//   2. No CURRENCY field → convert each cost to baseCurrency (typically
-//      CNY), pick the original currency whose converted value is largest
-// Falls back to costs[0].currency when single-currency or no rates.
+// Resolve m_sumEstQuota's target currency: provider CURRENCY[0] if set; else
+// the currency whose baseCurrency-converted value is largest. Falls back to
+// costs[0].currency when single-currency or no rates.
 function resolveEstQuotaTargetCurrency(
   costs: Array<{ currency: string; value: string }>,
   rates: Record<string, number>,
@@ -3544,10 +2437,8 @@ function resolveEstQuotaTargetCurrency(
   return bestCurrency;
 }
 
-// vX.X.X+ — convert a multi-currency costs array into a single target
-// currency using exchange rates. Sums each cost after conversion and
-// returns the total as a decimal string in the target currency.
-// Returns null when costs is empty.
+// Convert a multi-currency costs array to a single target currency (sums each
+// after conversion). Returns null when costs is empty.
 function convertCostsToCurrency(
   costs: Array<{ currency: string; value: string }>,
   targetCurrency: string,
@@ -3567,19 +2458,11 @@ function convertCostsToCurrency(
   return { currency: targetCurrency, value: total.toFixed(10) };
 }
 
-// v0.4.0+ — 5-band color picker for the speed scale.
-// Faster = greener; slower = redder. Same color palette
-// shape as the existing 5-band gauge modules
-// (m_window5h/7d/context): bright green / dark green /
-// yellow / orange / red, indexed from the FAST end.
-//
-// `in` uses 5× the `out` thresholds (per the user's spec:
-// out: [10, 20, 40, 80], in: [50, 100, 200, 400]) — input
-// streams naturally run hotter than output, so the bands
-// are scaled accordingly. The thresholds are config-driven
-// (cfg().tokenFormat.speedScaleBands) but the defaults match
-// the user-requested bands. Returns an SGR string; the
-// caller wraps the value with the RESET suffix.
+// 5-band speed-scale color: faster = greener, slower = redder (bright green /
+// dark green / yellow / orange / red, indexed from the FAST end). `in` uses 5×
+// the `out` thresholds (out: [10,20,40,80], in: [50,100,200,400]) — input runs
+// hotter. Bands are config-driven (cfg().tokenFormat.speedScaleBands).
+// Returns an SGR string; the caller adds RESET.
 export function speedScaleColor(
   direction: "in" | "out",
   tps: number,
@@ -3612,10 +2495,9 @@ function cachePctPrecision(): number {
   return cfg().tokenFormat.cachePctPrecision;
 }
 
-// v0.8.16 — 8-char TTL gauge palette. Index 0 = full TTL, index 7
-// = empty. Picked by remainingFraction ∈ [0, 1] via
-// `floor((1 - fraction) * 8)` so the visual matches a "filling up"
-// bar (top char at max TTL, bottom char at zero TTL).
+// 8-char TTL gauge palette. Index 0 = full TTL, index 7 = empty. Picked by
+// remainingFraction ∈ [0,1] via `floor((1 - fraction) * 8)` so the visual
+// matches a "filling up" bar (top char at max TTL, bottom at zero).
 const TTL_BAR_CHARS = ["█", "▇", "▆", "▅", "▄", "▃", "▂", "▁"] as const;
 
 function ttlStatusChar(remainingFraction: number): string {
@@ -3625,9 +2507,7 @@ function ttlStatusChar(remainingFraction: number): string {
   return TTL_BAR_CHARS[idx]!;
 }
 
-// v0.8.16 — 5-band palette matching speedScaleColor's vocabulary.
-// Reuses cfg().colors.* so user config overrides (e.g. redefining
-// brightGreen / darkGreen / yellow / orange / red) take effect.
+// 5-band palette matching speedScaleColor's vocabulary (reuses cfg().colors.*).
 function ttlStatusColor(remainingFraction: number): string {
   const c = cfg().colors;
   if (!Number.isFinite(remainingFraction) || remainingFraction <= 0) return c.red;
@@ -3648,37 +2528,10 @@ export function cacheHitColor(pct: number): string {
   return c.bad;
 }
 
-// Read samples for the (cwd, session) from the current snapshot,
-// filter to the [now - windowMs, now] range, sum the delta between
-// the FIRST and LAST sample in the window, and format as
-// "<label>:<compact>". Returns null when:
-//   - tokens/sessionId/cwd missing
-//   - no samples in the window yet (fresh session)
-//   - only one sample (can't compute a delta)
-// The "first sample baseline + last sample now" approach matches how
-// total_input_tokens / total_output_tokens are session-cumulative on
-// stdin — delta = (cumulative at end of window) - (cumulative at start
-// of window) = tokens used during the window.
-//
-// v6.x: total===0 (real zero in the window) now returns "label:0"
-// instead of null. The user reads "0" as "tracked, nothing in the
-// window" — distinct from the missing-data case (no samples) which
-// goes through placeholderBare at the call site.
-// v0.8.0+ — parse a human duration string into milliseconds.
-// Supports "all" (returns the sentinel "all") and any chain of
-// `<digits><unit>` where unit ∈ {d, h, m, s}. The chain is
-// accumulated in canonical order (d → h → m → s) regardless of
-// the input order, so "1m2h" and "2h1m" parse identically.
-// Returns null on malformed input (no digits, bad unit, etc.).
-//
-// Examples:
-//   parseDhms("5h")    → 5 * 3600 * 1000
-//   parseDhms("7d")    → 7 * 86400 * 1000
-//   parseDhms("1h30m") → 1*3600*1000 + 30*60*1000
-//   parseDhms("2d12h") → 2*86400*1000 + 12*3600*1000
-//   parseDhms("all")   → "all" (sentinel)
-//   parseDhms("")      → null
-//   parseDhms("5x")    → null
+// Parse a human duration string into ms. Supports "all" (sentinel) and any
+// chain of `<digits><unit>` (d/h/m/s), accumulated in canonical order
+// regardless of input order ("1m2h" == "2h1m"). Returns null on malformed
+// input (no digits, bad unit, trailing junk).
 function parseDhms(raw: string | undefined): number | "all" | null {
   if (raw == null) return null;
   if (raw === "all") return "all";
@@ -3703,52 +2556,27 @@ function parseDhms(raw: string | undefined): number | "all" | null {
     matched += m[0].length;
   }
   if (matched === 0) return null;
-  // Trailing junk (e.g. "5hz") is a parse-fail. The whole string
-  // must consist of digit/unit pairs.
+  // Trailing junk (e.g. "5hz") is a parse-fail — the whole string must
+  // consist of digit/unit pairs.
   if (matched !== raw.length) return null;
   return ms;
 }
 
-// vX.X.X — resolve the effective (windowKey, sinceMs, interval,
-// alignActive, modelFilter) for a sum/avg scan.
-//
-//   windowKey   — cache key segment. Either the literal "all"
-//                 sentinel, a declared `interval.windowId` (only
-//                 when align=true resolves through it; align=false
-//                 skips the lookup), or a free-form dhms string.
-//                 Each unique windowKey mints its own stat cache
-//                 entry under `stat:<modelFilter>:<windowKey>:<alignActive>`.
-//
-//   sinceMs     — wall-clock anchor for the JSONL scan. Rows with
-//                 `at < sinceMs` are filtered out (readAllSamples
-//                 + coerceSampleRow both gate on this).
-//                 For align-active windowId resolution: sinceMs =
-//                 Date.parse(window.resetStartAt) — the plan
-//                 window's open instant.
-//                 For dhms resolution: sinceMs = ctx.nowMs -
-//                 parsedDhmsMs.
-//                 For "all": sinceMs = 0.
-//
-//   interval    — the matched Interval when alignActive is true;
-//                 null otherwise. Carried on SumFilter so
-//                 m_sumStartTime / m_sumEndTime can render the
-//                 plan-anchor without re-walking the three slots.
-//                 (Not part of the cache key — same windowKey can
-//                 resolve to different Intervals across providers,
-//                 but the cache is per-render so this is fine in
-//                 practice.)
-//
-//   alignActive — true iff parseWindowScope resolved through the
-//                 declared windowId branch. Wall-clock scans
-//                 (align=false + dhms, OR align=true + dhms fall-
-//                 through) keep alignActive=false. Required for the
-//                 m_sumStartTime/EndTime plan-anchor rendering path.
-//
-//   modelFilter — undefined (all rows), "active" (current model),
-//                 or a literal model name.
-//
-//   providerBaseUrl — default provider filter (always set);
-//                 normalized ANTHROPIC_BASE_URL at render time.
+// Effective (windowKey, sinceMs, interval, alignActive, modelFilter) for a
+// sum/avg scan.
+//   windowKey — cache key segment: "all" sentinel, a declared
+//     interval.windowId (only when align=true resolves through it), or a
+//     free-form dhms string. Each unique key mints its own stat cache entry
+//     under `stat:<modelFilter>:<windowKey>:<alignActive>`.
+//   sinceMs — wall-clock anchor for the JSONL scan (rows with `at < sinceMs`
+//     are filtered out). The plan window's open instant when align-active, else
+//     ctx.nowMs - dhms, else 0 for "all".
+//   interval — the matched Interval when alignActive (for m_sumStartTime /
+//     m_sumEndTime's plan-anchor; NOT part of the cache key).
+//   alignActive — true iff resolved through the declared windowId branch
+//     (required for the plan-anchor rendering path).
+//   modelFilter — undefined (all), "active" (current model), or a literal name.
+//   providerBaseUrl — normalized ANTHROPIC_BASE_URL (default provider filter).
 type SumFilter = {
   windowKey: string;
   sinceMs: number;
@@ -3758,14 +2586,10 @@ type SumFilter = {
   providerBaseUrl?: string;
 };
 
-// vX.X.X — look up which Interval (if any) declares a given
-// windowId. Walks the open-ended `intervals` dict on ctx and
-// returns the first that matches. Used by parseWindowScope for the
-// `|window|<declaredWindowId>` lookup path so a user can write
-// `|window|monthly` against `intervals.monthly.windowId =
-// "monthly"` and (with `|align|true`) get the plan-aligned scan.
-// v0.9.4 — the `intervals` dict is open, so this lookup hits
-// arbitrary keys (not just the v0.9.x three reserved slots).
+// Look up the first Interval in the open-ended `intervals` dict declaring a
+// given windowId. Used by parseWindowScope's `|window|<declaredWindowId>` path
+// (e.g. `|window|monthly` against intervals.monthly.windowId) so a user can
+// write `|window|monthly|align|true` for a plan-aligned scan.
 function matchIntervalByWindowId(
   ctx: RenderContext,
   windowId: string,
@@ -3780,10 +2604,9 @@ function parseWindowScope(
   ctx: RenderContext,
   params: Record<string, ResolvedValue | undefined>,
 ): SumFilter | null {
-  // vX.X.X+ — default provider filter: when a provider is configured
-  // (ctx.providerBaseUrl is set), always filter JSONL rows by the
-  // current normalized ANTHROPIC_BASE_URL. No user-facing `provider`
-  // inline arg yet; this is a fixed default.
+  // Default provider filter: when a provider is configured (ctx.providerBaseUrl
+  // set), always filter JSONL rows by the normalized ANTHROPIC_BASE_URL. No
+  // user-facing `provider` inline arg yet; this is a fixed default.
   const providerBaseUrl = ctx.providerBaseUrl;
   const hasProvider = providerBaseUrl !== undefined && providerBaseUrl !== "";
 
@@ -3793,31 +2616,20 @@ function parseWindowScope(
   if (modelRaw === "all") {
     modelFilter = undefined;
   } else if (modelRaw === "active") {
-    // v0.9.x — active-model id (stdin.model.id). Was
-    // modelDisplayName in v0.8.x; renamed so the JSONL row filter
-    // matches the new sample.model stamp (which now also stamps
-    // modelId).
+    // Active-model id (stdin.model.id; renamed from modelDisplayName so the
+    // JSONL row filter matches the new sample.model stamp).
     modelFilter = ctx.tokens?.modelId ?? undefined;
   } else {
     modelFilter = modelRaw;
   }
 
-  // vX.X.X+ — `|term|<key>` for the m_sum* family. Looks up
-  // `ctx.intervals[term]` and, on a hit, runs a plan-aligned
-  // scan from the interval's `startAt` with the matched
-  // interval stamped on the filter (so downstream
-  // `getStatAggregate` populates `alignedUsedPercent` and
-  // m_sumEstQuota gets a usable estimate).
-  //
-  // `term` is a convenience alias for writing
-  // `|window|<intervals[term].windowId>|align|true` — it
-  // alone determines the time window; model is orthogonal.
-  // No model filter is required — the term's window applies
-  // regardless of model scope.
-  //
-  // Failure modes (interval missing / no usable startAt+endAt)
-  // fall through to the existing window/align/dhms logic
-  // below — `term` is a CONVENIENCE, not a hard requirement.
+  // `|term|<key>` for the m_sum* family: looks up `ctx.intervals[term]` and,
+  // on a hit, runs a plan-aligned scan from the interval's `startAt` with the
+  // interval stamped on the filter (so getStatAggregate populates
+  // alignedUsedPercent and m_sumEstQuota gets a usable estimate). It's a
+  // convenience alias for `|window|<intervals[term].windowId>|align|true`;
+  // model is orthogonal. Missing interval / no usable startAt+endAt falls
+  // through to the window/align/dhms logic below.
   const termRaw = params.term;
   if (typeof termRaw === "string" && termRaw !== "all") {
     const iv = intervalForTerm(termRaw, ctx);
@@ -3832,10 +2644,9 @@ function parseWindowScope(
         const anchorMs = Date.parse(w.resetStartAt);
         if (Number.isFinite(anchorMs)) {
           return {
-            // v0.9.8 — windowKey resolves to intervals[term].windowId
-            // (fallback to the term key literal). So a |term:short|model:active
-            // and the equivalent |window:5h|align:true|model:active share
-            // one stat:<model>:5h:true cache entry.
+            // windowKey resolves to intervals[term].windowId (fallback: the term
+            // key literal), so |term:short| and |window:5h|align:true| share one
+            // stat cache entry.
             windowKey: iv.windowId || termRaw,
             sinceMs: anchorMs,
             interval: iv,
@@ -3848,29 +2659,19 @@ function parseWindowScope(
     }
   }
 
-  // Bare form defaults to "all" (no time anchor) — opposite of the
-  // legacy v0.8.x "5h" default. A bare `m_sumTokenIn` now reads
-  // the entire cross-project JSONL; explicit `|window|<dhms>` is
-  // the opt-in to a time-bounded scan, and `|window|<declaredId>`
-  // requires `|align|true` to resolve as a plan-anchored scan.
-  // The literal "all" is RESERVED — parseWindowScope uses it as
-  // the no-time-anchor sentinel and short-circuits before any
-  // windowId lookup, so users CANNOT name an interval
-  // `windowId: "all"` (the matchIntervalByWindowId lookup never
-  // runs against the reserved string).
+  // Bare form defaults to "all" (no time anchor — reads the whole cross-project
+  // JSONL). `|window|<dhms>` opts into a time-bounded scan; `|window|<declaredId>`
+  // needs `|align|true` for a plan-anchored scan. The literal "all" is RESERVED
+  // as the no-time-anchor sentinel and short-circuits before any windowId
+  // lookup, so users cannot name an interval `windowId: "all"`.
   const windowRaw = (params.window as string | undefined) ?? "all";
 
-  // v0.8.27 default was `true`; v0.8.26 flipped it to `false`;
-  // vX.X.X restores the explicit opt-in form (default false),
-  // matching the discipline of |abs| / |nulldrop| — alignment is
-  // a deliberate choice, not an accident of resolution.
+  // align defaults to false (explicit opt-in, like |abs| / |nulldrop|).
   const alignRaw = (params.align as string | undefined) ?? "false";
   const alignWanted = alignRaw === "true";
 
-  // "all" sentinel: short-circuit BEFORE any windowId check so the
-  // reserved "all" id can never collide with a declared
-  // interval.windowId of the same name. Behaves identically to
-  // v0.8.x for this case: scan everything since epoch.
+  // "all" sentinel: short-circuit before any windowId check so the reserved id
+  // can never collide with a declared interval.windowId (scan since epoch).
   if (windowRaw === "all") {
     return {
       windowKey: "all",
@@ -3940,18 +2741,9 @@ function parseWindowScope(
   return null;
 }
 
-// v0.8.12 — resetStartAt is an ISO string in Window (see src/types.ts
-// Window.resetStartAt: string | null). Earlier revision of
-// parseWindowScope type-checked `typeof w.resetStartAt === "number"`
-// which never matched; aligned mode silently fell through to the
-// wall-clock fallback (nowMs - 5h / nowMs - 7d), inflating m_sum*
-// totals to the full wall-clock window. Fixed in v0.8.12: parse
-// the ISO string with Date.parse and gate on Number.isFinite so a
-// bad string falls back to wall-clock instead of NaN-poisoning the
-// scan.
-// the StatAggregate dict below. ReadAllSamples is called with the
-// resolved sinceMs and applies a mtime pre-filter to skip stale
-// files before opening them.
+// resetStartAt is an ISO string (src/types.ts Window.resetStartAt); parse it
+// with Date.parse and gate on Number.isFinite so a bad string falls back to
+// wall-clock instead of NaN-poisoning the scan.
 type StatAggregate = statusStore.StatAggregate;
 
 function fetchSumAggregate(filter: SumFilter): StatAggregate {
@@ -3971,40 +2763,15 @@ export function __resetUnknownModuleWarnForTest(): void {
   _unknownModuleWarned = false;
 }
 
-// Expand a template into rendered lines. Each output element is one
-// rendered line — separators and module pieces that contain "\n" are
-// split into separate line segments. Empty segments are dropped so a
-// trailing "\n" separator doesn't emit a blank line at the end.
+// ----- inline-args tokens -----
 //
-// Modules that return null (or "") cause their immediately adjacent
-// s_N tokens to be skipped too — see the comment on RenderContext for
-// the reasoning. Empty segments from the splitting pass get the same
-// treatment.
-// ----- v0.3.3+ inline-args tokens -----
-//
-// Three token forms now take colon-delimited parameters:
-//
-//   s_<n>[:color|<c>]
-//   m_label:<string>[:color|<c>]
-//   m_modeLabel[:color|<c>]
-//
-// General grammar: <prefix>(:<param>:<value>)*. Even segment count is
-// required after the prefix; odd counts drop the token. Every
-// (param, value) pair must be in the prefix's registered schema;
-// unknown params drop the token. The renderer for the prefix takes the
-// resolved { param: value } object plus the render context and returns
-// the chunk text (or null to drop).
-//
-// Future parameterized modules (m_model, …) plug in by adding an entry
-// to both INLINE_SCHEMAS and INLINE_RENDERERS. The bare <prefix> form
-// (no colon) still routes through MODULES as before — so existing
-// templates using bare `m_modeLabel` / `s_0` keep working byte-for-byte.
+// Inline forms take `|`-delimited params (see parseInlineArgs for the current
+// two-class grammar). The bare `<prefix>` form (no inline args) routes through
+// MODULES as before, so existing templates keep working byte-for-byte.
 
-// v6.x — additional named SGR constants for the per-module default
-// colors below. These are 256-color SGR strings (not theme-driven),
-// chosen to be visually distinguishable from each other AND from
-// the 5-band palette so DEFAULT_COLORS entries read as "this module's
-// natural tint" rather than blending with the threshold colors.
+// Named SGR constants for per-module default colors (256-color, not
+// theme-driven) — visually distinct from each other and from the 5-band
+// palette so defaults read as "this module's natural tint".
 const NAMED_PALETTE: Record<string, string> = {
   cyan: "\x1b[38;5;51m",         // bright cyan
   blue: "\x1b[38;5;33m",         // mid blue
@@ -4016,12 +2783,10 @@ const NAMED_PALETTE: Record<string, string> = {
   lavender: "\x1b[38;5;183m",    // soft lavender
 };
 
-// v6.x — DEFAULT_COLORS maps each non-numeric m_* module to its
-// hardcoded default tint. Numeric modules (5-band / speed-scale /
-// gauge / cache-hit) keep their existing color logic and are NOT in
-// this map. The dispatcher / INLINE_RENDERERS use this as a fallback
-// when `params.color` is empty — so users always see SOME color on
-// bare-form modules, and `|color|<c>` overrides as before.
+// DEFAULT_COLORS maps each non-numeric m_* module to its default tint. Numeric
+// modules (5-band / speed-scale / gauge / cache-hit) keep their own color
+// logic and are NOT here. Used as a fallback when `params.color` is empty, so
+// bare-form modules always show some color; `|color|<c>` overrides as before.
 const DEFAULT_COLORS: Record<string, string> = {
   // String-class identifiers / metadata
   m_session: NAMED_PALETTE.purple,
@@ -4043,38 +2808,22 @@ const DEFAULT_COLORS: Record<string, string> = {
   // Duration / count class (numeric but NOT 5-band / scale)
   m_sessionDuration: NAMED_PALETTE.brown,
   m_sessionApiDuration: NAMED_PALETTE.brown,
-  // v0.8.0+ — per-turn delta of cost.totalApiDurationMs,
-  // formatted as a dhms time string ("api:5s" / "api:1m30s").
-  // Brown matches the existing time-format family; the "api:"
-  // prefix is hardcoded (not part of the labels.* axis set).
-  //
-  // v0.8.13+ — non-zero, non-null default tint: m_apiMs
-  // (per-turn delta), m_accApiMs (session-cumulative), and
-  // m_sumApiMs (cross-project windowed) all share the brown
-  // SGR whenever the underlying value is a positive number;
-  // value=0 stays plain (the value-zero rule at
-  // [[render-value-zero-rule]]), null falls through to the
-  // STALE_COLORed placeholder path.
+  // m_apiMs / m_accApiMs / m_sumApiMs share brown on positive values; 0 plain,
+  // null → STALE_COLORed placeholder. ("api:" prefix is hardcoded, not a labels axis.)
   m_apiMs: NAMED_PALETTE.brown,
   m_accApiMs: NAMED_PALETTE.brown,
   m_sumApiMs: NAMED_PALETTE.brown,
   m_linesAdded: "\x1b[1;38;5;22m",   // bold + dark green (muted git-style added)
   m_linesRemoved: "\x1b[1;38;5;88m", // bold + dim red (muted git-style removed)
-  // m_apiCalls (per-turn project-wide counter), m_accApiCalls
-  // (session/project/model accumulator), and m_sumApiCalls
-  // (windowed cross-project count) all share the cyan SGR on
-  // positive values; "calls:0" stays plain.
+  // The calls-count modules (m_apiCalls / m_accApiCalls / m_sumApiCalls) share
+  // cyan on positive values; "calls:0" stays plain.
   m_apiCalls: NAMED_PALETTE.cyan,
   m_accApiCalls: NAMED_PALETTE.cyan,
   m_sumApiCalls: NAMED_PALETTE.cyan,
-  // v0.8.30+ — m_tokenIn / m_tokenOut family default tint.
-  // Reuses the 5-band palette colors (brightGreen = 0% band,
-  // red = 80% band) so a user who customizes the threshold
-  // colors gets consistent flow indicators automatically.
-  // Resolved from configStore at module load (mirrors
-  // LABEL_COLOR_SHORTCUTS below); helpers that need to honor
-  // a runtime colors.* override call resolveTokenFlowColor()
-  // instead of reading DEFAULT_COLORS directly.
+  // m_tokenIn / m_tokenOut family tint reuses the 5-band palette (brightGreen =
+  // 0% band, red = 80% band) so threshold-color customizations flow through.
+  // Resolved from configStore at module load; helpers honoring a runtime
+  // colors.* override call resolveTokenFlowColor() instead.
   m_tokenIn: configStore.get().colors.brightGreen,
   m_tokenOut: configStore.get().colors.red,
   m_tokenInTotal: configStore.get().colors.brightGreen,
@@ -4088,27 +2837,14 @@ const DEFAULT_COLORS: Record<string, string> = {
   m_contextWindowSize: NAMED_PALETTE.gray,
   m_contextUsedPercent: NAMED_PALETTE.gray,
   m_contextRemainingPercent: NAMED_PALETTE.gray,
-  // v0.8.24+ — start/end time of the tick statistics window.
-  // Gray = "neutral data" (matches the context-window family);
-  // the user's labels.labelStartTime / labels.labelEndTime knob
-  // controls the literal prefix ("start:" / "end:" defaults).
+  // Start/end of the tick statistics window — gray "neutral data" (labels
+  // labelStartTime / labelEndTime control the "start:" / "end:" prefixes).
   m_accStartTime: NAMED_PALETTE.gray,
   m_sumStartTime: NAMED_PALETTE.gray,
   m_sumEndTime: NAMED_PALETTE.gray,
-  // v0.8.0+ — m_acc* family. The two plain numeric in/out
-  // accumulators had STALE_COLOR (gray) here in v0.8.x —
-  // "data" rather than "status". v0.8.30+ moved them to
-  // brightGreen / red up top alongside their m_tokenIn /
-  // m_tokenOut siblings, so the in-flow / out-flow tint
-  // applies to the bare and inline forms. m_accTokenCachedIn
-  // / m_accTokenTotalIn are upgraded to brown / blue (v0.8.13+)
-  // for the non-zero-non-null rule; m_accTokenHitRate is
-  // governed by the band-based cacheHitColor helper, so the
-  // DEFAULT_COLORS entry is moot for the value but keeps the
-  // dispatcher / inline path happy.
-  // v0.8.13+ — non-zero, non-null default tint family. Brown is
-  // the cache-token hue (matches the time-format family); blue
-  // is the total-input hue (sits in the input-family row).
+  // Non-zero, non-null default tint family: brown = cache-token hue, blue =
+  // total-input hue. m_accTokenHitRate is governed by cacheHitColor (this
+  // entry is moot for the value but keeps the dispatcher/inline path happy).
   m_tokenCachedIn: NAMED_PALETTE.brown,
   m_tokenTotalIn: NAMED_PALETTE.blue,
   m_accTokenCachedIn: NAMED_PALETTE.brown,
@@ -4116,32 +2852,21 @@ const DEFAULT_COLORS: Record<string, string> = {
   m_sumTokenCachedIn: NAMED_PALETTE.brown,
   m_sumTokenTotalIn: NAMED_PALETTE.blue,
   m_accTokenHitRate: NAMED_PALETTE.stale,
-  // v0.8.17+ — system RAM usage. Default cyan matches ccstatusline's
-  // "Mem:..." widget hue so users migrating from ccstatusline get
-  // a familiar color until they override.
+  // System RAM usage — cyan matches ccstatusline's "Mem:..." hue for migrating users.
   m_memUsage: NAMED_PALETTE.cyan,
   m_memUsed: NAMED_PALETTE.cyan,
   m_memTotal: NAMED_PALETTE.cyan,
-  // vX.X.X+ — m_contextUsage. Blue rest color (prefix + total). The
-  // used chunk is band-colored internally by renderContextUsageBody
-  // (colorFor(pct, "used")), so this entry only tints the rest.
+  // m_contextUsage — blue rest color (prefix + total); the used chunk is
+  // band-colored internally by renderContextUsageBody.
   m_contextUsage: NAMED_PALETTE.blue,
-  // v0.8.36+ — m_windowMemUsage. Moot for the value tint (the
-  // renderer uses colorFor(pct, "used") not wrapPlainDefault),
-  // but kept so the dispatcher doesn't warn on bare-form paths
-  // that defensively index DEFAULT_COLORS. Mirrors m_memUsage
-  // cyan so an upgrade preserves a familiar hue.
+  // m_windowMemUsage — moot for the value tint (colorFor(pct, "used")), kept
+  // so the dispatcher doesn't warn on bare-form paths that index DEFAULT_COLORS.
   m_windowMemUsage: NAMED_PALETTE.cyan,
-  // vX.X.X+ — cost module default tint. Gold/yellow from the
-  // config-driven palette — monetary values sit in the yellow/
-  // orange family, distinct from the green/red/blue/brown of
-  // the existing token-flow modules.
+  // Cost modules — gold/yellow (monetary values sit in the yellow/orange
+  // family, distinct from the token-flow hues).
   m_tokenCost: configStore.get().colors.yellow,
   m_accTokenCost: configStore.get().colors.yellow,
   m_sumTokenCost: configStore.get().colors.yellow,
-  // vX.X.X+ — m_sumEstQuota sits in the same monetary yellow/orange
-  // family as the m_tokenCost family; reusing yellow keeps the
-  // visual contract consistent for users composing both modules.
   m_sumEstQuota: configStore.get().colors.yellow,
 };
 
@@ -4158,10 +2883,8 @@ const LABEL_COLOR_SHORTCUTS: Record<string, string> = (() => {
     red: c.red,
     stale: c.stale,
     brightBlack: "\x1b[90m",
-    // v6.x — additional named shortcuts exposed via `:color|<name>`
-    // (e.g. `:color|cyan` on a string module). Identical to the
-    // entries in NAMED_PALETTE; duplicated here so resolveColor can
-    // look them up without scanning NAMED_PALETTE separately.
+    // Additional named shortcuts via `:color|<name>` — duplicated from
+    // NAMED_PALETTE so resolveColor doesn't scan that table separately.
     cyan: NAMED_PALETTE.cyan,
     blue: NAMED_PALETTE.blue,
     magenta: NAMED_PALETTE.magenta,
@@ -4173,25 +2896,17 @@ const LABEL_COLOR_SHORTCUTS: Record<string, string> = (() => {
   };
 })();
 
-// Pure resolver for `<colorvalue>`. Accepts shortcut names and raw
-// SGR strings (`\x1b[…m`). Returns null on anything else so the
-// caller can warn + soft-fallback to plain text.
+// Pure resolver for `<colorvalue>`. Accepts shortcut names and raw SGR
+// strings (`\x1b[…m`); returns null on anything else so the caller can
+// warn + soft-fallback to plain text. The SPECIAL set (rainbow /
+// rand-rainbow / hue) is NOT resolved here — those need per-text processing
+// (buildRainbow / buildHue from src/quotes.ts), handled by `applyColor`.
 //
-// v0.3.5+: the SPECIAL shortcut set (rainbow / rand-rainbow / hue)
-// is NOT returned by this resolver — those need per-text processing
-// (buildRainbow / buildHue from src/quotes.ts), not a single SGR
-// string. They're handled at a higher level by `applyColor` below.
-// This resolver only validates shortcut-as-SGR and raw-SGR strings.
-// v0.4.0+ — sentinel string returned by resolveColor when the
-// user writes `:color|scale`. The speed-module renderers
-// (m_tokenInSpeed / m_tokenOutSpeed, both bare default and
-// inline) detect this token and replace it with the per-band
-// scale color via speedScaleColor(). For all other modules
-// the value behaves as opaque — they'd never see it because
-// their schema doesn't accept a custom color palette, and
-// resolving it to the literal string means a bug in the
-// caller that swallows it just renders uncolored (the SGR
-// would be invalid, but the chunk would still display).
+// `:color|scale` resolves to the SCALE_COLOR_SENTINEL; speed-module renderers
+// (m_tokenInSpeed / m_tokenOutSpeed) detect it and substitute the per-band
+// scale color via speedScaleColor(). Other modules never see it (their
+// schemas accept no custom palette), so a swallowed value just renders
+// uncolored.
 const SCALE_COLOR_SENTINEL = "__SCALE__";
 
 function resolveColor(value: string): string | null {
@@ -4201,13 +2916,11 @@ function resolveColor(value: string): string | null {
   return null;
 }
 
-// Tagged result for the higher-level `resolveColorParam` (used by
-// m_quote and any other future module that wants the
-// rainbow/hue shortcuts). Not exported via INLINE_SCHEMAS's
-// `ParamResolver` return type (which is `ResolvedValue | null`,
-// i.e. string | number | null) — the m_quote schema's `color`
-// resolver does a string-tag instead, and the renderer recognizes
-// the 3 magic strings as "apply buildRainbow / buildHue".
+// Tagged result for the higher-level `resolveColorParam` (used by m_quote and
+// future rainbow/hue modules). Not the INLINE_SCHEMAS `ParamResolver` return
+// type (`ResolvedValue | null`) — the m_quote `color` resolver string-tags
+// instead, and the renderer recognizes the 3 magic strings as
+// "apply buildRainbow / buildHue".
 type ColorParam =
   | { kind: "sgr"; value: string } // wrap text with `<sgr>…<RESET>`
   | { kind: "rainbow"; salt: number } // per-char SGR; salt offsets the rotation
@@ -4227,15 +2940,10 @@ export function resolveColorParam(value: string): ColorParam | null {
   return { kind: "sgr", value: sgr };
 }
 
-// Apply a resolved ColorParam to a plain-text body. Used by
-// m_quote (and any future module that opts into the full color
-// grammar). Safe ONLY for plain-text bodies — colored bodies must
-// use their override-aware helpers (e.g. formatOneChunkColored).
-//
-// The `seed` argument seeds rainbow / hue color generation so a
-// caller can tie color choice to a frequency window (same window
-// → same color). Callers that don't care about per-window color
-// stability can pass 0.
+// Apply a resolved ColorParam to a plain-text body (m_quote and future
+// full-color-grammar modules). Safe ONLY for plain-text bodies. `seed` ties
+// rainbow/hue color to a frequency window (same window → same color); pass 0
+// when per-window stability isn't needed.
 export function applyColor(
   body: string,
   param: ColorParam,
@@ -4254,10 +2962,8 @@ export function applyColor(
   }
 }
 
-// Encode a ColorParam as a string so it round-trips through the
-// generic `params.color: string` channel that INLINE_RENDERERS uses.
-// The decoder is `paramFromString`. This keeps the existing
-// ResolvedValue = string | number contract intact.
+// Encode a ColorParam as a string so it round-trips through the generic
+// `params.color: string` channel (decoded by decodeColorParam).
 const COLOR_KIND_SGR = "\x00COLOR:sgr:";
 const COLOR_KIND_RAINBOW = "\x00COLOR:rainbow:";
 const COLOR_KIND_HUE = "\x00COLOR:hue:";
@@ -4297,9 +3003,9 @@ type ResolvedValue = string | number;
 type ParamResolver = (raw: string) => ResolvedValue | null;
 
 // Sentinel: renderers return this to signal "args parsed fine but
-// semantically invalid" (e.g. m_label with an empty string, s_<n>
-// with an out-of-range index). The dispatcher warns once on this;
-// a plain null is treated as "no data to show" (silent drop, same
+// semantically invalid" (e.g. m_label with an empty string, an
+// s_<name> alias that isn't recognized). The dispatcher warns once on
+// this; a plain null is treated as "no data to show" (silent drop, same
 // as the bare MODULES path).
 const INLINE_BADARG = Symbol("inline-badarg");
 
@@ -4317,80 +3023,38 @@ type InlineSchema = {
   named: Record<string, ParamResolver>;
 };
 
-// v0.3.3+: every existing module accepts an optional `|color|<c>`
-// override via inline-args. The named param is `color` for all of
-// them — same shortcut table and raw-SGR rules as `m_label`.
-//
-// For modules that emit plain text (no internal SGR), the override
-// is a simple wrap. For modules that already apply a band-based /
-// single-color SGR (m_window5h/7d, m_balance, m_tokenHitRate,
-// m_cacheRead, m_age, m_tokenInSpeed, m_tokenOutSpeed), the override
-// REPLACES the natural color choice — the user's `color` always wins.
-// (Per spec: "如果与现有颜色方案冲突，则无视该参数" — interpreted as
-// "if the user explicitly asked for a color, ignore the natural
-// scheme in favor of theirs".)
+// Every module accepts an optional `|color|<c>` override. For plain-text
+// modules it's a simple wrap; for modules that already apply a band-based /
+// single-color SGR the override REPLACES the natural color — the user's color
+// always wins (per spec: "如果与现有颜色方案冲突，则无视该参数").
 const COLOR_PARAM = {
   named: {
     color: (raw: string) => resolveColor(raw),
   },
 } as const;
 
-// v0.4.0+ — per-module null-drop override. Accepts "true" or "false"
-// verbatim; anything else is a parse-fail and the inline token is
-// dropped (same as :color|<garbage>). Semantics:
+// Per-module null-drop override ("true"/"false" verbatim; anything else is a
+// parse-fail and the token drops). nulldrop omitted / "false" → FORCE the
+// placeholder when data is missing (module always renders, layout stable);
+// nulldrop:"true" → opt out ("drop on null", adjacent separators skipped). The
+// bare MODULES path keeps the original drop-on-null semantics; users wanting
+// the old drop add `:nulldrop|true`.
 //
-//   nulldrop omitted / nulldrop:false  → DEFAULT. Force a stable
-//     placeholder when the data is missing — the module ALWAYS
-//     renders, regardless of whether the underlying field is null.
-//     This keeps the line layout stable across ticks and matches
-//     the user's expectation that an explicitly-listed module in
-//     lineTemplate should occupy its slot.
-//   nulldrop:true                      → opt out of the placeholder
-//     and preserve the v0.3.x "drop on null" behavior. The module
-//     disappears and adjacent separators are skipped.
-//
-// The bare MODULES path (no inline args) keeps the original drop
-// semantics — bare `m_contextSize` (or any m_token* module) still
-// drops on null. To get the placeholder behavior the user must
-// use the inline form `m_contextSize` (which now defaults to
-// placeholder — see above). This is a BREAKING change for any
-// existing inline template that lists a module whose value is
-// sometimes null (the slot is now always
-// visible). Users who want the old drop behavior add
-// `:nulldrop|true` to those tokens.
-//
-// Placeholder shape per module (see PLACEHOLDERS in render.ts
-// for the dispatch):
-//   pure-number modules        → STALE_COLOR wrap on "n/a" (e.g.
-//                                "in:n/a", "ctx:n/a", "cache:n/a")
-//   number+unit modules        → STALE_COLOR wrap on "-- <unit>"
-//                                (e.g. "5h:--", "session:--", "+ --")
-//   gauge modules              → STALE_COLOR wrap on
-//                                "░░░░░░░░ 0%" (parallel to the
-//                                natural 0-value render)
-//   bare-string modules        → STALE_COLOR wrap on "n/a"
-// v0.8.21+ — m_quote `wrap` param. v0.9.x redesign: char-pair
-// instead of bool. Empty/missing value is a no-op (raw text
-// rendered as-is); one printable char duplicates to a 2-char
-// pair (e.g. `wrap=~` → `~~`, applied as `<text>`); two-or-more
-// printable chars take the first two (e.g. `wrap=ab…` → `ab`).
-// Left wrap = pair[0], right wrap = pair[1]. Non-printable
-// (control / non-ASCII / 0x7F DEL) is badarg. Applies to BOTH
-// local and address-mode (was address-only in v0.8.21+ — the
-// asymmetry is the reason for the redesign). The pair rides
-// through `applyColor` so wrap chars inherit the same tint as
-// the body (mirror the v0.8.44 `|wrap:<chars>|` bucket-D
-// convention).
+// Placeholder shapes (see PLACEHOLDERS): pure-number → "n/a" ("in:n/a");
+// number+unit → "-- <unit>" ("5h:--"); gauge → gray "░░░░ 0%"; bare-string →
+// "n/a". All STALE_COLOR-wrapped.
+// m_quote `wrap` param — a 2-char pair (left/right) rather than a bool.
+// Empty/missing = no-op; one printable char duplicates to a pair (`wrap=~` →
+// `~~`); 2+ chars take the first two. Non-printable (control / non-ASCII / DEL)
+// is badarg. Applies to BOTH local and address-mode; the pair rides through
+// applyColor so wrap chars inherit the body's tint.
 const QUOTE_WRAP_CHARS_PARAM = {
   named: {
     wrap: (raw: string): ResolvedValue | null => {
-      // Empty = no-op sentinel (returned so params.wrap is
-      // defined-but-empty, which the renderer reads as "skip
-      // wrapping"). Caller must distinguish empty (no-op) from
-      // missing (also no-op) by checking the raw value's length.
+      // Empty = no-op sentinel (defined-but-empty; the renderer reads it as
+      // "skip wrapping"). Caller distinguishes empty from missing by length.
       if (raw === "") return raw;
-      // Take first two characters; if only one is supplied,
-      // duplicate it (so `wrap=~` ≡ `wrap=~~`).
+      // Take the first two characters; a single char duplicates (wrap=~ ≡ ~~).
       let pair: string;
       if (raw.length === 1) {
         pair = raw + raw;
@@ -4399,8 +3063,7 @@ const QUOTE_WRAP_CHARS_PARAM = {
       } else {
         return null;
       }
-      // Both must be printable ASCII (0x21..0x7E). Anything else
-      // — control chars, whitespace, DEL, non-ASCII — is badarg.
+      // Both must be printable ASCII (0x21..0x7E); anything else is badarg.
       for (let i = 0; i < 2; i++) {
         const code = pair.charCodeAt(i);
         if (code < 0x21 || code > 0x7e) return null;
@@ -4417,11 +3080,9 @@ const NULDROP_PARAM = {
   },
 } as const;
 
-// v0.7.2+ — separator `repeat` parameter. Multiplies the rendered
-// body N times so a single token can emit e.g. 3 spaces (`s_space|
-// repeat|3` → `"   "`). Capped at 8 to keep a runaway config from
-// blowing up the statusline width. Default 1 when omitted. Out-of-
-// range (non-integer, < 1, or > 8) is a badarg → warn + drop.
+// Separator `repeat` parameter — multiplies the body N times (`s_space|repeat|3`
+// → "   "). Capped at 8 to keep runaway configs from blowing up the statusline
+// width; default 1. Out-of-range (non-integer, < 1, > 8) is a badarg.
 const SEP_REPEAT_MAX = 8;
 const REPEAT_PARAM = {
   named: {
@@ -4434,23 +3095,12 @@ const REPEAT_PARAM = {
   },
 } as const;
 
-// vX.X.X+ — separator `wrap` parameter. Default `both`. Controls
-// whether a NON-control body gets padded with one space on the
-// left and/or right:
-//   `left`  → pad left only  (so `s_dot|wrap|left` renders " ·")
-//   `right` → pad right only (so `s_dot|wrap|right` renders "· ")
-//   `both`  → pad both sides (so `s_dot|wrap|both` renders " · ")
-//   `none`  → no padding     (so `s_dot|wrap|none` renders "·")
-// The legacy boolean values `true` / `false` remain accepted as
-// ALIASES for `both` / `none` (byte-identical) — existing v0.7.2+
-// configs and the built-in presets keep rendering unchanged. The
-// resolver NORMALIZES the aliases to their canonical value so the
-// formatter only ever sees the four modes. Bodies that are pure
-// whitespace/control (`s_space`, `s_tab`, `s_newline`, and any
-// array entry that's a single ASCII whitespace or NUL/STP/etc.)
-// are returned as-is regardless of wrap mode — wrapping would
-// either create multi-space runs (with `s_space`) or push the
-// next module onto a new line twice (`s_newline`).
+// Separator `wrap` parameter (default `both`). Pads a NON-control body with one
+// space on the named side(s): `left` → " ·", `right` → "· ", `both` → " · ",
+// `none` → "·". Legacy `true`/`false` remain accepted as aliases for `both`/
+// `none` (normalized so the formatter only sees the four modes). Pure
+// whitespace/control bodies (s_space, s_tab, s_newline) are returned as-is
+// under every mode — wrapping would create multi-space runs or double-newline.
 const WRAP_PARAM = {
   named: {
     wrap: (raw: string): ResolvedValue | null => {
@@ -4471,25 +3121,12 @@ const WRAP_PARAM = {
   },
 } as const;
 
-// v0.9.0+ — `s_move|pos:<n>|char:<c>` pads the current line with
-// `<c>` until the cursor reaches column `pos`. Default pos=0,
-// char=" ". When the cursor is already at or past `pos` the move
-// is a no-op + warn (per the user's "误操作" spec — the call is a
-// bug because moving left / holding steady in a column-advance
-// construct is meaningless). `pos` MUST be present — bare `s_move`
-// (no `pos:` pair) is rejected by the resolver as a badarg.
-//
-// Resolver shape:
-//   pos  → non-negative integer (0..999 cap keeps a runaway config
-//          from blowing up the statusline width; 999 cells is well
-//          past every terminal's nominal width).
-//   char → a single non-control printable character (validated by
-//          the dispatcher's ANSI-strip width helper — see
-//          renderTemplate's cursor tracking). Empty string is
-//          accepted as a sentinel for "move without emitting" (the
-//          dispatcher still updates the cursor so subsequent
-//          chunks line up); multi-char is rejected as badarg to
-//          keep the column math unambiguous.
+// `s_move|pos:<n>|char:<c>` pads the current line with `<c>` until the cursor
+// reaches column `pos` (defaults pos=0, char=" "). Cursor already at/past pos →
+// no-op + warn ("误操作" spec — moving left/steady is meaningless). `pos` MUST
+// be present (bare s_move is a badarg). pos: non-negative integer capped at
+// 999; char: a single non-control printable char (empty = "move without
+// emitting" sentinel — the cursor still advances); multi-char is a badarg.
 const MOVE_PARAM = {
   named: {
     pos: (raw: string): ResolvedValue | null => {
@@ -4557,19 +3194,12 @@ function formatSepBody(body: string, repeat: string, wrap: string): string {
   return out;
 }
 
-// v0.8.0+ — three-layer accumulator scope selector (used by
-// m_acc*). Accepts "session" (default), "project", or "model".
-// "ccsession" was REMOVED in this revision and is intentionally
-// rejected with badarg (see resolveAccScope / passThroughScope);
-// the SCOPE_PARAM here only enumerates surviving scopes, so a
-// stray "ccsession" string fails the accept-set check at the
-// param level (and the resolve* helpers would throw anyway for
-// passthrough-only paths). Anything else is a parse-fail and the
-// inline token is dropped (same as :color|<garbage>). The model
-// scope is a no-op when the live TokenSnapshot has no
-// modelId (the placeholder path fires); project scope
-// reads the project-wide slot, which is null until at least one
-// tick has accumulated into it.
+// Three-layer accumulator scope selector (m_acc*): "session" (default),
+// "project", or "model". Anything else is a parse-fail → token dropped. The
+// removed "ccsession" is rejected as badarg by resolveAccScope/passThroughScope.
+// The model scope is a no-op when the live snapshot has no modelId (placeholder
+// fires); the project scope reads the project-wide slot (null until a tick
+// accumulates).
 const SCOPE_PARAM = {
   named: {
     scope: (raw: string): ResolvedValue | null =>
@@ -4577,25 +3207,16 @@ const SCOPE_PARAM = {
   },
 } as const;
 
-// v0.8.0+ — sum/avg module inline args.
-//
-// `:model|<active|name|all>` — narrow the jsonl scan to one model
-//   identity, "active" (the model currently displayed in m_model),
-//   or "all" (every row). Default is "all". The literal "all"
-//   skips per-row model filtering entirely.
-//
-// `:window|<dhms|all>` — the time window to scan. Accepts any
-//   `<digits><unit>` chain parseable by parseDhms (e.g. "5h",
-//   "7d", "1h30m", "2d12h"), plus the special "all" sentinel
-//   (no time filter, scan the entire jsonl). Default is "5h".
-//
-// `:align|<true|false>` — when true AND window ∈ {5h, 7d} AND
-//   ctx.fiveHour/weekly has resetStartAt+resetDurationMs, use the
-//   plan-aligned window [resetStartAt, resetStartAt + duration]
-//   instead of the wall-clock [now - windowMs, now]. The
-//   tokenplan "5h since 14:00" anchor matters here — without
-//   align, the wall-clock window can read N% under 100% even at
-//   full quota because we miss the recent refill. Default true.
+// sum/avg inline args:
+//   :model|<active|name|all> — narrow the JSONL scan to one model identity
+//     ("active" = the current model; default "all" = every row, no filtering).
+//   :window|<dhms|all> — the time window to scan (any parseDhms chain like
+//     "5h"/"7d", or "all" = no time filter; default "all").
+//   :align|<true|false> — true resolves `|window|<key>` against a declared
+//     interval.windowId and scans the plan-aligned window [resetStartAt, +
+//     duration] instead of the wall-clock [now - windowMs, now]. Without align
+//     the wall-clock window can read under 100% even at full quota (we miss the
+//     recent refill). Default false.
 const MODEL_PARAM = {
   named: {
     model: (raw: string): ResolvedValue | null =>
@@ -4610,24 +3231,13 @@ const WINDOW_PARAM = {
   },
 } as const;
 
-// v0.8.0+ — `:align|<true|false>` — gates the plan-anchored
-// scan path against the dhms wall-clock path on m_sum*
-// modules. Resolver accepts only literal `true` / `false` so
-// typos fail loud at the inline-args resolver rather than
-// silently no-op'ing — matches the discipline used by ABS_PARAM
-// and other boolean gates.
-//
-// vX.X.X — restored. Default is `false` so a bare `m_sum*` or
-// `m_sum*|window|<dhms>` reads wall-clock. `|align|true` opts
-// into the plan-anchored path: with `|window|<declaredId>` the
-// scan anchors to the matching Interval's resetStartAt; with
-// `|window|<unparseable string>` it falls through to dhms if
-// parseable, else drops. With `|align|false` the windowId
-// branch is skipped entirely — `|window|<declaredId>` reads as
-// plain dhms (and a literally parseable dhms value still
-// resolves; a value like `"monthly"` would drop because dhms
-// can't parse it). See parseWindowScope for the full
-// resolution tree.
+// `:align|<true|false>` gates the plan-anchored scan vs the dhms wall-clock
+// path on m_sum*. Accepts only literal true/false (typos fail loud). Default
+// false — a bare m_sum* or |window|<dhms> reads wall-clock. |align|true opts
+// into the plan-anchored path: with |window|<declaredId> the scan anchors to
+// that Interval's resetStartAt; with an unparseable window it falls through to
+// dhms if parseable, else drops. With align=false the windowId branch is
+// skipped entirely. See parseWindowScope for the full resolution tree.
 const ALIGN_PARAM = {
   named: {
     align: (raw: string): ResolvedValue | null =>
@@ -4635,20 +3245,12 @@ const ALIGN_PARAM = {
   },
 } as const;
 
-// v0.9.0+ — interval-term selector for m_windowQuota / m_countdown /
-// m_quota. v0.9.4 — the `intervals` dict is open-ended, so `term`
-// accepts ANY non-empty string (the bare form defaults to
-// "short" upstream of the dispatcher). `all` is reserved by
-// parseWindowScope's no-time-anchor sentinel and is rejected here
-// so a user typo (`m_windowQuota|term|all`) fails loud at the
-// inline-args resolver rather than silently no-op'ing. Empty
-// strings and whitespace-only values are likewise dropped.
-// v0.9.8 — for the m_sum* family, `term` ALSO resolves to
-// intervals[term].windowId before being written into the cache
-// key (see parseWindowScope ~L3567), so a |term:short| and the
-// equivalent explicit |window:5h|align:true| share one cache
-// entry. Falls back to the term key literal when windowId is
-// empty.
+// Interval-term selector for m_windowQuota / m_countdown / m_quota. The
+// `intervals` dict is open-ended, so `term` accepts any non-empty string (bare
+// form defaults to "short"). "all" is reserved by parseWindowScope's sentinel
+// and rejected here so a typo fails loud. For the m_sum* family, `term` also
+// resolves to intervals[term].windowId in the cache key, so |term:short| and
+// |window:5h|align:true| share one cache entry (fallback: the term literal).
 const TERM_PARAM = {
   named: {
     term: (raw: string): ResolvedValue | null => {
@@ -4659,14 +3261,10 @@ const TERM_PARAM = {
   },
 } as const;
 
-// v0.4.0+ — per-module display-mode override (scoped to the bar
-// computation for the window modules). Accepts "used" or
-// "remaining" verbatim; anything else is a parse-fail and the
-// inline token is dropped (same as :color|<garbage>). Resolution is
-// deliberately narrow — the module-level `display` config field
-// (RESOLVED via resolveDisplayMode) stays the default for the bare
-// `m_window5h` form. Inline display wins when present, so users can
-// e.g. show 5h as "remaining" while the global config is "used".
+// Per-module display-mode override for the window modules. Accepts "used" or
+// "remaining" verbatim; anything else is a parse-fail → dropped. Narrow by
+// design: the module-level `display` config stays the bare-form default, and
+// inline display wins when present (e.g. 5h as "remaining" while global is "used").
 const DISPLAY_PARAM = {
   named: {
     display: (raw: string): ResolvedValue | null =>
@@ -4674,14 +3272,9 @@ const DISPLAY_PARAM = {
   },
 } as const;
 
-// v0.8.25+ — boolean toggle that widens the m_accStartTime /
-// m_sumStartTime / m_sumEndTime rendered body from
-// `HH:MM:SS` (default) to `YYYY-MM-DD HH:MM:SS`. Accepts
-// only literal `true` or `false` so typos fail loud at the
-// inline-args resolver rather than silently no-op'ing —
-// matches the discipline used by ALIGN_PARAM. Default of
-// the bare form is `HH:MM:SS` so v0.8.24 renders stay
-// byte-identical after upgrade.
+// Widens the m_accStartTime / m_sumStartTime / m_sumEndTime body from
+// `HH:MM:SS` (default) to `YYYY-MM-DD HH:MM:SS`. Accepts only literal
+// true/false (typos fail loud).
 const ABS_PARAM = {
   named: {
     abs: (raw: string): ResolvedValue | null =>
@@ -4689,21 +3282,11 @@ const ABS_PARAM = {
   },
 } as const;
 
-// vX.X.X+ — boolean toggle that strips the leading label prefix
-// from the rendered body. Applies to every label-using m_* module
-// (~39 modules: the per-turn / m_acc* / m_sum* / m_memUsage
-// families). Default `false` so v0.8.x renders stay
-// byte-identical after upgrade. When `true`, the leading
-// `labelFor(axis)` prefix is dropped from BOTH the live render
-// path AND the placeholder path:
-//   m_tokenIn|valueOnly:true           → "1.2K"   (was "in:1.2K")
-//   m_tokenIn|valueOnly:true (no data) → "n/a"    (was "in:n/a")
-// Forwarded through m_template via the passthrough whitelist, so
-// an outer `m_template|<key>|valueOnly:true` drives every
-// label-using inner module. Accepts only literal `true` / `false`
-// so typos fail loud at the inline-args resolver rather than
-// silently no-op'ing — mirrors the discipline used by ALIGN_PARAM
-// and ABS_PARAM.
+// Strips the leading label prefix from the rendered body on every label-using
+// m_* module (per-turn / m_acc* / m_sum* / m_memUsage). Dropped from BOTH the
+// live and placeholder paths: m_tokenIn|valueOnly:true → "1.2K" (was "in:1.2K").
+// Forwarded through m_template's passthrough whitelist. Accepts only literal
+// true/false (typos fail loud).
 const VALUEONLY_PARAM = {
   named: {
     valueOnly: (raw: string): ResolvedValue | null =>
@@ -4711,10 +3294,10 @@ const VALUEONLY_PARAM = {
   },
 } as const;
 
-// vX.X.X+ — per-module status-marker override. Accepts "true" or
-// "false"; drives m_branch's clean/dirty color + "*" dirty suffix
-// (default true). Invalid values → badarg at the inline-args
-// resolver (mirrors NULDROP_PARAM / VALUEONLY_PARAM discipline).
+// Per-module status-marker override: drives m_branch's clean/dirty suffix
+// (default false — no suffix). Enabled → clean "✅" / dirty "🟠" from
+// labels.labelGitClean/labelGitDirty, each in its own color; `|color|` tints
+// the branch body only. Invalid values → badarg.
 const WITHSTATUS_PARAM = {
   named: {
     withStatus: (raw: string): ResolvedValue | null =>
@@ -4722,61 +3305,37 @@ const WITHSTATUS_PARAM = {
   },
 } as const;
 
-// ----- v0.4.0+ placeholder shapes for nulldrop:false -----------------------
+// ----- placeholder shapes for nulldrop:false -------------------------------
 //
-// Each constant is a closure over the inline-args params + ctx so the
-// INLINE_RENDERERS can pull a precomputed placeholder body. Every
-// placeholder wraps its body in `${STALE_COLOR}…${RESET}` so a missing
-// gauge / number reads as "dim gray, no data" — visually distinct
-// from a real value (which is colored by the band palette or wrapped
-// in the user's :color| override). The :color| inline override still
-// wins when present (it REPLACES the placeholder's STALE_COLOR wrap,
-// matching the existing "user override always wins" rule).
+// Each constant is a closure over params + ctx so INLINE_RENDERERS can pull a
+// precomputed placeholder body. Every placeholder wraps its body in
+// `${STALE_COLOR}…${RESET}` ("dim gray, no data"), and a `|color|` override
+// REPLACES that STALE_COLOR wrap (user override always wins).
 
-// pure-number placeholder body: "<prefix>n/a" — PLAIN text. The
-// STALE_COLOR wrap is applied by the INLINE_RENDERER (via
-// wrapPlain / formatOneChunkColored) so a `|color|<c>` inline
-// override REPLACES the default STALE_COLOR, matching the
-// existing "user color always wins" rule for every other module.
-// The prefix matches the module's normal inline label (e.g.
-// "ctx:", "in:", "out:", "cache:") so a nulldrop placeholder reads
-// like the same module just with "n/a" instead of a real number.
-// Bare-string modules pass prefix="" (e.g. m_session → just "n/a").
+// Pure-number placeholder: "<prefix>n/a" (PLAIN — the STALE_COLOR wrap is
+// applied by the INLINE_RENDERER so `|color|` can replace it). The prefix
+// matches the module's normal label ("ctx:", "in:", ...); bare-string modules
+// pass prefix="" (m_session → "n/a").
 function placeholderNA(
   prefix: string,
 ): (_params: Record<string, ResolvedValue>, _ctx: RenderContext) => string {
   return (_p, _c) => `${prefix}n/a`;
 }
 
-// number+unit placeholder body: PLAIN text. The STALE_COLOR wrap
-// is applied by the INLINE_RENDERER (via wrapPlain) for the same
-// reason as placeholderNA. The `body` is the COMPLETE placeholder
-// text the module would otherwise emit (e.g. "5h:--", "+ --",
-// "--/s"). Bare-number modules pass body="--" with no suffix
-// (e.g. m_sessionDuration → "--", matching the existing
-// formatRemainingMs shape).
+// Number+unit placeholder: the complete body the module would emit with "--"
+// in place of the value (e.g. "5h:--", "+ --"); PLAIN text, STALE_COLOR
+// applied by the INLINE_RENDERER.
 function placeholderDashesUnit(
   body: string,
 ): (_params: Record<string, ResolvedValue>, _ctx: RenderContext) => string {
   return (_p, _c) => body;
 }
 
-// v0.9.0+ — variant of `placeholderDashesUnit` whose body is a
-// function of the live `RenderContext` AND the resolved inline
-// `params`. Used by `m_countdown` so its placeholder reflects
-// the per-term label driven by `params.term` (e.g. `5h:--`,
-// `7d:--`, `30d:--` depending on which term is rendering — not
-// the legacy hard-coded "5h" default). When the chosen interval
-// is null the body falls back to a built-in label by term so the
-// placeholder always renders something readable.
-//
-// vX.X.X+ — `params.term` is the source of truth for label
-// selection. The bare-MODULES path always defaults to "short"
-// upstream of this helper, so bare `m_countdown` keeps reading
-// `c.shortInterval?.label`. The inline path now passes the
-// `term` through, which fixes the v0.8.x bug where
-// `m_countdown|term|mid` would render "(5h:--)" instead of
-// "(7d:--)" when the mid-term interval was missing.
+// Variant of placeholderDashesUnit whose body is a function of ctx + params.
+// Used by m_countdown so its placeholder reflects the per-term label driven by
+// `params.term` (e.g. "5h:--", "7d:--", "30d:--"), with a built-in fallback
+// label when the chosen interval is null. `params.term` is the source of truth
+// (bare m_countdown defaults to "short" upstream).
 function placeholderDashesUnitFn(
   body: (params: Record<string, ResolvedValue>, ctx: RenderContext) => string,
 ): (params: Record<string, ResolvedValue>, ctx: RenderContext) => string {
@@ -4784,12 +3343,10 @@ function placeholderDashesUnitFn(
 }
 
 // Term-aware renderer-context lookup. Mirrors the renderer-side
-// `term → Interval` switch (used in m_windowQuota / m_countdown /
-// m_quota) so placeholder + live bodies agree on what interval
-// they read. v0.9.4 — `term` is the literal dict key
-// (`ctx.intervals[term]`), NOT a fixed union. Default is "short"
-// to match the bare-MODULES default; any other string is a
-// passthrough to the dict.
+// `term → Interval` switch (m_windowQuota / m_countdown / m_quota) so
+// placeholder + live bodies agree on what interval they read. `term` is the
+// literal dict key (`ctx.intervals[term]`); default "short" matches the
+// bare-MODULES default; any other string passes through to the dict.
 function intervalForTerm(
   term: string | undefined,
   ctx: RenderContext,
@@ -4798,11 +3355,10 @@ function intervalForTerm(
   return (ctx.intervals ?? {})[key] ?? null;
 }
 
-// Built-in fallback labels for the three reserved terms when the
-// chosen interval is null. Non-reserved terms (e.g. "monthly")
-// fall back to the term string itself, since the renderer has no
-// historical default for them. Matches the v0.9.x "5h / 7d / 30d"
-// convention so existing renders stay byte-identical.
+// Built-in fallback labels for the three reserved terms when the chosen
+// interval is null. Non-reserved terms (e.g. "monthly") fall back to the term
+// string itself (no historical default). Matches the "5h / 7d / 30d" convention
+// so existing renders stay byte-identical.
 const PLACEHOLDER_TERM_FALLBACK: Record<string, string> = {
   short: "5h",
   mid: "7d",
@@ -4830,31 +3386,21 @@ function placeholderTermLabel(
   return wrap(label);
 }
 
-// v0.9.0+ — quota module placeholder. vX.X.X+ — term-agnostic:
-// every term renders the same "${labelFor("quota")}n/a" body (the
-// `(label)` tail is gone; valueOnly drops the prefix):
-//   - normal    → "quota: n/a"
-//   - valueOnly → "n/a"
+// Quota module placeholder — term-agnostic: every term renders
+// "${labelFor("quota")}n/a" (valueOnly drops the prefix): normal → "quota: n/a",
+// valueOnly → "n/a".
 function placeholderQuota(
   params: Record<string, ResolvedValue>,
   ctx: RenderContext,
 ): string {
-  // vX.X.X+ — `(label)` tail is gone; valueOnly drops the prefix.
-  //   normal    → "quota: n/a"
-  //   valueOnly → "n/a"
   const valueOnly = params.valueOnly === "true" || ctx.passThrough?.valueOnly === "true";
   const prefix = valueOnly ? "" : labelFor("quota");
   return `${prefix}n/a`;
 }
 
-// gauge placeholder body: returns PLAIN text (no SGR). The
-// INLINE_RENDERER handles the SGR wrap via wrapPlain (so a
-// `|color|<c>` override can REPLACE the default STALE_COLOR just
-// like every other module). The placeholder shape is a 0-value
-// bar — "used" mode shows an empty bar with "0%"; "remaining"
-// mode shows a full bar with "100%". The synthetic pct=0 keeps
-// the bar geometry aligned with the natural 0-value render path
-// (see render-tokens.test.ts: "m_windowContext: usedPct=0").
+// Gauge placeholder: PLAIN text (no SGR — the INLINE_RENDERER wraps via
+// wrapPlain so `|color|` can replace STALE_COLOR). Shape is a 0-value bar:
+// "used" → empty bar "0%"; "remaining" → full bar "100%".
 function placeholderGauge(
   params: Record<string, ResolvedValue>,
   ctx: RenderContext,
@@ -4871,40 +3417,21 @@ function placeholderGauge(
   return valueOnly ? "100%" : `${filled.repeat(width)} 100%`;
 }
 
-// Module → placeholder dispatcher. Each module opts into ONE of
-// the four shape families by listing its `placeholder` body. The
-// INLINE_RENDERER consults this table when the data path returns
-// null/empty AND params.nulldrop === "false".
-//
-// Add a module here ONLY if its bare-module null case is currently
-// a `return null`. The four families cover every existing drop
-// case: pure-number ("n/a"), number+unit ("-- <unit>"), gauge
-// ("gray bar + 0%"), bare-string ("n/a").
-//
-// v0.8.0+: placeholderNA / placeholderDashesUnit factories take
-// the prefix (or body) as a string OR as a function. The function
-// form is used for the four `labels.*` axes (in / out / cacheIn /
-// totalIn) so the placeholder reflects the user's configured
-// label rather than the hardcoded literal. The function is
-// invoked at placeholder-fire time, reading configStore.get()
-// at the same moment the renderer did.
+// Module → placeholder dispatcher. Each module opts into one of the four shape
+// families by listing its `placeholder` body; the INLINE_RENDERER consults this
+// table when the data path returns null/empty AND params.nulldrop === "false".
+// Add a module here ONLY if its bare-module null case is a `return null`. The
+// prefix/body factories can be a function, so the placeholder reflects the
+// user's configured labels.* at placeholder-fire time.
 type PlaceholderBody = (
   params: Record<string, ResolvedValue>,
   ctx: RenderContext,
 ) => string;
 
-// Label-aware NA placeholder: receives the LabelAxis enum (one
-// of the eight axes — four v0.8.0 token-axis plus four v0.8.13+
-// apiMs / apiCalls / inSpeed / outSpeed). The body defers label
-// resolution until placeholder-fire time so any subsequent config
-// override is picked up. Defaults reproduce the v0.7.x
-// literal-string behavior exactly because cfg().labels.labelIn
-// === "in:" etc., and the v0.8.13+ axes default to today's
-// literals ("api:" / "calls:" / "in:" / "out:" for speed).
+// Label-aware NA placeholder: defers labelFor(axis) resolution until
+// placeholder-fire time so post-load config overrides are picked up. valueOnly
+// drops the prefix (placeholder matches the live "value only" shape).
 function placeholderLabelOr(axis: LabelAxis): PlaceholderBody {
-  // vX.X.X+ — when |valueOnly|true is set (via inline args or via
-  // m_template passthrough), drop the leading label prefix so the
-  // placeholder matches the live-render path's "value only" shape.
   return (p, _c) => `${p.valueOnly === "true" ? "" : labelFor(axis)}n/a`;
 }
 
@@ -4912,64 +3439,27 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   // pure-number — placeholder shape is "<prefix>n/a"
   m_tokenInTotal: placeholderLabelOr("in"),
   m_tokenTotalOut: placeholderLabelOr("out"),
-  // v0.8.13+ — m_apiCalls placeholder routes through labelFor
-  // (labels.labelApiCalls) so the prefix matches the user's
-  // configured labelApiCalls default. Was hardcoded "calls:" via
-  // placeholderNA; the live-read variant mirrors the rest of the
-  // label-axis modules (in/out/cache/total).
+  // m_apiCalls placeholder routes through labelFor(labelApiCalls).
   m_apiCalls: placeholderLabelOr("apiCalls"),
-  // v0.8.x cwf-tickStatus-v2 — m_totalToken* / m_totalTokenWithCacheIn
-  // REMOVED. Use the m_acc* family with scope=session (default).
-  // m_acc* — v0.8.0+ labels.*: the four token-axis acc modules
-  // (m_accTokenIn/Out/CachedIn/TotalIn) share their prefix with
-  // the per-turn siblings via labelFor. m_accTokenHitRate
-  // (v0.8.x R8) also mirrors its per-turn sibling — "hit:"
-  // prefix, matching m_tokenHitRate / m_sumTokenHitRate. The
-  // :scope: inline arg is ignored at the placeholder level
-  // (placeholderNA / placeholderLabelOr returns the same body
-  // regardless of scope — see placeholderAcc comment for the
-  // future-extension hook). v0.8.13+ — m_accApiMs / m_accApiCalls
-  // / m_accTokenInSpeed / m_accTokenOutSpeed also route through
-  // labelFor (labels.labelApi / labelApiCalls / labelInSpeed /
-  // labelOutSpeed); defaults preserve today's literal strings.
+  // m_acc* placeholders share the per-turn prefixes via labelFor (the :scope:
+  // inline arg is ignored at the placeholder level — same body regardless of
+  // scope). The hit-rate triple (m_accTokenHitRate / m_tokenHitRate /
+  // m_sumTokenHitRate) shares the "hit:" prefix.
   m_accTokenIn: placeholderLabelOr("in"),
   m_accTokenOut: placeholderLabelOr("out"),
   m_accTokenCachedIn: placeholderLabelOr("cacheIn"),
   m_accTokenTotalIn: placeholderLabelOr("totalIn"),
-  // v0.8.13+ — m_accApiMs / m_accApiCalls placeholders route
-  // through labelFor (labels.labelApi / labels.labelApiCalls) so
-  // the prefix follows the configured defaults. Defaults remain
-  // "api:" / "calls:" so existing renders stay byte-identical.
   m_accApiMs: placeholderLabelOr("apiMs"),
   m_accApiCalls: placeholderLabelOr("apiCalls"),
-  // v0.8.13+ — m_accTokenInSpeed / m_accTokenOutSpeed placeholders.
-  // Use the dedicated labelInSpeed / labelOutSpeed axis (was:
-  // shared the in/out token-axis labelFor). Defaults remain "in:"
-  // / "out:" so existing renders stay byte-identical until the
-  // user overrides either axis independently.
   m_accTokenInSpeed: placeholderLabelOr("inSpeed"),
   m_accTokenOutSpeed: placeholderLabelOr("outSpeed"),
-  // v0.8.x R8 → v0.8.22: m_accTokenHitRate / m_tokenHitRate /
-  // m_sumTokenHitRate all share the `hit:` prefix via
-  // labels.labelTokenHitRate (was hardcoded in v0.8.x). The
-  // placeholder bodies keep the `n/a%` shape for the ratio
-  // modules and `n/a` for the bare per-turn form so existing
-  // renders stay byte-identical until the user overrides the
-  // label. Reading at placeholder-fire time keeps the rendered
-  // prefix in sync with any post-load config override.
   m_accTokenHitRate: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("hitRate")}n/a%`,
   m_tokenCachedIn: placeholderDashesUnit("cache:0"),
   m_tokenHitRate: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("hitRate")}n/a`,
-  // v0.8.23+ — context-window placeholders route through the
-  // dedicated labelContext* axes (labels.labelContextSize /
-  // labelContextWindowSize / labelContextUsedPercent /
-  // labelContextRemainingPercent; defaults "size:" / "size:" /
-  // "used:" / "remain:" preserve the v0.8.22 hardcoded literals).
+  // Context-window placeholders route through the labelContext* axes.
   m_contextSize: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("contextSize")}n/a`,
   m_contextWindowSize: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("contextWindowSize")}n/a`,
-  // m_contextUsedPercent's natural shape is "${pct}%" — the
-  // placeholder preserves the unit suffix so users see "used:n/a%"
-  // rather than bare "n/a" when usedPct is null.
+  // Preserves the "%" unit suffix so users see "used:n/a%" when usedPct is null.
   m_contextUsedPercent: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("contextUsedPercent")}n/a%`,
   m_contextRemainingPercent: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("contextRemainingPercent")}n/a%`,
   // number+unit — placeholder shape is the module's normal body
@@ -4977,73 +3467,35 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   // "+ --", "--/s"). Empty body = bare dash.
   m_sessionDuration: placeholderDashesUnit("--"),
   m_sessionApiDuration: placeholderDashesUnit("--"),
-  // v0.8.0+ — per-turn API-ms delta placeholder. Body uses the
-  // shared "n/a" so it lines up with the n/a-family placeholders
-  // (m_sumApiMs → "api:n/a", m_tokenHitRate → "hit:n/a",
-  // m_contextSize → "size:n/a"). v0.8.13+ — prefix routes
-  // through labelFor(labels.labelApi); default "api:" preserves
-  // the v0.8.x literal so existing renders stay byte-identical.
-  // Previously used dashes-unit ("api:--"); R9 unified on n/a so
-  // users composing api-ms alongside sum-api see the same body
-  // for "no reading yet".
+  // m_apiMs placeholder — "api:n/a" (R9 unified the apiMs family on n/a).
   m_apiMs: placeholderLabelOr("apiMs"),
   m_linesAdded: placeholderDashesUnit("+--"),
   m_linesRemoved: placeholderDashesUnit("---"),
-  // v0.8.0+ — sum/avg advanced statistics placeholders. Same shape
-  // as the rendered output: "in:n/a" / "out:n/a" / "cache:n/a" /
-  // "api:n/a" for the 5 plain modules; "hit:n/a%" for the ratio.
-  // Empty aggregate (no rows in window) triggers the placeholder.
+  // Sum placeholders mirror the rendered shape ("in:n/a" ... "hit:n/a%"); an
+  // empty aggregate (no rows in window) triggers the placeholder.
   m_sumTokenIn: placeholderLabelOr("in"),
   m_sumTokenOut: placeholderLabelOr("out"),
   m_sumTokenCachedIn: placeholderLabelOr("cacheIn"),
   m_sumTokenTotalIn: placeholderLabelOr("totalIn"),
-  // v0.8.13+ — m_sumApiMs / m_sumApiCalls route through labelFor
-  // (labels.labelApi / labels.labelApiCalls); defaults remain
-  // "api:" / "calls:" so existing renders stay byte-identical.
   m_sumApiMs: placeholderLabelOr("apiMs"),
-  // v0.8.14 — ratio gets the `%` suffix to mirror m_accTokenHitRate's
-  // `hit:n/a%` placeholderAcc shape (was `hit:n/a`; the % was
-  // missing in the v0.8.13 PLACEHOLDERS entry despite the inline
-  // comment claiming otherwise).
-  // v0.8.22+ — prefix routes through labels.labelTokenHitRate
-  // via labelFor("hitRate") so the user can override the
-  // per-turn / acc / sum hit-rate prefix as a single knob.
+  // Ratio keeps the "%" suffix ("hit:n/a%") to mirror placeholderAcc.
   m_sumTokenHitRate: (p, _c) => `${p.valueOnly === "true" ? "" : labelFor("hitRate")}n/a%`,
-  // v0.8.13+ — speed axes get their own labelFor slot
-  // (labels.labelInSpeed / labels.labelOutSpeed) so a user can
-  // rename speed prefixes independently of the in/out token-axis
-  // family. Defaults remain "in:" / "out:" matching today's
-  // literal strings byte-for-byte.
+  // Speed axes use their own labelFor slot (labelInSpeed / labelOutSpeed).
   m_sumTokenInSpeed: placeholderLabelOr("inSpeed"),
   m_sumTokenOutSpeed: placeholderLabelOr("outSpeed"),
   m_sumApiCalls: placeholderLabelOr("apiCalls"),
-  // v0.8.24+ — start/end time of the tick statistics window.
-  // m_sumStartTime aggregates min(s.startAt) over the filtered
-  // rows; m_sumEndTime aggregates max(s.lastAt). Placeholder
-  // shape: "<labelStartTime>n/a" / "<labelEndTime>n/a" (labels
-  // routed through labelFor so the configured labelStartTime /
-  // labelEndTime defaults apply). The m_accStartTime sibling
-  // routes through placeholderAcc, not the PLACEHOLDERS map.
+  // Start/end of the tick statistics window ("<labelStartTime>n/a"). The
+  // m_accStartTime sibling routes through placeholderAcc, not this map.
   m_sumStartTime: placeholderLabelOr("startTime"),
   m_sumEndTime: placeholderLabelOr("endTime"),
-  // v0.8.0+ — newly added m_tokenTotalIn (session-cumulative
-  // total_input_tokens). Shares the labelTotalIn axis with its
-  // sum/avg siblings.
   m_tokenTotalIn: placeholderLabelOr("totalIn"),
-  // gauge (placeholder shape is the gray 0% / 100% bar)
+  // Gauge — gray 0% / 100% bar.
   m_windowQuota: placeholderGauge,
   m_windowContext: placeholderGauge,
-  // v0.8.16 — TTL gauge placeholders. Custom shape: single ▆ char
-  // (NOT "ttl:n/a"). Returns PLAIN text (no SGR); the STALE_COLOR
-  // wrap is applied by placeholderBare / placeholderWithColor,
-  // matching every other module's contract. Inline
-  // `m_cacheTtlStatus|color|gray` overrides to the user's color of
-  // choice.
+  // TTL gauge placeholders — custom single ▆ glyph (NOT "ttl:n/a"); STALE_COLOR
+  // wrap applied by placeholderBare / placeholderWithColor.
   m_cacheTtlStatus: () => "▆",
   m_statTtlStatus: () => "▆",
-  // v0.9.8+ — m_sumTtlStatus placeholder. Same single ▆ glyph as
-  // m_statTtlStatus / m_cacheTtlStatus; no label prefix to recover
-  // (the body is just a glyph + suffix, no value).
   m_sumTtlStatus: () => "▆",
   // bare-string (no prefix to recover from; just "n/a")
   m_session: placeholderNA(""),
@@ -5055,79 +3507,59 @@ const PLACEHOLDERS: Record<string, PlaceholderBody> = {
   m_gitStatus: placeholderNA("git:"),
   m_ccVersion: placeholderNA(""),
   m_ccversion: placeholderNA(""),
-  // v6.x: per-API-call token modules. Previously these had no
-  // placeholder registration — bare forms dropped on null and the
-  // inline path produced "in:--/s" / "in:--" sentinels. New
-  // rule (per user direction): null → "n/a"; idle tick (delta=0)
-  // → "in:0" / "out:0" / "in:0.0/s"; 0 is always rendered, never
-  // hidden. The bare MODULES paths now route through these
-  // placeholders instead of returning null so layout stays stable.
+  // Per-API-call token modules. Previously bare forms dropped on null (inline
+  // emitted "in:--/s" / "in:--" sentinels). Rule: null → "n/a"; idle tick
+  // (delta=0) → "in:0" / "out:0" / "in:0.0/s"; 0 always rendered, never hidden.
+  // Bare MODULES paths route through these placeholders so layout stays stable.
   m_tokenIn: placeholderLabelOr("in"),
   m_tokenOut: placeholderLabelOr("out"),
-  // v0.8.13+ — speed axes route through the dedicated
-  // labelInSpeed / labelOutSpeed slot so the prefix can be
-  // configured independently from labels.labelIn / labels.labelOut.
-  // Defaults remain "in:" / "out:" matching the previous literal
-  // strings byte-for-byte; a user who renames labelIn="In:" will
-  // see "In:42" for tokens BUT still "in:12.3/s" for the speed
-  // module until they also override labelInSpeed.
+  // Speed axes route through the dedicated labelInSpeed / labelOutSpeed slot
+  // so the prefix configures independently from labels.labelIn/Out. Defaults
+  // stay "in:" / "out:" matching the old literals byte-for-byte.
   m_tokenInSpeed: placeholderLabelOr("inSpeed"),
   m_tokenOutSpeed: placeholderLabelOr("outSpeed"),
-  // v0.8.17+ — system RAM usage. Resolves to "<label>n/a" so the
-  // placeholder body stays in lockstep with the user's labels.labelMemUsage
-  // override (renaming the label renames the placeholder too).
+  // System RAM usage. Resolves to "<label>n/a" so the placeholder body stays
+  // in lockstep with labels.labelMemUsage (renaming the label renames the
+  // placeholder too).
   m_memUsage: placeholderLabelOr("memUsage"),
   m_memUsed: placeholderLabelOr("memUsed"),
   m_memTotal: placeholderLabelOr("memTotal"),
-  // vX.X.X+ — m_contextUsage placeholder. "ctx:n/a" (prefix dropped
-  // when |valueOnly|true is set). Mirrors m_memUsage's shape.
+  // m_contextUsage placeholder: "ctx:n/a" (prefix dropped with |valueOnly|true).
   m_contextUsage: placeholderLabelOr("contextUsage"),
-  // v0.8.36+ — m_windowMemUsage placeholder mirrors m_windowContext:
-  // a gray gauge (filled-bar "100%" in remaining mode, empty-bar
-  // "0%" in used mode). Color is STALE_COLOR.
+  // m_windowMemUsage placeholder mirrors m_windowContext: a gray gauge
+  // (filled-bar "100%" in remaining mode, empty-bar "0%" in used mode),
+  // colored STALE_COLOR.
   m_windowMemUsage: placeholderGauge,
-  // v6.x: previously drop-by-design modules (no age info / no
-  // version / no reset data / no balance). Now also follow the
-  // placeholder rule — they occupy their slot so adjacent
+  // Previously drop-by-design modules (no age/version/reset/balance data).
+  // Now also follow the placeholder rule — they occupy their slot so adjacent
   // separators don't shift. :nulldrop|true remains the opt-out.
   m_age: placeholderNA("age:"),
   m_version: placeholderNA("v:"),
   m_countdown: placeholderDashesUnitFn((p, c) =>
-    // Per-term shape — uniform dashes-left, label-right (matches the
-    // live "<arrow><countdown>·<label>" but with no arrow and dashes):
-    //   short / mid / long → "--·<label>"
-    //     e.g. "--·5h", "--·7d", "--·30d"
+    // Per-term shape: uniform dashes-left, label-right (matches the live
+    // "<arrow><countdown>·<label>" but with no arrow and dashes) →
+    // short/mid/long render "--·<label>", e.g. "--·5h".
     placeholderTermLabel(p, c, (label) => `--·${label}`),
   ),
   m_balance: placeholderNA("balance:"),
   m_quota: placeholderQuota,
-  // vX.X.X+ — token cost module placeholders. Render "cost:n/a" so
-  // the placeholder stays in lockstep with labelTokenCost overrides.
+  // Token cost placeholders render "cost:n/a" so the placeholder stays in
+  // lockstep with labelTokenCost overrides.
   m_tokenCost: placeholderLabelOr("cost"),
   m_accTokenCost: placeholderLabelOr("cost"),
   m_sumTokenCost: placeholderLabelOr("cost"),
-  // vX.X.X+ — m_sumEstQuota placeholder. Same shape as
-  // m_sumTokenCost (prefix + "n/a") so users composing both
-  // modules see a uniform "no reading yet" body. The renderer's
-  // three short-circuits (rows===0, alignedUsedPercent==null,
-  // alignedUsedPercent===0) all funnel into this body — the
-  // distinction between "no data" and "no plan" is collapsed into
-  // a single n/a for layout stability, matching the rest of the
-  // m_sum* family.
+  // m_sumEstQuota placeholder: same shape as m_sumTokenCost (prefix + "n/a")
+  // so both modules show a uniform "no reading yet" body. The renderer's
+  // three short-circuits (rows===0, alignedUsedPercent null/0) all funnel
+  // into this body — "no data" vs "no plan" collapses to one n/a for layout
+  // stability, matching the rest of the m_sum* family.
   m_sumEstQuota: placeholderLabelOr("est"),
 };
 
-// Render a placeholder body unless the user has explicitly opted
-// out via `:nulldrop|true`, OR the module has no registered
-// placeholder shape. The default is FORCED placeholder (every
-// inline-listed module keeps its slot even when data is null).
-// Returns null when the user opted out, so the caller's drop path
-// takes over (matching the bare MODULES drop behavior).
-//
-// The returned string is PLAIN text (no SGR); the caller is
-// expected to wrap it in the user's chosen color (defaults to
-// STALE_COLOR via placeholderWithColor), matching the existing
-// "override wins" pattern for every other inline module.
+// Render a placeholder body unless `:nulldrop|true` or the module has no
+// registered shape. The default is FORCED placeholder (every inline-listed
+// module keeps its slot even when data is null). Returns PLAIN text (the caller
+// wraps in the user's color / STALE_COLOR).
 function placeholderOrNull(
   modKey: string,
   params: Record<string, ResolvedValue>,
@@ -5139,19 +3571,10 @@ function placeholderOrNull(
   return body(params, _ctx);
 }
 
-// Render a placeholder (when active) wrapped in the user's
-// `|color|<c>` override, or STALE_COLOR by default. Returns null
-// when the user opted out of the placeholder (`nulldrop:true`)
-// OR the module has no registered placeholder shape — the caller's
-// null-fall-through path takes over (drop, same as bare MODULES
-// behavior).
-//
-// The STALE_COLOR default is what makes a missing-data placeholder
-// visually distinct from a real value (a real `ctx:163.5k` is
-// band-colored; a placeholder `ctx:n/a` is gray). Note: this is
-// the OPPOSITE of wrapPlain (which returns plain text when no
-// color is supplied) — placeholder rendering ALWAYS wraps, even
-// without an override.
+// Render a placeholder wrapped in the user's `|color|<c>` or STALE_COLOR.
+// Returns null on nulldrop:true or a missing shape (caller's drop path). The
+// STALE_COLOR default makes missing data visibly gray (vs a band-colored real
+// value); unlike wrapPlain, placeholder rendering ALWAYS wraps.
 function placeholderWithColor(
   modKey: string,
   params: Record<string, ResolvedValue>,
@@ -5163,34 +3586,20 @@ function placeholderWithColor(
   return `${color}${body}${RESET}`;
 }
 
-// v6.x — bare-path variant of placeholderWithColor. Used by MODULES
-// (the bare form, no inline-args) so a module's null case renders
-// its PLACEHOLDERS body wrapped in STALE_COLOR, matching the inline
-// default. Returns null when the module has no registered shape
-// (preserves the legacy drop-by-design behavior — but as of v6.x,
-// every module in MODULES has either a placeholder or a different
-// always-render strategy, so this null return is only a defensive
-// fallback). Color override is not supported on the bare path
-// (mod.color is a no-op for bare tokens; the inline path remains
-// the only way to customize placeholder color).
-//
-// `ctx` is required because placeholderGauge reads ctx.mode to
-// pick between the used ("░...░ 0%") and remaining ("▓...▓ 100%")
-// gauge placeholder shapes. Pure-NA and dashes-unit bodies ignore
-// ctx, so passing the real render context is safe and uniform.
+// Bare-path variant of placeholderWithColor (no inline args): a module's null
+// case renders its PLACEHOLDERS body in STALE_COLOR. Returns null when no shape
+// is registered (defensive — every MODULES module now has a placeholder or an
+// always-render strategy). `ctx` is needed for placeholderGauge's mode-based
+// used/remaining shapes; NA/dashes-unit bodies ignore it.
 function placeholderBare(modKey: string, ctx: RenderContext): string | null {
   const body = PLACEHOLDERS[modKey];
   if (!body) return null;
   return `${STALE_COLOR}${body({}, ctx)}${RESET}`;
 }
 
-// Extended-color schema used by `m_quote`. Accepts the standard
-// 7 shortcuts + raw SGR + the 3 special shortcuts (rainbow /
-// rand-rainbow / hue). The resolver encodes the tagged ColorParam
-// as a string (using NUL-prefix sentinels in `encodeColorParam`)
-// so it round-trips through the generic INLINE_SCHEMAS contract
-// (`params.color: string | undefined`). The m_quote renderer
-// decodes via `decodeColorParam`.
+// Extended-color schema for m_quote: the standard shortcuts + raw SGR + the 3
+// special shortcuts (rainbow / rand-rainbow / hue), encoded as a string
+// (encodeColorParam) so it round-trips through the generic params.color channel.
 const QUOTE_COLOR_PARAM = {
   named: {
     color: (raw: string) => {
@@ -5204,19 +3613,14 @@ const QUOTE_COLOR_PARAM = {
 const QUOTE_FREQ_PARAM = {
   named: {
     freq: (raw: string) => {
-      // Shape-validate the single-unit time format up front so a
-      // clearly-wrong token (e.g. "yearly", "2h10m", "5x") is
-      // rejected before reaching the renderer. The renderer then
-      // calls parseFreq() to extract the bucket size. We pass the
-      // raw string through (rather than the parsed QuoteFreq
-      // object) so the ResolvedValue = string | number channel
-      // doesn't need a sentinel round-trip.
+      // Shape-validate the single-unit time format so a wrong token ("yearly",
+      // "2h10m", "5x") is rejected before reaching parseFreq(). We pass the raw
+      // string through (not a parsed QuoteFreq) to keep the string|number channel.
       if (raw === "") return null;
       // Bare unit letter → valid shorthand.
       if (raw === "d" || raw === "h" || raw === "m" || raw === "s") return raw;
-      // Numeric form: <digits><unit>. Reject multi-unit, unknown
-      // units, leading zeros, and empty digit runs here so the
-      // renderer's parseFreq() never sees malformed input.
+      // Numeric form <digits><unit>: reject multi-unit, unknown units, leading
+      // zeros, and empty digit runs here so parseFreq() never sees malformed input.
       if (raw.length < 2) return null;
       const unit = raw[raw.length - 1];
       if (unit !== "d" && unit !== "h" && unit !== "m" && unit !== "s") return null;
@@ -5229,31 +3633,20 @@ const QUOTE_FREQ_PARAM = {
   },
 } as const;
 
-// v0.8.18+ — m_quote `address` param. Empty string (default) keeps
-// the local QUOTES array path. Non-empty string is treated as a URL
-// to fetch with `fetch()` (Node 18+ native; statusline lives in a
-// short-lived child process per tick, so we don't cache — matching
-// the per-tick live-sample model of m_memUsage).
+// m_quote `address` param: empty (default) → local QUOTES; non-empty → a URL
+// fetched per tick (no cache — the statusline is a short-lived child process).
+// Any non-empty URL is accepted (no scheme validation — the user knows their
+// network policy); a fetch failure falls through to the local-quote drop path.
 const QUOTE_ADDRESS_PARAM = {
   named: {
-    // Accept any non-empty URL. We don't validate the scheme here
-    // (http / https / file / etc.) because the user knows their
-    // own network policy; a fetch failure just falls through to
-    // the drop path the same as a missing local quote.
     address: (raw: string) => (raw.length > 0 ? raw : null),
   },
 } as const;
 
-// v0.8.21+ — m_quote `quote` param (was `field` in v0.8.20+).
-// A single dot-separated path into the fetched JSON: `a.b`,
-// `quotes.0.quotestring`, `hitokoto`. The walked value is the
-// quote text rendered between the `~` brackets.
-//
-// An empty `quote` is a legal "no walk" marker (v0.8.18
-// backwards-compat: a plain-text body returned by the endpoint
-// is rendered verbatim when no path is supplied). The renderer
-// distinguishes the two by checking `params.quote !== undefined`
-// — missing arg vs empty arg.
+// m_quote `quote` param: a dot-separated JSON path (`a.b`, `quotes.0.x`). An
+// empty `quote` is the legal "no walk" marker (a plain-text body is rendered
+// verbatim); the renderer distinguishes missing vs empty via
+// `params.quote !== undefined`.
 const QUOTE_QUOTE_PARAM = {
   named: {
     quote: (raw: string) => {
@@ -5266,12 +3659,8 @@ const QUOTE_QUOTE_PARAM = {
   },
 } as const;
 
-// v0.8.21+ — m_quote `author` param. A single dot-separated path
-// into the fetched JSON (e.g. `from_who`). The walked value is
-// the author rendered as the `--<author>` half of the
-// `~<quote>--<author>~` output. Missing arg OR a walk that
-// yields null/empty means "no author suffix" — the renderer
-// emits the bare `~<quote>~` instead.
+// m_quote `author` param: a dot-separated JSON path (e.g. `from_who`). Missing
+// arg or a null/empty walk means "no author suffix" (bare `~<quote>~`).
 const QUOTE_AUTHOR_PARAM = {
   named: {
     author: (raw: string) => {
@@ -5284,10 +3673,9 @@ const QUOTE_AUTHOR_PARAM = {
   },
 } as const;
 
-// v0.8.21+ — m_quote `lang` param. A CSV list of language codes
-// (matches `QuoteEntry.lang` — currently "en" and "zh").
-// Restricts local-quote rotation to the listed languages. Empty
-// arg or all-unknown codes fall back to "no filter".
+// m_quote `lang` param: a CSV list of language codes (matches QuoteEntry.lang,
+// currently "en"/"zh"). Restricts local-quote rotation; empty or all-unknown
+// codes fall back to "no filter".
 const QUOTE_LANG_PARAM = {
   named: {
     lang: (raw: string) => {
@@ -5305,11 +3693,9 @@ const QUOTE_LANG_PARAM = {
   },
 } as const;
 
-// v0.8.21+ — m_quote `max` param. The CJK-weighted char budget
-// for the rendered quote (CJK=2, latin=1, default 60 → 30 中文
-// chars or 60 英文 chars). An integer in [0, 999]. `0` opts
-// out of truncation (sanitize still runs). Anything outside the
-// shape is rejected (badarg → warn + drop).
+// m_quote `max` param: the CJK-weighted char budget (CJK=2, latin=1; default
+// 60 → 30 中文 chars or 60 英文 chars). Integer in [0, 999]; `0` opts out of
+// truncation (sanitize still runs). Anything else is rejected.
 const QUOTE_MAX_PARAM = {
   named: {
     max: (raw: string) => {
@@ -5321,15 +3707,10 @@ const QUOTE_MAX_PARAM = {
   },
 } as const;
 
-// v0.8.21+ — `|insecureTls|<b>` per-token override for the m_quote
-// fetcher. Accepts the standard boolean spellings (`true`/`false`/
-// `1`/`0`) so the renderer schema can record the request and pass
-// it down to `preFetchQuotes` in src/api.quote.ts. The TOKEN arg is
-// AUTHORITATIVE — when present it overrides config.json's
-// `quoteInsecureTls` for that fetch — so users can opt into curl
-// `-k` only on specific tokens (e.g. a self-signed dev mirror) and
-// keep strict TLS elsewhere. Omitting the arg means "fall back to
-// the config gate" (cf. fetchOne in api.quote.ts).
+// `|insecureTls|<b>` per-token override for the m_quote fetcher (boolean
+// spellings `true`/`false`/`1`/`0`). When present it overrides config.json's
+// `quoteInsecureTls` for that fetch (opt into curl -k only on specific tokens);
+// omitted = fall back to the config gate.
 const QUOTE_INSECURE_TLS_PARAM = {
   named: {
     insecureTls: (raw: string) => {
@@ -5340,14 +3721,10 @@ const QUOTE_INSECURE_TLS_PARAM = {
   },
 } as const;
 
-// v0.8.18+ — walk a JSON value along a dot-separated path, mirroring
-// the recursive shape inspection in `parseQuota` (plugins/parsers.ts). At each
-// step: if the current value is a string, return it (and IGNORE the
-// rest of the path — the field param is only meaningful for object
-// / array navigation). If it's an object, treat the segment as a
-// key. If it's an array, treat the segment as a non-negative integer
-// index. If the segment is malformed for the current container, or
-// the path runs out before a string is found, return null.
+// Walk a JSON value along a dot-separated path. At each step: a string is
+// terminal (return it, ignoring the rest of the path — "如果拿到的已经是字符串,
+// 则忽略 field 参数"); an object treats the segment as a key; an array treats
+// it as a non-negative integer index. Malformed segment / path run-out → null.
 export function getFieldByPath(value: unknown, path: string): string | null {
   const segs = path.split(".");
   let cur: unknown = value;
@@ -5382,50 +3759,14 @@ export function getFieldByPath(value: unknown, path: string): string | null {
   return typeof cur === "string" ? cur : null;
 }
 
-// v0.8.19+ — fetch a remote quote payload via `curl` (synchronous).
-// Mirrors the tolerant shape inspection pattern from
-// src/plugins/parsers.ts:parseQuota (try JSON parse → walk path → return
-// string). `renderTemplate` is sync (per-tick deadline in the
-// statusline slot) so the renderer can't await; `curl -sSf` is
-// shipped on every modern OS (Win10+1803, macOS, Linux distros)
-// and follows the same execSync pattern as m_memUsage's vm_stat
-// path. Curl failures throw → caught and translated to null so
-// the caller falls through to the local QUOTES fallback path.
-//
-// `paths` is the parsed list of dot-paths from the `fields` arg.
-// Each path is walked INDEPENDENTLY against the parsed JSON; the
-// collected strings are joined as `path1: path2: path3:` — every
-// path contributes a colon-terminated segment, even if its walk
-// yielded "" (the renderer treats an empty field as "miss").
-//
-// v0.8.20+ — every failure path appends a structured warning to
-// `diagnostics.jsonl` (gated on CREDITGAUGE_DIAGNOSTICS_ENABLE)
-// so a postmortem can grep why the local QUOTES fallback fired.
-// The log row includes the address (truncated to keep the JSONL
-// row ~250B) and the reason token; the `source` field is
-// `m_quote` so a postmortem can filter for this module. The
-// 60s in-process dedupe in diagnostics.append keeps a sustained
-// network outage from drowning the file.
-//
-// v0.8.21+ — read a pre-fetched quote body from `ctx.quoteBodies`
-// (populated by `preFetchQuotes` in `src/api.quote.ts`) and walk
-// the user's `quote` (and optional `author`) path. Pure sync; no
-// IO at render time. The fetch + disk-cache all happen ahead of
-// `buildProviderLine` in `index.ts:main()`; by the time the
-// renderer runs, the body is either present in the Map (and we
-// produce {quote, author}) or absent (and the caller falls back
-// to local QUOTES).
-//
-// Returns the walked strings when found; returns null only when:
-//   - ctx.quoteBodies is undefined or the address key is missing
-//   - body is not valid JSON AND quote is the empty marker
-//   - quote walk yields null (the author's miss is tolerated —
-//     the renderer still produces `~<quote>~` without the
-//     `--<author>` suffix).
-//
-// `author` may be undefined (no author arg in the token); in that
-// case the author slot is left null and the caller emits
-// `~<quote>~`.
+// Read a pre-fetched quote body from ctx.quoteBodies (populated by
+// `preFetchQuotes` in src/api.quote.ts ahead of render — pure sync, no IO at
+// render time) and walk the `quote` (+ optional `author`) path. Returns the
+// walked strings, or null when: no body / the body is non-JSON (with a
+// non-empty quote marker) / the quote walk misses (the author's miss is
+// tolerated → `~<quote>~`). Every failure path appends a structured
+// diagnostics.jsonl warning (gated on CREDITGAUGE_DIAGNOSTICS_ENABLE, address
+// truncated to keep rows ~250B) and the caller falls back to local QUOTES.
 function fetchQuoteFromAddress(
   address: string,
   quote: string,
@@ -5450,9 +3791,7 @@ function fetchQuoteFromAddress(
     parsed = JSON.parse(body);
   } catch {
     if (quote === "") {
-      // v0.8.18 short-circuit — a plain-text body is rendered
-      // verbatim when no quote path is supplied. author slot is
-      // null (no path-walk succeeded on a non-JSON body).
+      // Plain-text body rendered verbatim when no quote path is supplied (author null).
       return { quote: body, author: null };
     }
     diagnostics.append(
@@ -5487,17 +3826,14 @@ function fetchQuoteFromAddress(
   return { quote: q, author: a };
 }
 
-// v0.8.20+ — truncate a user-supplied address for diagnostic
-// logging. Caps at 120 chars to keep the JSONL row under ~250B
-// while still surfacing enough of the URL for a postmortem to
-// identify which endpoint failed.
+// Truncate a user-supplied address for diagnostic logging (120 chars keeps the
+// JSONL row under ~250B while still identifying the failed endpoint).
 function truncateForLog(s: string): string {
   return s.length > 120 ? s.slice(0, 119) + "…" : s;
 }
 
-// v0.8.18+ — small string hash for color-band seeding when the
-// quote comes from a remote address (no time-based quoteIndex
-// available). djb2 — non-crypto, deterministic, ~3 lines.
+// Small string hash for color-band seeding when the quote comes from a remote
+// address (no time-based quoteIndex). djb2 — non-crypto, deterministic.
 function stringHash(s: string): number {
   let h = 5381;
   for (let i = 0; i < s.length; i++) {
@@ -5506,21 +3842,15 @@ function stringHash(s: string): number {
   return h >>> 0;
 }
 
-// vX.X.X+ — six named separator aliases. Each `s_<name>` token
-// resolves to its built-in literal character. The legacy numeric
-// `s_<n>` form and the `separators` config array are REMOVED —
-// if you need a custom separator character, use one of these six
-// (or wrap a literal `m_label|<your-token>` if you really need
-// something different).
+// Six named separator aliases. Each `s_<name>` token resolves to its built-in
+// literal character. The legacy numeric `s_<n>` form and the `separators`
+// config array are REMOVED — for a custom character use one of these six (or
+// an m_label literal). `pipe` is pure render output, NOT the inline-args
+// delimiter itself (see parseInlineArgs).
 //
-// Encoding note: ResolvedValue is a `string | number` union, so
-// we tag the alias form as `"alias:<name>"` (still a string) and
-// carry that through the inline-schema machinery. The numeric
-// branch is gone — resolveSepBody returns INLINE_BADARG for any
-// non-alias input.
-// v0.7.1+ — `pipe` joins the alias table. Mirrors the new inline-args
-// separator (see parseInlineArgs). Pure render output, NOT the
-// inline-args delimiter itself.
+// Encoding note: ResolvedValue is `string | number`, so the alias form is
+// tagged as `"alias:<name>"` (still a string) through the inline-schema
+// machinery; resolveSepBody returns INLINE_BADARG for any non-alias input.
 const NAMED_SEPARATORS: ReadonlyMap<string, string> = new Map([
   ["space",   " "],
   ["dot",     "·"],
@@ -5550,31 +3880,21 @@ function resolveSepBody(index: string | number): string | typeof INLINE_BADARG {
   return INLINE_BADARG;
 }
 
-// vX.X.X+ — per-code-point display width for `s_move` column padding.
-// Calibrated to the user's terminal (2026-08-09): 🗪 U+1F5EA renders 1
-// cell (narrow) despite East Asian Width W; 📦 U+1F4E6 renders 2. The
-// WIDTH_EXCEPTIONS map encodes such terminal-specific deviations and is
-// extensible. Zero-width chars (combining marks, format controls like
-// ZWJ/ZWNJ/ZWSP, variation selectors, soft hyphen, BOM) are classified
-// via Unicode property escapes so we don't hand-maintain a giant range
-// list. Wide chars use the classic wcwidth East-Asian-Wide ranges plus
-// the emoji-presentation blocks. Everything else is 1.
+// Per-code-point display width for s_move column padding. WIDTH_EXCEPTIONS
+// encodes terminal-specific deviations (🗪 U+1F5EA renders 1 cell on the user's
+// terminal despite EAW W). Zero-width chars (combining marks, format controls,
+// separators) are classified via Unicode property escapes; wide chars use the
+// wcwidth East-Asian-Wide + emoji-presentation ranges. Everything else is 1.
 const WIDTH_EXCEPTIONS: Record<number, number> = {
-  // U+1F5EA right speech bubble renders narrow (1 cell) on the user's
-  // terminal; the standard EAW table says W (2).
-  0x1f5ea: 1,
+  0x1f5ea: 1, // renders narrow (1) on the user's terminal; the EAW table says W (2)
 };
 
-// Unicode property escapes: M = combining marks (Mn/Mc/Me), Cf = format
-// controls (ZWJ U+200D, ZWNJ U+200C, ZWSP U+200B, soft hyphen U+00AD,
-// BOM U+FEFF, variation selectors U+FE00-U+FE0F), Zl/Zp = line/paragraph
-// separators. All render zero-width for the column cursor.
+// M = combining marks, Cf = format controls (ZWJ/ZWNJ/ZWSP/soft hyphen/BOM/
+// variation selectors), Zl/Zp = line/paragraph separators — all zero-width.
 const ZERO_WIDTH_RE = /[\p{M}\p{Cf}\p{Zl}\p{Zp}]/u;
 
-// East Asian Wide / Fullwidth + emoji-presentation ranges. Collapsed
-// from the classic wcwidth wide set + Unicode emoji-presentation data.
-// U+1F5EA is NOT here — it is handled by WIDTH_EXCEPTIONS (narrow on
-// the user's terminal).
+// East Asian Wide / Fullwidth + emoji-presentation ranges (U+1F5EA is handled
+// by WIDTH_EXCEPTIONS, not here).
 const WIDE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x1100, 0x115f],    // Hangul Jamo
   [0x231a, 0x231b],    // ⌚ ⌛
@@ -5600,13 +3920,13 @@ const WIDE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x30000, 0x3fffd],  // CJK Ext G+
 ];
 
-// Display width of a single code point (a one-code-point string, as
-// produced by `for...of` iteration). Returns 0 / 1 / 2.
+// Display width of a single code point (a one-code-point string, as produced
+// by `for...of` iteration). Returns 0 / 1 / 2.
 export function charDisplayWidth(ch: string): number {
   const cp = ch.codePointAt(0) ?? 0;
   const ex = WIDTH_EXCEPTIONS[cp];
   if (ex !== undefined) return ex;
-  // Control characters (incl. ESC and TAB) and the DEL/C1 block.
+  // Control characters (incl. ESC/TAB) and the DEL/C1 block.
   if (cp < 0x20 || (cp >= 0x7f && cp < 0xa0)) return 0;
   if (ZERO_WIDTH_RE.test(ch)) return 0;
   for (const [lo, hi] of WIDE_RANGES) {
@@ -5615,32 +3935,21 @@ export function charDisplayWidth(ch: string): number {
   return 1;
 }
 
-// v0.9.0+ — ANSI SGR strip + display-width counter for `s_move`.
-// Strips ESC[…m (color/style) and ESC[…<letter> (cursor moves
-// handled as "no width" anyway — only SGR can leak into chunks
-// since renderers don't emit cursor moves). Width is the sum of
-// per-code-point DISPLAY widths via charDisplayWidth (vX.X.X+:
-// emoji/CJK = 2, narrow = 1, zero-width = 0), so the s_move column
-// cursor matches the terminal's actual columns instead of the old
-// JS string length (which counted astral emoji as 2 code units and
-// CJK BMP chars as 1 — both wrong for a terminal column).
-//
-// Used by renderTemplate's cursor tracking on every emitted
-// chunk (the cursor lives in a closure, not in ctx, so a nested
-// m_template's render never observes a half-updated value from
-// its outer).
+// ANSI SGR strip + display-width counter for s_move. Strips ESC[…m and
+// ESC[…<letter> (all zero-width for the column cursor), then sums per-code-
+// point display widths via charDisplayWidth (emoji/CJK = 2, narrow = 1,
+// zero-width = 0) so the cursor matches the terminal's actual columns, not JS
+// string length. Used by renderTemplate's cursor tracking on every chunk (the
+// cursor lives in a closure, not ctx, so nested m_template renders never see a
+// half-updated value).
 function visibleCellLength(s: string): number {
-  // Replace each SGR with empty; `\x1b` = ESC, `[`, then any
-  // number of params (digits + `;`) + a final letter.
+  // Replace each SGR with empty; `\x1b` = ESC, `[`, then any number of params
+  // (digits + `;`) + a final letter byte (0x40..0x7E).
   let stripped = "";
   let i = 0;
   while (i < s.length) {
     const code = s.charCodeAt(i);
     if (code === 0x1b && i + 1 < s.length && s.charCodeAt(i + 1) === 0x5b) {
-      // Skip the CSI introducer and any params until the final
-      // letter byte (0x40..0x7E). This covers SGR (m), cursor
-      // moves (H/J/K), and any other CSI we might encounter — all
-      // are zero-width for the column cursor.
       let j = i + 2;
       while (j < s.length) {
         const c = s.charCodeAt(j);
@@ -5656,9 +3965,9 @@ function visibleCellLength(s: string): number {
     stripped += s[i];
     i++;
   }
-  // vX.X.X+ — width-aware: sum per-code-point display width instead
-  // of JS string length. `for...of` iterates full code points, so
-  // surrogate-pair emoji are measured as one glyph (not 2 units).
+  // Width-aware: sum per-code-point display width instead of JS string length.
+  // `for...of` iterates full code points, so surrogate-pair emoji measure as
+  // one glyph (not 2 units).
   let width = 0;
   for (const ch of stripped) width += charDisplayWidth(ch);
   return width;
@@ -5666,19 +3975,12 @@ function visibleCellLength(s: string): number {
 
 const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   s_: {
-    // vX.X.X+ — the implicit param accepts ONLY a named alias
-    // (`s_space`, `s_dot`, `s_newline`, `s_tab`, `s_colon`,
-    // `s_pipe`). The numeric `s_<n>` form is REMOVED — those tokens
-    // are unrecognized and emitted as literals by the dispatcher.
-    //
-    // v0.7.2+ — added `|repeat|<1..8>` and `|wrap|<left|right|both|
-    // none>` (vX.X.X+; legacy `true`→`both`, `false`→`none` aliases
-    // kept) named params for inline separators. repeat multiplies
-    // the body (1 default, max 8 — see REPEAT_PARAM). wrap pads a
-    // printable body with 1 space on the named side(s) so e.g.
-    // `s_dot|wrap|both` renders " · " and `s_dot|wrap|none` "·";
-    // whitespace bodies (`s_space`, `s_tab`, `s_newline`) skip the
-    // padding under every mode. See [[repeat-and-wrap-on-separator]].
+    // The implicit param accepts ONLY a named alias (s_space / s_dot /
+    // s_newline / s_tab / s_colon / s_pipe); the numeric s_<n> form is REMOVED
+    // (unrecognized tokens emit as literals). Named params: |repeat|<1..8> and
+    // |wrap|<left|right|both|none> (legacy true/false aliases kept). repeat
+    // multiplies the body (default 1); wrap pads a printable body with one space
+    // on the named side(s) — whitespace bodies skip padding under every mode.
     implicit: {
       name: "index",
       resolver: resolveSepRef,
@@ -5690,14 +3992,10 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
       ...WRAP_PARAM.named,
     },
   },
-  // v0.9.0+ — column-pad separator. `s_move|pos:<n>|char:<c>`
-  // pads the current line with `<c>` until the visible-cell
-  // cursor reaches column `<n>`. Bare `s_move` (no `pos:`) is
-  // badarg per the user's "没带参数相当于无效" contract. The
-  // dispatcher tracks the visible-cell cursor in a closure
-  // (reset to 0 on every `\n`); the renderer reads it via the
-  // passed-in `lineCursor` ctx field. NO implicit value — pos
-  // and char are both named.
+  // Column-pad separator: `s_move|pos:<n>|char:<c>` pads until the visible-cell
+  // cursor reaches column `<n>`. Bare `s_move` (no `pos:`) is badarg ("没带参数
+  // 相当于无效"). The dispatcher tracks the cursor in a closure (reset on `\n`),
+  // read via ctx.lineCursor. NO implicit value — pos and char are both named.
   s_move: {
     named: {
       ...MOVE_PARAM.named,
@@ -5709,18 +4007,15 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
     named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named },
   },
   m_modeLabel: {
-    // No implicit — the string is derived from ctx. The first segment,
-    // if present, MUST be a name in `named` (i.e. starts a name:value
-    // pair). Otherwise the token is malformed. v0.8.41+: also
-    // accepts `display` to override the prefix label's mode locally
-    // (e.g. `m_modeLabel|display:remaining` flips "Usage:" →
-    // "Remain:" without changing the global `display` config).
-    // Ignored on the balance path (Balance: is mode-agnostic).
+    // No implicit — the string is derived from ctx. The first segment, if
+    // present, must be a name in `named` (a name:value pair) or the token is
+    // malformed. Accepts `display` to override the label's mode locally
+    // (e.g. `m_modeLabel|display:remaining` → "Remain:"); ignored on the
+    // balance path (Balance: is mode-agnostic).
     named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...NULDROP_PARAM.named },
   },
-  // v0.3.3+ — every existing module also accepts an optional :color|
-  // override. Schema is empty (`{}`) when the module takes no implicit
-  // param; the renderer just reads params.color and applies it.
+  // Every module also accepts an optional :color| override; a module with no
+  // implicit param has an empty schema and the renderer just applies params.color.
   m_windowQuota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_countdown: { named: { ...COLOR_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_quota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
@@ -5735,35 +4030,24 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_tokenCachedIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_tokenInSpeed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_tokenOutSpeed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // v0.8.x cwf-tickStatus-v2 — m_totalToken* / m_totalTokenWithCacheIn
-  // REMOVED. The m_acc* family replaces them.
-  // v0.8.0+ — m_acc* family accepts :scope:<session|project|model>
-  // (default session for the bare form) and the standard :color|
-  // override + :nulldrop| opt-out. The legacy "ccsession" scope
-  // was REMOVED in this revision and surfaces as badarg at
-  // module-eval time (see resolveAccScope).
+  // m_acc* family accepts :scope:<session|project|model> (default session for
+  // the bare form) + color / nulldrop / valueOnly. The removed "ccsession"
+  // scope surfaces as badarg at module-eval time (see resolveAccScope).
   m_accTokenIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_accTokenOut: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_accTokenCachedIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_accTokenTotalIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_accApiMs: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_accApiCalls: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // v0.8.13+ — m_accTokenInSpeed / m_accTokenOutSpeed. Same arg
-  // surface as the other m_acc* modules (color / nulldrop / scope).
   m_accTokenInSpeed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_accTokenOutSpeed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_accTokenHitRate: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // v0.8.24+ — start of the tick statistics window. Same arg
-  // surface as the other m_acc* modules (color / nulldrop / scope).
-  // v0.8.25+ — |abs|<true|false> toggles YYYY-MM-DD HH:MM:SS vs HH:MM:SS.
-  // vX.X.X+ — |valueOnly|<true|false> strips the label prefix (default false).
+  // m_accStartTime: same m_acc* surface + |abs|<true|false> (widen to
+  // YYYY-MM-DD HH:MM:SS) + valueOnly.
   m_accStartTime: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...ABS_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // v0.8.0+ — sum/avg advanced statistics. All 8 accept the same
-  // 5 inline args: :model|<active|name|all>, :window|<dhms|all>,
-  // :align|<true|false>, :color|<c>, :nulldrop|<b>. The WINDOW
-  // resolver rejects malformed dhms strings at parse time →
-  // badarg → dispatcher warn + drop. Same for the MODEL/ALIGN
-  // schemas.
+  // All m_sum* modules accept the same inline args: :model|<active|name|all>,
+  // :window|<dhms|all>, :align|<true|false>, :color|<c>, :nulldrop|<b>,
+  // :term|<key>. Malformed dhms strings are rejected at parse time → badarg.
   m_sumTokenIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_sumTokenOut: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_sumTokenCachedIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
@@ -5773,21 +4057,13 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_sumTokenInSpeed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_sumTokenOutSpeed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_sumApiCalls: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // v0.8.24+ — start/end of the tick statistics window. Same 5-axis
-  // arg surface as the other m_sum* modules (model/window/align +
-  // color/nulldrop). Empty window / all-legacy rows → placeholder
-  // (rendered via the matching m_sumStartTime / m_sumEndTime
-  // PLACEHOLDERS entry — see `placeholderBare` at the dispatcher).
-  // v0.8.25+ — |abs|<true|false> toggles YYYY-MM-DD HH:MM:SS vs HH:MM:SS.
-  // vX.X.X+ — |valueOnly|<true|false> strips the label prefix (default false).
+  // m_sumStartTime / m_sumEndTime: same m_sum* surface + |abs| + valueOnly.
   m_sumStartTime: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...ABS_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_sumEndTime: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...ABS_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // v0.3.6+ — quote module. Accepts `:freq|<numeric-time>` and
-  // `:color|<sgr|shortcut|rainbow|rand-rainbow|hue>`. The freq
-  // grammar is the single-unit time format `<digits><unit>` (bare
-  // unit letter = 1<unit>) — see QUOTE_FREQ_PARAM. Default freq
-  // (`h` = 1h) is applied at the RENDERER level when params.freq
-  // is undefined.
+  // Quote module. Accepts :freq|<numeric-time> (single-unit format
+  // `<digits><unit>`, bare letter = 1<unit>; default `h` applied at the
+  // RENDERER level when params.freq is undefined) plus color / address /
+  // quote / author / lang / max / insecureTls / wrap / nulldrop.
   m_quote: {
     named: {
       ...QUOTE_FREQ_PARAM.named,
@@ -5802,8 +4078,7 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
       ...NULDROP_PARAM.named,
     },
   },
-  // v0.4.0+ — session-info / metadata modules. All take only the
-  // optional :color| override (mirror the m_token* pattern).
+  // Session-info / metadata modules — color + nulldrop only.
   m_session: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_model: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_provider: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
@@ -5815,9 +4090,7 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_ccversion: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_sessionDuration: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_sessionApiDuration: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  // v0.8.0+ — per-turn API-ms delta. Same inline-args grammar as
-  // m_sessionDuration (color + nulldrop). The dispatcher accepts
-  // both `:color|` and `:nulldrop|` overrides via this schema.
+  // Per-turn API-ms delta — color + nulldrop + valueOnly.
   m_apiMs: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_linesAdded: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_linesRemoved: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
@@ -5829,67 +4102,45 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_contextUsedPercent: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_contextRemainingPercent: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_windowContext: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // v0.8.16 — TTL gauge inline-args. Same shape as the rest of
-  // the named-args family (color + nulldrop). `:color|<c>` REPLACES
-  // the 5-band scale color; there is no `:scale|` opt-back-in
-  // sentinel because TTL is binary "data vs missing" and forcing
-  // green-on-fresh / red-on-stale is the natural rendering.
+  // TTL gauge inline-args (color + nulldrop). |color|<c> REPLACES the 5-band
+  // scale color; there's no :scale| opt-back-in because TTL is binary
+  // "data vs missing" — green-on-fresh / red-on-stale is the natural render.
   m_cacheTtlStatus: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_statTtlStatus: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  // v0.8.17+ — system RAM usage inline-args. Same shape as the rest
-  // of the named-args family (color + nulldrop). |color|<c> overrides
-  // the whole two-tone body; with no color, the used chunk is
+  // System RAM usage inline-args (color + nulldrop + valueOnly). |color|<c>
+  // overrides the whole two-tone body; with no color, the used chunk is
   // band-colored internally (colorFor) and prefix + total stay cyan.
   m_memUsage: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // vX.X.X+ — m_memUsed / m_memTotal inline-args. Same shape as
-  // m_memUsage: color + nulldrop + valueOnly.
+  // m_memUsed / m_memTotal inline-args — same shape as m_memUsage.
   m_memUsed: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_memTotal: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // vX.X.X+ — m_contextUsage inline-args. Same shape as m_memUsage:
-  // color + nulldrop + valueOnly. |color|<c> overrides the whole
-  // two-tone body; with no color, used chunk band-colored + rest blue.
+  // m_contextUsage inline-args — same shape as m_memUsage. |color|<c> overrides
+  // the whole two-tone body; with no color, used chunk band-colored + rest blue.
   m_contextUsage: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // v0.8.36+ — m_windowMemUsage inline-args. Same shape as
-  // m_windowContext: color + display + nulldrop. |color|<c>
-  // overrides the 5-band percentBands color; |display|<used|
-  // remaining> selects which side of the bar is colored and
-  // which percentage is shown (parallel to m_windowContext);
-  // |nulldrop|<bool> drops the chunk on null.
+  // m_windowMemUsage inline-args — same shape as m_windowContext (color +
+  // display + nulldrop). |color|<c> overrides the percentBands color; |display|
+  // selects which side of the bar is colored and which percentage is shown.
   m_windowMemUsage: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // vX.X.X+ — per-turn token cost inline-args. Same shape as the
-  // per-turn m_token* family (color + nulldrop).
+  // Per-turn token cost inline-args — same shape as the m_token* family.
   m_tokenCost: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // vX.X.X+ — accumulated token cost inline-args. Same arg surface
-  // as m_accApiCalls (color + nulldrop + scope).
+  // Cost modules — same arg surface as their non-cost siblings (scope for
+  // m_accTokenCost; the full m_sum* surface for m_sumTokenCost / m_sumEstQuota).
   m_accTokenCost: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SCOPE_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // vX.X.X+ — windowed token cost inline-args. Same 5-axis arg
-  // surface as the other m_sum* modules (color + nulldrop + model +
-  // window + align).
   m_sumTokenCost: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // vX.X.X+ — m_sumEstQuota reuses the m_sum* param surface
-  // (color / nulldrop / model / window / align / term / valueOnly).
   m_sumEstQuota: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named, ...VALUEONLY_PARAM.named } },
-  // v0.9.8+ — m_sumTtlStatus inherits the m_sum* filter surface
-  // (color / nulldrop / model / window / align / term) so an
-  // outer |model|/|window|/...| from m_template or the inline
-  // token can target the exact stat-cache key to peek. No
-  // valueOnly — the body is a glyph + second suffix, not a value.
+  // m_sumTtlStatus inherits the m_sum* filter surface (so an outer
+  // |model|/|window|/...| targets the exact stat-cache key). No valueOnly — the
+  // body is a glyph + suffix, not a value.
   m_sumTtlStatus: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...MODEL_PARAM.named, ...WINDOW_PARAM.named, ...ALIGN_PARAM.named, ...TERM_PARAM.named } },
-  // v0.4.0+ — sub-template reference. First argument is the key
-  // into cfg().lineTemplates (the user's reusable-fragment
-  // registry). Optional `:type|<plan|balance>` filter (default
-  // "quota"): when the current provider's type key does not match,
-  // the chunk drops so adjacent separators are skipped. We do
-  // NOT accept `:color|` here — propagating a color across an
-  // expanded template requires a more invasive design (the
-  // expansion's internal modules would need to inherit or be
-  // re-styled). Users wanting per-chunk color put `:color|` on
-  // the inner modules inside their lineTemplates entry.
-  //
-  // m_template's `type` named arg is the providerType filter.
-  // Accepts `quota`, `balance`, or `unknown` — matches ctx.providerType
-  // values verbatim. NOT forwarded via passThrough (m_template-
-  // local concern, not an arg value to push to inner modules).
+  // Sub-template reference. First arg is the key into cfg().lineTemplates.
+  // `type` is a providerType filter (quota/balance/unknown — NOT forwarded via
+  // passThrough); `providers:<id1,id2>` gates by provider INSTANCE (comma-
+  // separated; renders when any entry matches ctx.currentProvider). :color| is
+  // NOT accepted here — per-chunk color goes on the inner modules. The
+  // passthrough whitelist (nulldrop/color/scope/model/window/align/term/
+  // valueOnly/withStatus) forwards args to inner modules as a fallback when the
+  // inner module's own param is undefined (inner-explicit wins; unknown args
+  // fail loud as badarg).
   m_template: {
     implicit: {
       name: "key",
@@ -5898,73 +4149,29 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
     },
     named: {
       type: (raw) => (raw === "quota" || raw === "balance" || raw === "unknown" ? raw : null),
-      // v0.9.0+ — `providers:<id1,id2,...>` gates the fragment to ONE OR
-      // MORE provider instances (e.g. `minimax` / `deepseek`). Accepts
-      // a comma-separated list; the fragment renders when ANY entry
-      // matches `ctx.currentProvider`. Resolver returns the raw string;
-      // the dispatcher splits and trims. Absent → no gate (fragment
-      // renders on every provider). Distinct from `type` which gates by
-      // provider CATEGORY (`quota` / `balance`) and matches every
-      // quota-mode provider — `providers` is the narrower per-instance
-      // knob.
       providers: (raw) => (typeof raw === "string" && raw !== "" ? raw : null),
-      // v0.8.7+ — passthrough whitelist. Each of these named
-      // params is accepted on `m_template` and forwarded to the
-      // inner module list as a fallback when the inner module's
-      // own `params[<name>]` is undefined. Unknown args still
-      // fail loud (parseInlineArgs → badarg → warn + drop), so
-      // typos are not silently accepted. The whitelist mirrors
-      // the param atoms that the `m_acc*` / `m_sum*` /
-      // `m_template` consumers actually read.
-      //
-      // vX.X.X — `ALIGN_PARAM` retired in favor of
-      // `ALIGN_PARAM` (no-op resolver that accepts
-      // `true` / `false` for back-compat). Forwarding the no-op
-      // `align` param to inner modules is still useful so a
-      // pre-upgrade outer template carrying
-      // `m_template|<key>|align|true` continues to parse without
-      // the no-op value drowning out an inner module's own
-      // `window` / `model` declarations on the same token.
       ...NULDROP_PARAM.named,
       ...COLOR_PARAM.named,
       ...SCOPE_PARAM.named,
       ...MODEL_PARAM.named,
       ...WINDOW_PARAM.named,
       ...ALIGN_PARAM.named,
-      // v0.9.8 — |term|<key> forwarded so an outer
-      // m_template|<key>|term:short cascades to every inner
-      // m_sum* in the fragment. Resolver accepts any non-empty
-      // non-"all" string (mirrors TERM_PARAM at L4333). The
-      // inner module's own params.term, when present, still
-      // wins per the standard precedence rule (outer = fallback).
       ...TERM_PARAM.named,
-      // vX.X.X+ — |valueOnly|<true|false> forwarded so an outer
-      // m_template|<key>|valueOnly:true cascades to every
-      // label-using inner module (per-turn / m_acc* / m_sum* /
-      // m_memUsage). Default false.
       ...VALUEONLY_PARAM.named,
-      // vX.X.X+ — |withStatus|<true|false> forwarded so an outer
-      // m_template|<key>|withStatus:false cascades to every inner
-      // m_branch (e.g. a fragment-level opt-out). Default true.
       ...WITHSTATUS_PARAM.named,
     },
   },
 };
 
-// Pure helper: wrap a plain-text body in `<color>…<RESET>`. Returns
-// the body unchanged when `color` is undefined. Safe ONLY for bodies
-// that don't already contain SGR sequences — colored bodies must use
-// their override-aware helper (e.g. formatOneChunkColored).
+// Pure helper: wrap a plain-text body in `<color>…<RESET>`. Returns the body
+// unchanged when `color` is undefined. Safe ONLY for bodies without existing
+// SGR sequences (colored bodies must use their override-aware helper).
 function wrapPlain(body: string, color: string | undefined): string {
   return color ? `${color}${body}${RESET}` : body;
 }
 
-// v6.x — wrap a plain-text body with either the user's `|color|<c>`
-// override or the module's hardcoded DEFAULT_COLORS entry. Used by
-// every non-numeric m_* INLINE_RENDERER so bare-form parity holds:
-// bare `m_session` (no params) tints to purple, and inline
-// `m_session|color|green` overrides to green — exactly as the user
-// would expect.
+// Wrap with the user's `|color|<c>` override or the module's DEFAULT_COLORS
+// entry — gives bare and inline forms the same tint.
 function wrapPlainDefault(
   modKey: string,
   body: string,
@@ -5974,14 +4181,9 @@ function wrapPlainDefault(
   return color ? `${color}${body}${RESET}` : body;
 }
 
-// v0.8.13+ — "non-zero, non-null" default tint. Mirrors
-// wrapPlainDefault but ONLY applies the color when `value` is a
-// finite number and value > 0. The value=0 case emits plain text
-// (matches the value-zero rule at [[render-value-zero-rule]]); the
-// null/undefined case means the caller already took the
-// placeholder path, so this helper is unreachable from there.
-// Use when a module's DEFAULT_COLORS entry should NOT show on the
-// natural 0 render (so "0" stays plain, "163.4k" is tinted).
+// "Non-zero, non-null" default tint: like wrapPlainDefault but ONLY colors when
+// `value` is a finite number > 0 (value=0 stays plain per the value-zero rule;
+// null/undefined is unreachable — the caller already took the placeholder path).
 function wrapValueDefault(
   modKey: string,
   value: number | null | undefined,
@@ -5992,16 +4194,9 @@ function wrapValueDefault(
   return color ? `${color}${body}${RESET}` : body;
 }
 
-// v0.8.7+ — resolve an inline-arg value with passthrough fallback.
-// Resolution order: local `params[name]` (the inner module's own
-// explicit arg) > `ctx.passThrough?.[name]` (an outer m_template's
-// forwarded arg) > undefined (caller applies its own DEFAULT).
-// Used by the m_acc* and m_sum* renderers so that a single
-// `m_template|<key>|scope|model` caller can drive the inner
-// module's `scope` choice without the inner module having to
-// declare it. Inner-explicit-wins is the documented contract —
-// the user explicitly chose it over a passthrough-beats-explicit
-// alternative.
+// Resolve an inline-arg value with passthrough fallback. Order: local
+// `params[name]` (inner-explicit wins) > `ctx.passThrough?.[name]` (outer
+// m_template's forwarded arg) > undefined (caller applies its own DEFAULT).
 function passThroughOr<T extends ResolvedValue>(
   params: Record<string, ResolvedValue | undefined>,
   ctx: RenderContext,
@@ -6013,14 +4208,9 @@ function passThroughOr<T extends ResolvedValue>(
   return pt === undefined ? undefined : (pt as T);
 }
 
-// v0.8.7+ — build a merged `params` view that fills in any missing
-// keys from `ctx.passThrough`. Used by renderers that hand `params`
-// wholesale to a helper (e.g. `parseWindowScope`), so the helper
-// can stay params-only and still see the outer m_template's
-// forwarded values. Returns a fresh object — the original
-// `params` is not mutated. Inner-explicit-wins is preserved
-// because the merge is a one-way fill: local keys are kept as-is
-// and only undefined slots take the passthrough value.
+// Build a merged `params` view filling missing keys from `ctx.passThrough` (so
+// helpers like parseWindowScope stay params-only). Returns a fresh object;
+// one-way fill preserves inner-explicit-wins.
 function mergePassThrough(
   params: Record<string, ResolvedValue | undefined>,
   ctx: RenderContext,
@@ -6033,14 +4223,11 @@ function mergePassThrough(
   return out;
 }
 
-// Inline-form scope resolution for the m_acc* family. Reads from
-// the inline params first, falls back to passThrough, then to
-// "session". Throws badarg on the REMOVED "ccsession" scope so a
-// leftover user config surfaces immediately at module-eval time
-// instead of silently falling back to the new default. The single
-// chokepoint keeps the m_acc* dispatchers thin and ensures the
-// bare form (no params, no passThrough) and the inline form
-// (`m_accTokenIn|scope|project`) share the same reject path.
+// Inline-form scope resolution for the m_acc* family: inline params first, then
+// passThrough, then "session". Throws badarg on the REMOVED "ccsession" scope
+// so a leftover config surfaces at module-eval time instead of silently
+// falling back. The single chokepoint keeps the bare and inline forms on the
+// same reject path.
 function resolveAccScope(
   params: Record<string, ResolvedValue | undefined>,
   ctx: RenderContext,
@@ -6058,15 +4245,10 @@ function resolveAccScope(
   return "session";
 }
 
-// v0.8.7+ — passThroughScope handles MODULES-bare-path renderers
-// that don't go through INLINE_RENDERERS and therefore can't call
-// `passThroughOr(params, ctx, "scope")` — they only see
-// `ctx.passThrough`. The legacy "ccsession" scope was REMOVED in
-// this revision and is rejected with badarg so a leftover user
-// config surfaces immediately rather than silently falling back
-// to the new default. Returns undefined when passthrough is
-// absent or the value is not a recognized scope (the caller then
-// applies its own default).
+// passThroughScope is for MODULES-bare-path renderers that can't call
+// passThroughOr — they only see ctx.passThrough. The removed "ccsession" is
+// rejected with badarg; returns undefined when passthrough is absent or not a
+// recognized scope (the caller applies its own default).
 function passThroughScope(
   ctx: RenderContext,
 ): "session" | "project" | "model" | undefined {
@@ -6084,21 +4266,9 @@ function passThroughScope(
   return undefined;
 }
 
-// v0.4.x — parallel to MODULES' per-module `type` tag. Each entry
-// here mirrors its INLINE_RENDERERS counterpart's provider scope:
-// the inline form `m_windowQuota|color|…` is also plan-only; `m_balance|…`
-// is balance-only. The bare-module dispatcher at line ~3220 enforces
-// the same filter via `MODULES[name].type`; this map keeps the
-// inline path symmetric so a `m_windowQuota|color|red` in a balance
-// provider's template drops the same way the bare form does.
-//
-// Untagged entries (key absent from this map) are provider-agnostic;
-// the dispatcher treats the absence of a key as "no type filter",
-// matching the MODULES-default of type === undefined.
-//
-// Renamed from INLINE_MODE_FILTERS to INLINE_TYPE_FILTERS in v0.4.x
-// to avoid collision with the display-mode field (`used` /
-// `remaining` / `balance`).
+// Parallel to MODULES' per-module `type` tag — keeps the inline path symmetric
+// so `m_windowQuota|color|red` drops on a balance provider exactly like the
+// bare form. Untagged entries (key absent) are provider-agnostic.
 const INLINE_TYPE_FILTERS: Partial<Record<string, "quota" | "balance" | "unknown">> = {
   m_windowQuota: "quota",
   m_countdown: "quota",
@@ -6106,11 +4276,9 @@ const INLINE_TYPE_FILTERS: Partial<Record<string, "quota" | "balance" | "unknown
   m_balance: "balance",
 };
 
-// v0.8.21+ — local QUOTES picker shared by the `m_quote` inline
-// renderer and its bare MODULES twin. Honors `freq` (default
-// 1h) + optional `lang` CSV filter. Returns null when the
-// schema rejects the freq arg so the caller can fall through
-// to `INLINE_BADARG` (or surface the placeholder path).
+// Local QUOTES picker shared by the m_quote inline renderer and its bare
+// MODULES twin. Honors `freq` (default 1h) + optional `lang` CSV filter.
+// Returns null on a rejected freq arg (caller falls through to INLINE_BADARG).
 function pickLocalQuote(
   params: Readonly<Record<string, ResolvedValue>>,
   langRaw: string | undefined,
@@ -6133,10 +4301,9 @@ function pickLocalQuote(
   return author ? `${quote}--${author}` : quote;
 }
 
-// v0.8.21+ — deterministic seed for the color shortcut helpers
-// (rainbow / hue) used by the local QUOTES path. Mirrors the
-// bucket index so the same `freq` + `nowMs` lands on the same
-// color band. Falls back to 0 when the freq arg is malformed.
+// Deterministic seed for the color shortcut helpers (rainbow/hue) on the local
+// QUOTES path — mirrors the bucket index so the same freq + nowMs lands on the
+// same color band. Falls back to 0 when the freq arg is malformed.
 function quoteLocalSeed(
   params: Readonly<Record<string, ResolvedValue>>,
   langRaw: string | undefined,
@@ -6151,25 +4318,11 @@ function quoteLocalSeed(
 
 // Per-prefix renderer. Returns the chunk text (or null to drop).
 const INLINE_RENDERERS: Record<string, InlineRenderer> = {
-  // v0.9.0+ — column-pad renderer. Reads ctx.lineCursor (set by
-  // the dispatcher's per-chunk closure; see renderTemplate), and
-  // emits `repeat(char, pos - cursor)` to advance to `pos`.
-  //
-  // Cursor semantics:
-  //   cursor >= pos → "误操作" (per the user's spec): the move
-  //     would not advance (or would go backward) — warn + drop.
-  //     Empty `char:` is treated as "move without emitting" and
-  //     is also a no-op + warn when cursor >= pos (since the
-  //     cursor doesn't move, there's nothing to do).
-  //   cursor <  pos → emit (pos - cursor) chars; the dispatcher
-  //     then accumulates the rendered chunk's width and bumps
-  //     lineCursor to `pos`.
-  //
-  // Bare `s_move` (no `pos:` pair) is rejected upstream by the
-  // MOVE_PARAM resolver: pos has no default — the schema's named
-  // resolver returns null when `pos:` is absent, parseInlineArgs
-  // surfaces that as badarg, and the dispatcher's existing
-  // badarg path warns + drops the chunk.
+  // Column-pad renderer. Reads ctx.lineCursor (set by the dispatcher's
+  // per-chunk closure) and emits `repeat(char, pos - cursor)` to advance to
+  // `pos`. cursor >= pos → "误操作" (wouldn't advance / would go backward) —
+  // warn + drop. Bare s_move (no `pos:`) is rejected upstream by MOVE_PARAM
+  // (pos has no default) → badarg.
   s_move: (params, ctx) => {
     const posRaw = params.pos as string | undefined;
     if (posRaw === undefined) return INLINE_BADARG; // bare form
@@ -6187,18 +4340,12 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return wrapPlain(body, params.color as string | undefined);
   },
   s_: (params, _ctx) => {
-    // params.index is the output of resolveSepRef: a plain
-    // number for the index form, or a "alias:<name>" string
-    // for the named form. resolveSepBody decodes both and
-    // returns either the literal body or INLINE_BADARG
-    // (out-of-range). Inline-args path through here.
+    // params.index is resolveSepRef's output (a "alias:<name>" string);
+    // resolveSepBody decodes it to the literal body or INLINE_BADARG.
     const body = resolveSepBody(params.index);
     if (body === INLINE_BADARG) return INLINE_BADARG;
-    // v0.7.2+ — repeat N times (validated by REPEAT_PARAM resolver
-    // upstream; default "1"), then pad with 1 space on the side(s)
-    // named by wrap (default "both"; legacy true/false aliases
-    // normalized by WRAP_PARAM). Control/whitespace bodies skip
-    // padding under every mode. See formatSepBody.
+    // repeat N times (default "1") then pad per wrap (default "both");
+    // control/whitespace bodies skip padding. See formatSepBody.
     const repeat = (params.repeat as string | undefined) ?? "1";
     const wrap = (params.wrap as string | undefined) ?? "both";
     const shape = formatSepBody(body, repeat, wrap);
@@ -6210,14 +4357,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return wrapPlain(s, params.color as string | undefined);
   },
   m_modeLabel: (params, ctx) => {
-    // Mirrors the MODULES["m_modeLabel"] body: balance path → balance
-    // label, else the mode-aware label. v6.x: inline form now ALSO
-    // tints with DEFAULT_COLORS["m_modeLabel"] (=stale gray) so bare
-    // vs inline parity holds for the prefix label too.
-    // v0.8.41+: `display` inline arg overrides the label's mode locally
-    // (e.g. `m_modeLabel|display:remaining` flips "Usage:" → "Remain:"
-    // without changing the global `display` config). Ignored on the
-    // balance path — Balance: has no used/remaining distinction.
+    // Mirrors the MODULES body (balance → Balance label, else the mode-aware
+    // label). DEFAULT_COLORS["m_modeLabel"] is undefined, so it renders PLAIN
+    // unless the user supplies |color|. `display` overrides the mode locally;
+    // ignored on the balance path.
     const mode = (params.display as DisplayMode | undefined) ?? ctx.mode;
     const s = ctx.providerType === "balance"
       ? cfg().modeLabels.balance
@@ -6225,17 +4368,9 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return wrapPlainDefault("m_modeLabel", s, params.color as string | undefined);
   },
   m_windowQuota: (params, ctx) => {
-    // v0.9.0+ — replaces v0.5.0–v0.8.x `m_window5h` + `m_window7d`.
-    // The `term` inline arg picks which interval to read:
-    //   |term|short  → c.intervals["short"] (default)
-    //   |term|mid    → c.intervals["mid"]
-    //   |term|long   → c.intervals["long"]
-    //   |term|<any>  → c.intervals[<any>] (v0.9.4: open-ended
-    //                    dict; "monthly" / "yearly" / etc. all
-    //                    resolve via the same lookup)
-    // Missing interval → placeholder. No percent data on the
-    // resolved Interval → also placeholder (intervalToWindow
-    // returns null when usedPercent/remainingPercent are both null).
+    // `term` picks which interval to read (default "short"; open-ended dict —
+    // "monthly"/"yearly"/etc. all resolve the same way). Missing interval or no
+    // percent data → placeholder.
     const term = (params.term as string | undefined) ?? "short";
     const iv = intervalForTerm(term, ctx);
     if (!iv) return placeholderWithColor("m_windowQuota", params, ctx);
@@ -6249,13 +4384,9 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return formatOneChunk(w, mode, cfg().bar.width, ctx.stale);
   },
   m_countdown: (params, ctx) => {
-    // v0.9.0+ — replaces v0.5.0–v0.8.x `m_countdown5h` +
-    // `m_countdown7d`. Same `term` arg as `m_windowQuota` (open
-    // dict in v0.9.4+). The label printed in `<arrow>n/a·<label>`
-    // and `<arrow>4h47m·<label>` is read from the live
-    // `Interval.label` (no more hard-coded "5h" / "7d" strings).
-    // vX.X.X+ — |valueOnly|true strips the `·` window label,
-    // showing just the arrow + countdown (e.g. "🕑25d20h").
+    // Same `term` arg as m_windowQuota. The label in `<arrow>n/a·<label>` /
+    // `<arrow>4h47m·<label>` comes from the live `Interval.label` (no hard-coded
+    // "5h"/"7d"). |valueOnly|true strips the `·` window label (just arrow+countdown).
     const term = (params.term as string | undefined) ?? "short";
     const iv = intervalForTerm(term, ctx);
     if (!iv) return placeholderWithColor("m_countdown", params, ctx);
@@ -6279,14 +4410,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return wrapPlainDefault("m_countdown", body, params.color as string | undefined);
   },
   m_quota: (params, ctx) => {
-    // v0.9.0+ — NEW module. vX.X.X+ — `(label)` tail dropped, so
-    // the shape is now `<labelQuota><axis>/<limit>`
-    // (placeholder: `<labelQuota>n/a`).
-    // `term` arg same shape as `m_windowQuota` / `m_countdown`
-    // (v0.9.4+ open-ended dict lookup).
-    // vX.X.X+ — `display` inline arg swaps the rendered axis:
-    //   |display|used      → `<used>/<limit>`      (default)
-    //   |display|remaining → `<remaining>/<limit>`
+    // Renders `<labelQuota><axis>/<limit>` (placeholder `<labelQuota>n/a`).
+    // `term` same as m_windowQuota / m_countdown; `display` swaps the axis:
+    // |display|used → `<used>/<limit>` (default), |display|remaining →
+    // `<remaining>/<limit>`.
     const term = (params.term as string | undefined) ?? "short";
     const iv = intervalForTerm(term, ctx);
     if (!iv) return placeholderWithColor("m_quota", params, ctx);
@@ -6296,38 +4423,31 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return wrapQuotaBody(parts, mode, params.color as string | undefined, passThroughOr(params, ctx, "valueOnly") === "true");
   },
   m_balance: (params, ctx) => {
-    // v6.x: missing balance → "balance:n/a" placeholder (was:
-    // drop). Multi-currency join still prefers the real chunk
-    // when available; the placeholder only fires on the truly
-    // empty case. Default tint comes from DEFAULT_COLORS — see
-    // wrapPlainDefault below.
+    // Missing balance → "balance:n/a" placeholder; the placeholder only fires
+    // on the truly empty case.
     if (!ctx.balance) return placeholderWithColor("m_balance", params, ctx);
     const color = (params.color as string | undefined) ?? DEFAULT_COLORS["m_balance"];
     const text = formatBalanceEntriesColored(ctx.balance, color);
     return text || placeholderWithColor("m_balance", params, ctx);
   },
   m_age: (params, ctx) => {
-    // v6.x: missing ageMs → "age:n/a" placeholder (was: drop).
+    // Missing ageMs → "age:n/a" placeholder.
     if (ctx.ageMs == null) return placeholderWithColor("m_age", params, ctx);
-    // v0.6.0+ — same cross-recursion dedup as the bare-MODULES path.
-    // Whichever m_age instance fires first (bare or inline, top-level
-    // or inside an m_template: fragment) claims the slot.
+    // Cross-recursion dedup (same as the bare path): the first m_age instance
+    // (bare or inline, top-level or nested) claims the slot.
     if (ctx.ageEmittedRef?.value) return null;
     if (ctx.ageEmittedRef) ctx.ageEmittedRef.value = true;
     const color = (params.color as string | undefined) ?? DEFAULT_COLORS["m_age"];
     return formatStaleSuffix(ctx.ageMs, !ctx.stale, color);
   },
   m_version: (params, ctx) => {
-    // v6.x: missing version → "v:n/a" placeholder (was: drop).
+    // Missing version → "v:n/a" placeholder.
     if (!ctx.version) return placeholderWithColor("m_version", params, ctx);
     return wrapPlainDefault("m_version", `v${ctx.version}`, params.color as string | undefined);
   },
   m_pluginSource: (params, ctx) => {
-    // vX.X.X+ — inline args for m_pluginSource (color / prefix / suffix /
-    // nulldrop). Mirrors the MODULES path: glyph per resolution kind, and
-    // NO default tint (the symbol carries the meaning on its own) — only an
-    // explicit |color| applies one. No cache row → null (no-op, matches the
-    // bare path's drop).
+    // Mirrors the MODULES path: glyph per resolution kind, NO default tint —
+    // only an explicit |color| applies one. No cache row → null (no-op).
     const glyph =
       ctx.pluginSource === "builtin" ? labelFor("pluginSystem") :
       ctx.pluginSource === "user" ? labelFor("pluginUserDefined") :
@@ -6339,22 +4459,13 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   },
   m_tokenIn: (params, ctx) => {
     const r = computeTickDelta(ctx, "in");
-    // vX.X.X+ — |valueOnly|true strips the leading label from
-    // the pre-prefixed r.value (computeTickDelta builds
-    // `${labelFor("in")}${body}`).
+    // |valueOnly|true strips the leading label from the pre-prefixed r.value.
     const stripLabel = params.valueOnly === "true";
     const body = stripLabelIfValueOnly(r.value, "in", stripLabel);
-    // v1.0 — setPrevTick moved to status-store.ts:processTick Stage 3. Render is read-only.
-    // v0.8.30+ — bare default tint (brightGreen) on positive
-    // value when the tick is active (hasMeasurement=true).
-    // Idle ticks (hasMeasurement=false) get STALE_COLOR with
-    // the live stdin number, per the v0.8.30.1 contract: color
-    // tracks hasMeasurement, value tracks stdin. The user's
-    // `|color|<c>` override wins on the active path; on the
-    // idle path the user's color is honored (gray is a
-    // semantic signal — "this is a stale read", not a
-    // cosmetic preference — but the override is more specific
-    // than the implicit STALE_COLOR).
+    // Active tick → bare default tint (brightGreen) on positive value; idle
+    // (hasMeasurement=false) → STALE_COLOR with the live stdin number (color
+    // tracks hasMeasurement, value tracks stdin). The user's |color| wins on
+    // the active path and is honored on the idle path.
     const userColor = params.color as string | undefined;
     if (r.numeric == null || r.numeric === 0) return body;
     if (r.stale) {
@@ -6364,11 +4475,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   },
   m_tokenOut: (params, ctx) => {
     const r = computeTickDelta(ctx, "out");
-    // vX.X.X+ — |valueOnly|true strips the leading label.
+    // |valueOnly|true strips the leading label.
     const stripLabel = params.valueOnly === "true";
     const body = stripLabelIfValueOnly(r.value, "out", stripLabel);
-    // v1.0 — setPrevTick moved to status-store.ts:processTick Stage 3. Render is read-only.
-    // v0.8.30+ — see m_tokenIn inline for the wrap contract.
+    // See m_tokenIn inline for the wrap contract.
     const userColor = params.color as string | undefined;
     if (r.numeric == null || r.numeric === 0) return body;
     if (r.stale) {
@@ -6376,12 +4486,9 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     }
     return wrapValueDefault("m_tokenOut", r.numeric, body, userColor);
   },
-  // v0.8.0+ — inline form of m_contextSize (cumulative occupancy,
-  // total_input_tokens). See MODULES entry for the new semantic.
-  // v0.8.23+ — prefix routes through labelFor("contextSize")
-  // (labels.labelContextSize; default "size:").
+  // Inline form of m_contextSize (cumulative occupancy).
   m_contextSize: (params, ctx) => {
-    // vX.X.X+ — |valueOnly|true drops the "size:" prefix.
+    // |valueOnly|true drops the "size:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("contextSize");
     const total = ctx.tokens?.totals?.tokenTotalIn;
     if (total == null) return placeholderWithColor("m_contextSize", params, ctx);
@@ -6390,29 +4497,22 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
       params.color as string | undefined,
     );
   },
-  // v0.8.0+ — per-turn hit rate (see MODULES entry for the
-  // formula and rename rationale). The inline form takes an
-  // optional `:color|` override; the bare form is the canonical
-  // per-turn hit rate. The session-aggregate formula moved to
+  // Per-turn hit rate (see MODULES entry for the formula). The inline form
+  // takes an optional |color| override; the session-aggregate formula moved to
   // m_accTokenHitRate.
   m_tokenHitRate: (params, ctx) => {
-    // vX.X.X+ — |valueOnly|true drops the "hit:" prefix.
-    // v0.9.x — prefix routes through labels.labelTokenHitRate
-    // (was hardcoded literal "hit:" in v0.8.x).
+    // |valueOnly|true drops the "hit:" prefix (routes through
+    // labels.labelTokenHitRate).
     const prefix = params.valueOnly === "true" ? "" : labelFor("hitRate");
     const t = ctx.tokens;
     if (!t) return placeholderWithColor("m_tokenHitRate", params, ctx);
     const total = t.totals?.tokenTotalIn;
     const cacheRead = t.current?.tokenCachedIn;
     if (total == null || cacheRead == null) {
-      // v0.8.x — TTL-bounded cache fallback (mirrors MODULES path
-      // and the m_apiMs / m_tokenInSpeed convention). Idle tick
-      // within 60s of the last active tick renders the cached
-      // percentage in STALE_COLOR; outside the window or with no
-      // prior measurement, the placeholder drops in. STALE_COLOR
-      // wins over the user's |color| override, matching
-      // computeTickSpeed's convention — gray is the canonical
-      // "this is from a previous tick" signal.
+      // Cache fallback (R7 — TTL gate disabled, cache never expires): idle tick
+      // renders the cached percentage in STALE_COLOR; with no prior measurement,
+      // the placeholder drops in. STALE_COLOR wins over the user's |color|
+      // override — gray is the canonical "from a previous tick" signal.
       if (t.sessionId) {
         const cached = peekLastTokenHitRate(t.sessionId, t.cwd);
         if (cached != null) {
@@ -6427,16 +4527,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     }
     if (total === 0) return `${STALE_COLOR}${prefix}0.0%${RESET}`;
     const pct = (cacheRead / total) * 100;
-    // v1.0 — setLastTokenHitRate moved to status-store.ts:processTick
-    // Stage 5. Render is read-only.
-    // v0.8.x — "active" coloring (mirrors MODULES body and the
-    // m_tokenInSpeed / m_tokenOutSpeed / m_apiMs convention). The
-    // per-turn hit rate is only a fresh reading when the API
-    // actually did work this tick (hasDelta=true). An idle tick
-    // renders STALE_COLOR regardless of the user's |color|
-    // override, matching computeTickSpeed.
+    // "Active" coloring (same convention as the tps siblings): the rate is only
+    // fresh when the API did work this tick (hasDelta=true); idle → STALE_COLOR
+    // regardless of the user's |color| override.
     const r = getDeltaForRender();
-    // v1.0 — setPrevTick moved to status-store.ts:processTick Stage 3. Render is read-only.
     if (!r.hasMeasurement) {
       return wrapPlainDefault(
         "m_tokenHitRate",
@@ -6447,25 +4541,11 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const color = (params.color as string | undefined) ?? cacheHitColor(pct);
     return `${color}${prefix}${pct.toFixed(cachePctPrecision())}%${RESET}`;
   },
-  // v0.8.0+ — renamed from `m_cacheRead` (see MODULES entry). The
-  // `(XX%)` share suffix was dropped in v0.8.6+ — use m_tokenHitRate
-  // for the ratio.
+  // Inline form of m_tokenCachedIn (the `(XX%)` share suffix was dropped —
+  // m_tokenHitRate renders the ratio). cacheRead=null / missing snapshot →
+  // "cache:0" (field-not-shipped as zero). Default PLAIN; positive value gets
+  // the brown tint; 0 stays plain. |valueOnly|true drops the prefix.
   m_tokenCachedIn: (params, ctx) => {
-    // v0.8.13 — cacheRead=null renders as "cache:0" (same as
-    // the real-zero case). Treats "field not shipped" as zero so
-    // the inline module always reads "cache:N" (no placeholder text
-    // mixing with the value path).
-    //
-    // v0.8.13 — color unified with the m_token* sibling family:
-    // default is PLAIN (no STALE_COLOR wrap), matching
-    // m_tokenIn / m_tokenOut / m_tokenInTotal / m_tokenTotalOut.
-    // The user's `|color|<c>` override still applies via wrapPlain.
-    //
-    // v0.8.13+ — non-zero / non-null default tint: when the
-    // cacheRead value is a positive number, the chunk is wrapped
-    // in DEFAULT_COLORS.m_tokenCachedIn (brown). value=0
-    // (either explicit or null-as-zero collapse) stays plain.
-    // vX.X.X+ — |valueOnly|true drops the "cache:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("cacheIn");
     const t = ctx.tokens?.current;
     if (!t) return wrapValueDefault("m_tokenCachedIn", 0, `${prefix}0`, params.color as string | undefined);
@@ -6477,9 +4557,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
       params.color as string | undefined,
     );
   },
-  // v0.8.40+ — per-turn token cost inline. Mirrors m_tokenCost MODULES
-  // body (computed from current.* × the active model's price entry).
-  // Same arg surface as m_tokenCachedIn (color + nulldrop + valueOnly).
+  // Per-turn token cost inline (mirrors the MODULES body).
   m_tokenCost: (params, ctx) => {
     const t = ctx.tokens;
     if (!t || !t.sessionId) return placeholderWithColor("m_tokenCost", params, ctx);
@@ -6495,12 +4573,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const cost = parseFloat(snapshotCost.value);
     return wrapValueDefault("m_tokenCost", cost, `${prefix}${formatCostDict(snapshotCost)}`, userColor);
   },
-  // v0.4.0+ — :color|scale (or no :color| at all) → 5-band
-  // scale color on the active tick, STALE_COLOR on the
-  // cached/inactive tick. :color|<shortcut|SGR> → that exact
-  // color on the active tick, STALE_COLOR on the cached
-  // tick (per the user's "inactive 不受 :color| 影响"
-  // decision — gray is the canonical "stale" signal).
+  // :color|scale (or no :color|) → 5-band scale color on the active tick,
+  // STALE_COLOR on the cached/inactive tick. :color|<shortcut|SGR> → that exact
+  // color on the active tick, STALE_COLOR on the cached tick ("inactive 不受
+  // :color| 影响" — gray is the canonical stale signal).
   m_tokenInSpeed: (params, ctx) => {
     const probe = computeTickSpeed(ctx, "in", STALE_COLOR);
     const userColor = params.color as string | undefined;
@@ -6509,10 +4585,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
         ? speedScaleColor("in", probe.tps ?? 0)
         : (userColor ?? STALE_COLOR);
     const r = computeTickSpeed(ctx, "in", activeColor);
-    // v1.0 — setPrevTick moved to status-store.ts:processTick Stage 3. Render is read-only.
-    // vX.X.X+ — |valueOnly|true strips the "in:" prefix. computeTickSpeed
-    // pre-prefixes the value with labelFor("inSpeed"), so we strip that
-    // substring (colored chunk is downstream of the label).
+    // |valueOnly|true strips the pre-prefixed labelFor("inSpeed") substring.
     if (params.valueOnly === "true") return r.value.replace(labelFor("inSpeed"), "");
     return r.value;
   },
@@ -6524,38 +4597,25 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
         ? speedScaleColor("out", probe.tps ?? 0)
         : (userColor ?? STALE_COLOR);
     const r = computeTickSpeed(ctx, "out", activeColor);
-    // v1.0 — setPrevTick moved to status-store.ts:processTick Stage 3. Render is read-only.
-    // vX.X.X+ — |valueOnly|true strips the "out:" prefix.
+    // |valueOnly|true strips the "out:" prefix.
     if (params.valueOnly === "true") return r.value.replace(labelFor("outSpeed"), "");
     return r.value;
   },
-  // v0.8.x cwf-tickStatus-v2 — m_totalToken* / m_totalTokenWithCacheIn
-  // REMOVED. Use the m_acc* family (scope=session default).
-  // v0.8.0+ — 6 acc modules (m_accTokenIn / Out / CachedIn / TotalIn /
-  // ApiMs / CacheHitRate). Three-layer granularity via :scope:
-  //   session (default) — per-claude-code-session (clear-bounded)
-  //   project — crosses session boundaries within the same cwd
-  //   model — crosses session boundaries within the same model
-  // All read from the v0.8.0 AccSnapshot slot populated by setAvg
-  // (which writes 3 slots per tick: session/project/model). The
-  // scope→slot mapping is hidden inside peekAcc; renderers just
-  // pass the resolved scope through. The legacy `scope=ccsession`
-  // surface was REMOVED; a leftover config surfaces as badarg
-  // (see resolveAccScope).
+  // m_acc* inline renderers — three-layer granularity via :scope: session
+  // (default, per-CC-process, clear-bounded) / project (crosses sessions in the
+  // same cwd) / model (crosses sessions for the same model). All read the
+  // AccSnapshot slot populated by setAvg; the scope→slot mapping is hidden in
+  // peekAcc. The removed `ccsession` surface surfaces as badarg (resolveAccScope).
   m_accTokenIn: (params, ctx) => {
     const scope = resolveAccScope(params, ctx);
-    // v0.8.30+ — bare default tint (brightGreen) on positive
-    // accumulator value. `wrapValueDefault` replaces the
-    // previous `wrapPlainDefault` so the value-zero rule
-    // applies: acc:0 stays plain.
+    // Bare default tint (brightGreen) on positive value; acc:0 stays plain.
     const v = peekAcc(scope, ctx);
     const n = v ? v.accTokenIn : 0;
     return wrapValueDefault("m_accTokenIn", n, accBody(ctx, "in", scope, passThroughOr<string>(params, ctx, "valueOnly") === "true"), passThroughOr<string>(params, ctx, "color"));
   },
   m_accTokenOut: (params, ctx) => {
     const scope = resolveAccScope(params, ctx);
-    // v0.8.30+ — bare default tint (red) on positive value; see
-    // m_accTokenIn for the wrap contract.
+    // Bare default tint (red) on positive value; see m_accTokenIn.
     const v = peekAcc(scope, ctx);
     const n = v ? v.accTokenOut : 0;
     return wrapValueDefault("m_accTokenOut", n, accBody(ctx, "out", scope, passThroughOr<string>(params, ctx, "valueOnly") === "true"), passThroughOr<string>(params, ctx, "color"));
@@ -6584,8 +4644,8 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const n = v ? v.accApiCalls : 0;
     return wrapValueDefault("m_accApiCalls", n, accBody(ctx, "apiCalls", scope, passThroughOr<string>(params, ctx, "valueOnly") === "true"), passThroughOr<string>(params, ctx, "color"));
   },
-  // vX.X.X+ — accumulated token cost inline. Computed from peekAcc ×
-  // tokenPrice. Same arg surface as m_accApiCalls (color/nulldrop/scope).
+  // Accumulated token cost inline. Computed from peekAcc × tokenPrice. Same
+  // arg surface as m_accApiCalls (color/nulldrop/scope).
   m_accTokenCost: (params, ctx) => {
     const scope = resolveAccScope(params, ctx);
     const v = peekAcc(scope, ctx);
@@ -6595,11 +4655,9 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("cost");
     return wrapValueDefault("m_accTokenCost", total, `${prefix}${formatCostsArray(v.costs)}`, passThroughOr<string>(params, ctx, "color"));
   },
-  // v0.8.13+ — inline m_accTokenInSpeed / m_accTokenOutSpeed.
-  // Mirrors m_tokenInSpeed / m_tokenOutSpeed contract: `:color|scale`
-  // (or no `:color|`) → 5-band scale on the active rollup, the
-  // user's explicit `:color|<c>` wins over the scale, and the
-  // `peekAcc==null` path emits "direction:n/a".
+  // Inline m_accTokenInSpeed / m_accTokenOutSpeed: mirrors m_tokenInSpeed —
+  // |color|scale (or none) → 5-band scale on the active rollup; |color|<c>
+  // wins over the scale; peekAcc==null → "direction:n/a".
   m_accTokenInSpeed: (params, ctx) => {
     const scope = resolveAccScope(params, ctx);
     const probe = computeAccSpeed(ctx, scope, "in", STALE_COLOR);
@@ -6609,7 +4667,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
         ? (probe.active ? speedScaleColor("in", probe.tps ?? 0) : STALE_COLOR)
         : userColor;
     const r = computeAccSpeed(ctx, scope, "in", activeColor);
-    // vX.X.X+ — |valueOnly|true strips the "in:" prefix from r.value.
+    // |valueOnly|true strips the "in:" prefix from r.value.
     if (passThroughOr<string>(params, ctx, "valueOnly") === "true") return r.value.replace(labelFor("inSpeed"), "");
     return r.value;
   },
@@ -6622,58 +4680,49 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
         ? (probe.active ? speedScaleColor("out", probe.tps ?? 0) : STALE_COLOR)
         : userColor;
     const r = computeAccSpeed(ctx, scope, "out", activeColor);
-    // vX.X.X+ — |valueOnly|true strips the "out:" prefix from r.value.
+    // |valueOnly|true strips the "out:" prefix from r.value.
     if (passThroughOr<string>(params, ctx, "valueOnly") === "true") return r.value.replace(labelFor("outSpeed"), "");
     return r.value;
   },
-  // Hit rate is special: session-scoped by default. Pass
-  // :scope:project / :scope:model to widen the rollup.
-  // v0.8.10-alpha.3 — reads TickStatusValue.accTokenHitRate directly.
+  // Hit rate: session-scoped by default (pass :scope:project/:scope:model to
+  // widen). Reads TickStatusValue.accTokenHitRate directly.
   m_accTokenHitRate: (params, ctx) => {
     const scope = resolveAccScope(params, ctx);
     const v = peekAcc(scope, ctx);
     if (!v) return placeholderAcc("hitRate", scope, passThroughOr<string>(params, ctx, "valueOnly") === "true");
     const pct = v.accTokenHitRate;
     const color = passThroughOr<string>(params, ctx, "color") ?? cacheHitColor(pct);
-    // vX.X.X+ — |valueOnly|true drops the "hit:" prefix.
-    // v0.9.x — prefix routes through labels.labelTokenHitRate
-    // (was hardcoded literal "hit:" in v0.8.x).
+    // |valueOnly|true drops the "hit:" prefix; else prefix = labelFor("hitRate").
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("hitRate");
     return `${color}${prefix}${pct.toFixed(cachePctPrecision())}%${RESET}`;
   },
-  // v0.8.24+ — start of the tick statistics window. Inline form
-  // supports :scope: (default session) and :color: override on
-  // the rendered "HH:MM:SS" body. Missing slot / legacy
-  // state.json without startAt → `start:n/a` placeholder.
+  // Start of the tick statistics window. Inline form supports :scope: (default
+  // session) + :color: on the "HH:MM:SS" body; missing slot / legacy state.json
+  // without startAt → "start:n/a" placeholder.
   m_accStartTime: (params, ctx) => {
     const scope = resolveAccScope(params, ctx);
     const v = peekAcc(scope, ctx);
-    // vX.X.X+ — |valueOnly|true drops the "start:" prefix.
+    // |valueOnly|true drops the "start:" prefix.
     const strip = passThroughOr<string>(params, ctx, "valueOnly") === "true";
     const startAt = v?.startAt ?? null;
     if (startAt == null) return placeholderAcc("startTime", scope, strip);
     const userColor = passThroughOr<string>(params, ctx, "color");
-    // v0.8.25+ — |abs|inline override; default off so v0.8.24 renders are byte-identical.
+    // |abs| widens the body; default off (HH:MM:SS).
     const abs = passThroughOr<string>(params, ctx, "abs") === "true";
     const prefix = strip ? "" : labelFor("startTime");
     return wrapPlain(`${prefix}${formatAbsTime(startAt, { abs })}`, userColor);
   },
-  // v0.8.0+ — sum/avg inline renderers. Same body shape as the
-  // bare-form MODULES entries; the inline path passes params so
-  // :model|/:window|/:align| take effect. A parse failure on the
-  // inline args has already dropped the token at the schema
-  // resolver, so parseWindowScope here is the runtime fallback
-  // for unexpected shapes (null → INLINE_BADARG path).
+  // Sum/avg inline renderers — same bodies as the bare MODULES entries, but
+  // params (model/window/align) take effect. parseWindowScope here is the
+  // runtime fallback for unexpected shapes (null → INLINE_BADARG).
   m_sumTokenIn: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
     const filter = parseWindowScope(ctx, merged);
     if (!filter) return INLINE_BADARG;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderWithColor("m_sumTokenIn", params, ctx);
-    // v0.8.30+ — bare default tint (brightGreen) on positive
-    // sum; user `|color|<c>` override wins; sum=0 stays plain
-    // (value-zero rule).
-    // vX.X.X+ — |valueOnly|true drops the "in:" prefix.
+    // Bare default tint (brightGreen) on positive sum; user |color| wins; 0 plain.
+    // |valueOnly|true drops the "in:" prefix.
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("in");
     return wrapValueDefault(
       "m_sumTokenIn",
@@ -6688,9 +4737,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (!filter) return INLINE_BADARG;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderWithColor("m_sumTokenOut", params, ctx);
-    // v0.8.30+ — bare default tint (red) on positive sum; see
-    // m_sumTokenIn for the wrap contract.
-    // vX.X.X+ — |valueOnly|true drops the "out:" prefix.
+    // Bare default tint (red) on positive sum; |valueOnly|true drops the prefix.
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("out");
     return wrapValueDefault(
       "m_sumTokenOut",
@@ -6705,7 +4752,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (!filter) return INLINE_BADARG;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderWithColor("m_sumTokenCachedIn", params, ctx);
-    // vX.X.X+ — |valueOnly|true drops the "cache:" prefix.
+    // |valueOnly|true drops the "cache:" prefix.
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("cacheIn");
     return wrapValueDefault("m_sumTokenCachedIn", agg.sumCached, `${prefix}${formatCompactToken(agg.sumCached)}`, passThroughOr<string>(params, ctx, "color"));
   },
@@ -6715,29 +4762,25 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (!filter) return INLINE_BADARG;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderWithColor("m_sumTokenTotalIn", params, ctx);
-    // vX.X.X+ — |valueOnly|true drops the "total:" prefix.
+    // |valueOnly|true drops the "total:" prefix.
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("totalIn");
     return wrapValueDefault("m_sumTokenTotalIn", agg.sumTotalIn, `${prefix}${formatCompactToken(agg.sumTotalIn)}`, passThroughOr<string>(params, ctx, "color"));
   },
-  // vX.X.X+ — windowed token cost inline. Same 5-axis arg surface
-  // as the other m_sum* modules (model/window/align + color/nulldrop).
+  // Windowed token cost inline (m_sum* arg surface).
   m_sumTokenCost: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
     const filter = parseWindowScope(ctx, merged);
     if (!filter) return INLINE_BADARG;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderWithColor("m_sumTokenCost", params, ctx);
-    // vX.X.X+ — reads costs from the aggregate.
+    // Reads costs summed from the aggregate.
     if (!agg.costs || agg.costs.length === 0) return placeholderWithColor("m_sumTokenCost", params, ctx);
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("cost");
     const total = agg.costs.reduce((s, e) => s + parseFloat(e.value), 0);
     return wrapValueDefault("m_sumTokenCost", total, `${prefix}${formatCostsArray(agg.costs)}`, passThroughOr<string>(params, ctx, "color"));
   },
-  // vX.X.X+ — inline form of m_sumEstQuota. Mirrors the bare form
-  // verbatim except placeholderWithColor + passThroughOr<color>
-  // (matches the m_sumTokenCost / m_sumApiMs family contract).
-  // vX.X.X+ — multi-currency costs consolidated via exchange rates
-  // from config.tokenPrices.json default block (aligned with bare path).
+  // Inline form of m_sumEstQuota (mirrors the bare form). Multi-currency costs
+  // consolidated via exchange rates from config.tokenPrices.json.
   m_sumEstQuota: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
     const filter = parseWindowScope(ctx, merged);
@@ -6748,7 +4791,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const pct = agg.alignedUsedPercent;
     if (pct == null) return placeholderWithColor("m_sumEstQuota", params, ctx);
     if (pct === 0) return placeholderWithColor("m_sumEstQuota", params, ctx);
-    // vX.X.X+ — resolve target currency via exchange rates
+    // Resolve target currency via exchange rates.
     const rates = cfg().exchangeRates;
     const baseCurrency = cfg().tokenPrices.default?.currency ?? "CNY";
     const providerId = ctx.currentProvider ?? null;
@@ -6766,9 +4809,8 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (!filter) return INLINE_BADARG;
     const agg = fetchSumAggregate(filter);
     if (agg.rows === 0) return placeholderWithColor("m_sumApiMs", params, ctx);
-    // v0.8.13+ — prefix routes through labelFor(labels.labelApi);
-    // default "api:" preserves the v0.8.x literal.
-    // vX.X.X+ — |valueOnly|true drops the "api:" prefix.
+    // Prefix via labelFor(labels.labelApi); default "api:" preserves the
+    // v0.8.x literal. |valueOnly|true drops it.
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("apiMs");
     return wrapValueDefault("m_sumApiMs", agg.sumApiMs, `${prefix}${formatRemainingMs(agg.sumApiMs)}`, passThroughOr<string>(params, ctx, "color"));
   },
@@ -6780,9 +4822,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const denom = agg.sumIn + agg.sumCached;
     if (agg.rows === 0 || denom === 0) return placeholderWithColor("m_sumTokenHitRate", params, ctx);
     const pct = (agg.sumCached / denom) * 100;
-    // vX.X.X+ — |valueOnly|true drops the "hit:" prefix.
-    // v0.9.x — prefix routes through labels.labelTokenHitRate
-    // (was hardcoded literal "hit:" in v0.8.x).
+    // |valueOnly|true drops the "hit:" prefix; else prefix = labelFor("hitRate").
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("hitRate");
     return `${cacheHitColor(pct)}${prefix}${pct.toFixed(cachePctPrecision())}%${RESET}`;
   },
@@ -6797,11 +4837,8 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const agg = fetchSumAggregate(filter);
     if (agg.sumApiMs === 0) return placeholderWithColor("m_sumTokenInSpeed", params, ctx);
     const tps = (agg.sumIn / agg.sumApiMs) * 1000;
-    // v0.8.13+ — speedScaleColor (`:color|scale` → scale,
-    // `:color|<c>` → that color, no `:color|` → scale default).
-    // v0.8.13+ — prefix routes through labelFor(labels.labelInSpeed);
-    // default "in:" preserves today's literal.
-    // vX.X.X+ — |valueOnly|true drops the "in:" prefix.
+    // speedScaleColor (:color|scale or none → scale; :color|<c> → that color);
+    // prefix via labelFor(labelInSpeed); |valueOnly|true drops the prefix.
     const userColor = passThroughOr<string>(params, ctx, "color");
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("inSpeed");
     const color =
@@ -6817,9 +4854,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const agg = fetchSumAggregate(filter);
     if (agg.sumApiMs === 0) return placeholderWithColor("m_sumTokenOutSpeed", params, ctx);
     const tps = (agg.sumOut / agg.sumApiMs) * 1000;
-    // v0.8.13+ — prefix routes through labelFor(labels.labelOutSpeed);
-    // default "out:" preserves today's literal.
-    // vX.X.X+ — |valueOnly|true drops the "out:" prefix.
+    // Prefix via labelFor(labelOutSpeed); |valueOnly|true drops the prefix.
     const userColor = passThroughOr<string>(params, ctx, "color");
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("outSpeed");
     const color =
@@ -6828,24 +4863,19 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
         : userColor;
     return `${color}${prefix}${formatSpeed(tps)}${RESET}`;
   },
-  // v0.8.x — total count of API calls in window. See MODULES twin.
+  // Total count of API calls in window (see MODULES twin).
   m_sumApiCalls: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
     const filter = parseWindowScope(ctx, merged);
     if (!filter) return INLINE_BADARG;
     const agg = fetchSumAggregate(filter);
     if (agg.calls === 0) return placeholderWithColor("m_sumApiCalls", params, ctx);
-    // v0.8.13+ — prefix routes through labelFor(labels.labelApiCalls);
-    // default "calls:" preserves the v0.8.x literal.
-    // vX.X.X+ — |valueOnly|true drops the "calls:" prefix.
+    // |valueOnly|true drops the "calls:" prefix.
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("apiCalls");
     return wrapValueDefault("m_sumApiCalls", agg.calls, `${prefix}${agg.calls}`, passThroughOr<string>(params, ctx, "color"));
   },
-  // v0.8.24+ — start of the tick statistics window across the
-  // filtered JSONL rows. min(s.startAt) over the
-  // window/model/align-filtered sample set. Empty / all-legacy
-  // window → `start:n/a` placeholder (m_sumStartTime PLACEHOLDERS
-  // entry). Same 5-axis arg surface as the other m_sum* modules.
+  // Start of the tick statistics window across the filtered JSONL rows:
+  // min(s.startAt). Empty / all-legacy window → "start:n/a" placeholder.
   m_sumStartTime: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
     const filter = parseWindowScope(ctx, merged);
@@ -6854,13 +4884,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (agg.rows === 0) return placeholderWithColor("m_sumStartTime", params, ctx);
     const abs = passThroughOr<string>(params, ctx, "abs") === "true";
     const color = passThroughOr<string>(params, ctx, "color");
-    // vX.X.X+ — |valueOnly|true drops the "start:" prefix.
+    // |valueOnly|true drops the "start:" prefix.
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("startTime");
-    // vX.X.X — mirror of the bare-form branch above: align=true
-    // + declared-windowId resolution sets `alignActive=true +
-    // interval!=null`, which gates the plan-anchor rendering
-    // (window.resetStartAt). align=false (default) OR dhms / "all"
-    // resolution lands on the empirical agg.firstAt branch below.
+    // align=true + declared-windowId resolution → plan's resetStartAt anchor;
+    // otherwise → empirical agg.firstAt branch below.
     if (filter.alignActive && filter.interval != null) {
       const w = intervalToWindow(filter.interval);
       if (
@@ -6879,15 +4906,11 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     }
     return wrapPlain(`${prefix}${formatAbsTime(agg.firstAt, { abs })}`, color);
   },
-  // v0.8.24+ — end of the tick statistics window across the
-  // filtered JSONL rows. max(s.lastAt) over the filtered sample
-  // set. lastAt mirrors the row's `at` field (the wall-clock
-  // instant of that tick), so max(lastAt) is the "newest tick"
-  // in the window — the dual of m_sumStartTime. Empty /
-  // all-legacy window → `end:n/a` placeholder.
-  // v0.8.27+ — align=true surfaces the plan window's close
-  // instant (ctx.fiveHour/weekly.resetAt) when the matching
-  // Window ships one.
+  // End of the tick statistics window across the filtered JSONL rows:
+  // max(s.lastAt) — the "newest tick" in the window, the dual of
+  // m_sumStartTime. Empty / all-legacy window → "end:n/a" placeholder.
+  // align=true surfaces the plan window's close instant when a matching Window
+  // ships one.
   m_sumEndTime: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
     const filter = parseWindowScope(ctx, merged);
@@ -6896,14 +4919,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (agg.rows === 0) return placeholderWithColor("m_sumEndTime", params, ctx);
     const abs = passThroughOr<string>(params, ctx, "abs") === "true";
     const color = passThroughOr<string>(params, ctx, "color");
-    // vX.X.X+ — |valueOnly|true drops the "end:" prefix.
+    // |valueOnly|true drops the "end:" prefix.
     const prefix = passThroughOr<string>(params, ctx, "valueOnly") === "true" ? "" : labelFor("endTime");
-    // vX.X.X — mirror of the bare-form branch above. align=true +
-    // declared-windowId resolution → plan window's resetAt close
-    // instant; everything else (align=false default, or dhms /
-    // "all" resolution) → empirical max(s.lastAt) fallback. The
-    // v0.8.x `alignActive` flag is gone — the resolver emits
-    // `alignActive` directly off the resolution path.
+    // align=true + declared-windowId resolution → plan's resetAt close instant;
+    // otherwise → empirical max(s.lastAt) fallback.
     if (filter.alignActive && filter.interval != null) {
       const w = intervalToWindow(filter.interval);
       if (w != null && typeof w.resetAt === "string") {
@@ -6919,46 +4938,23 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return wrapPlain(`${prefix}${formatAbsTime(agg.lastAt, { abs })}`, color);
   },
   m_quote: (params, ctx) => {
-    // v0.8.21+ — when `address` is non-empty, fetch the remote
-    // payload (pre-fetched by `preFetchQuotes`, see
-    // `src/api.quote.ts`) and walk the `quote` (+ optional
-    // `author`) paths to extract strings. On any failure
-    // (no body, non-JSON body where `quote` is non-empty, or
-    // quote path miss) we FALL BACK to the local QUOTES path.
-    // Pass |nulldrop|true (default) to drop the chunk on
-    // local-quote miss instead of surfacing the placeholder.
-    //
-    // Output format (v0.9.x — `wrap` redesign):
-    //   - `wrap` missing or empty → raw `<quote>--<author>` text
-    //   - `wrap=<chars>` → `<pair[0]><quote>--<author><pair[1]>`
-    //     where `pair` is 1-char-duped / 2+-sliced from `wrap`
-    //   - applies to BOTH address-mode and local-mode (was
-    //     address-only with hard-coded `~` in v0.8.21+).
-    //   - bare-body short-circuit (no `quote:` path → raw body
-    //     verbatim) is un-wrapped so the user sees the exact body
-    //     they fetched.
-    //
-    // The fetch path IGNORES `freq` / `lang` for rotation
-    // (remote payloads are not window-bucketed — the user picks
-    // an endpoint that returns stable strings or rotates on its
-    // own schedule).
+    // When `address` is non-empty, walk the pre-fetched remote payload's
+    // `quote` (+ optional `author`) paths; on any failure FALL BACK to the local
+    // QUOTES path. Output format: `wrap` missing/empty → raw `<quote>--<author>`
+    // text; `wrap=<chars>` → wrapped in the 2-char pair (1-char duped / 2+-sliced).
+    // The bare-body short-circuit (no `quote:` path → raw body verbatim) is
+    // un-wrapped. The fetch path IGNORES `freq`/`lang` for rotation (remote
+    // payloads are not window-bucketed).
     const address = params.address as string | undefined;
     const quoteRaw = (params.quote as string | undefined) ?? "";
     const authorRaw = params.author as string | undefined;
     const langRaw = params.lang as string | undefined;
-    // `quote` arg present (even if empty) → user opted into the
-    // address-mode branch. Missing arg → local QUOTES.
+    // `quote` arg present (even if empty) → address-mode branch; missing → local QUOTES.
     const hasQuote = (params.quote as string | undefined) !== undefined;
-    // `wrap` is a 2-char string when supplied (the schema's
-    // char-pair resolver has already normalized 1-char duplicate
-    // and 2+-slice). Empty string OR undefined both mean
-    // "no-op, render raw text". passThroughOr keeps the
-    // m_template|<key>|wrap|<chars> passthrough working.
+    // `wrap` is a 2-char string when supplied; empty/undefined = no-op (raw text).
     const wrapPair = passThroughOr<string>(params, ctx, "wrap");
     const applyWrap = (body: string, walkedJson: boolean): string => {
-      // Bare-body short-circuit (v0.8.18) — user opted out of
-      // walking by not setting `quote:`, return verbatim with
-      // no brackets. Otherwise wrap if a 2-char pair was supplied.
+      // Bare-body short-circuit (no `quote:` path) → verbatim, no brackets.
       if (!walkedJson) return body;
       if (!wrapPair || wrapPair.length !== 2) return body;
       return `${wrapPair[0]}${body}${wrapPair[1]}`;
@@ -6976,30 +4972,19 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
         const inner = `${tQuote}${authorSuffix}`;
         const walkedJson = quoteRaw.length > 0;
         text = applyWrap(inner, walkedJson);
-        // Seed for the color shortcut helpers (rainbow / hue).
-        // Hash the body (NOT the wrapped text) so distinct
-        // truncations of the same remote source still get
-        // distinct color bands — wrapping chars don't shift the
-        // band selection.
+        // Seed rainbow/hue from the body (not the wrapped text) so distinct
+        // truncations of the same source get distinct bands.
         seed = stringHash(tQuote);
       } else {
-        // Fetch / parse / quote-miss → fall back to local QUOTES.
+        // Fetch / parse / quote-miss → fall back to local QUOTES (always wraps —
+        // the local picker emits a well-formed body).
         const local = pickLocalQuote(params, langRaw, ctx);
         if (local === null) return INLINE_BADARG;
-        // Local-mode always wraps (no bare-body short-circuit —
-        // the local picker always emits a well-formed
-        // `<quote>--<author>` body, so wrapping it is meaningful).
         text = applyWrap(local, true);
         seed = quoteLocalSeed(params, langRaw, ctx);
       }
     } else {
-      // Local QUOTES path. Default freq = 1h. The schema resolver
-      // already shape-validated the raw string; we now parse it
-      // into a QuoteFreq {count, unit, ms} object that the picker
-      // needs. params.freq is undefined when the token is just
-      // `m_quote` or `m_quote|color|red`. On a malformed-but-
-      // shape-valid string we INLINE_BADARG here; in practice
-      // parseFreq rejects the same set the resolver.
+      // Local QUOTES path (default freq = 1h; schema resolver already validated).
       const local = pickLocalQuote(params, langRaw, ctx);
       if (local === null) return INLINE_BADARG;
       text = applyWrap(local, true);
@@ -7008,8 +4993,8 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const color = decodeColorParam(params.color as string | undefined);
     return applyColor(text, color, seed);
   },
-  // v0.4.0+ — session-info / metadata inline renderers. All mirror
-  // their MODULES counterparts but accept an optional :color| override.
+  // Session-info / metadata inline renderers — mirror their MODULES
+  // counterparts but accept an optional :color| override.
   m_session: (params, ctx) => {
     const s = ctx.tokens?.sessionName;
     if (s == null) return placeholderWithColor("m_session", params, ctx);
@@ -7079,30 +5064,19 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (ms == null) return placeholderWithColor("m_sessionApiDuration", params, ctx);
     return wrapPlainDefault("m_sessionApiDuration", formatRemainingMs(ms), params.color as string | undefined);
   },
-  // v0.8.0+ — per-turn API-ms delta (mirror of MODULES path with
-  // inline-args color support). Bare-form default color comes
-  // from DEFAULT_COLORS.m_apiMs; the inline `:color|` override
-  // takes precedence here.
+  // Per-turn API-ms delta (mirror of MODULES with inline color support).
   m_apiMs: (params, ctx) => {
     const t = ctx.tokens;
     if (!t || !t.sessionId) return placeholderWithColor("m_apiMs", params, ctx);
     const r = getDeltaForRender();
-    // vX.X.X+ — |valueOnly|true drops the "api:" prefix.
+    // |valueOnly|true drops the "api:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("apiMs");
-    // v1.0 — setPrevTick moved to status-store.ts:processTick Stage 3. Render is read-only.
     if (!r.hasMeasurement) {
-      // v0.8.x — TTL-bounded cache fallback (mirrors MODULES path
-      // and the m_tokenInSpeed/m_tokenOutSpeed convention). Idle
-      // tick within 60s of the last active tick renders the
-      // cached deltaApiMs in STALE_COLOR; outside the window or
-      // with no prior measurement, the placeholder drops in.
+      // Idle tick → cached deltaApiMs in STALE_COLOR (R7 — never expires);
+      // with no prior measurement, placeholder. The user's |color| loses to
+      // STALE_COLOR here (gray = "previous API call", matching the tps siblings).
       const cached = peekLastApiMs(t.sessionId, t.cwd);
       if (cached != null) {
-        // v0.8.x — the user's inline `|color|` override loses to
-        // the STALE_COLOR convention here, matching the tps
-        // siblings: gray signals "this is from a previous API
-        // call, not this tick" regardless of the user's color
-        // choice. See computeTickSpeed.
         return wrapPlainDefault(
           "m_apiMs",
           `${prefix}${formatRemainingMs(cached)}`,
@@ -7111,14 +5085,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
       }
       return placeholderWithColor("m_apiMs", params, ctx);
     }
-    // v1.0 — setLastApiMs moved to status-store.ts:processTick
-    // Stage 5. Render is read-only.
-    // v0.8.13+ — non-zero, non-null default tint: when the
-    // per-turn apiMs delta is a positive number, wrap in
-    // DEFAULT_COLORS.m_apiMs (brown). 0 stays plain (value-zero
-    // rule); STALE_COLOR still wins on the cached/idle branch
-    // above. v0.8.13+ — prefix routes through labelFor
-    // (labels.labelApi); default "api:" preserves the v0.8.x literal.
+    // Positive per-turn delta → brown default tint; 0 stays plain.
     return wrapValueDefault("m_apiMs", r.apiMs, `${prefix}${formatRemainingMs(r.apiMs)}`, params.color as string | undefined);
   },
   m_linesAdded: (params, ctx) => {
@@ -7134,9 +5101,8 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_tokenInTotal: (params, ctx) => {
     const t = ctx.tokens;
     if (!t || t.totals.tokenTotalIn == null) return placeholderWithColor("m_tokenInTotal", params, ctx);
-    // v0.8.30+ — bare default tint (brightGreen) on positive
-    // value; user `|color|<c>` override wins; 0 stays plain.
-    // vX.X.X+ — |valueOnly|true drops the "in:" prefix.
+    // Bare default tint (brightGreen) on positive value; user |color| wins; 0 plain.
+    // |valueOnly|true drops the "in:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("in");
     return wrapValueDefault(
       "m_tokenInTotal",
@@ -7148,9 +5114,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_tokenTotalOut: (params, ctx) => {
     const t = ctx.tokens;
     if (!t || t.totals.tokenTotalOut == null) return placeholderWithColor("m_tokenTotalOut", params, ctx);
-    // v0.8.30+ — bare default tint (red) on positive value; see
-    // m_tokenInTotal inline for the wrap contract.
-    // vX.X.X+ — |valueOnly|true drops the "out:" prefix.
+    // Bare default tint (red) on positive value; |valueOnly|true drops the prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("out");
     return wrapValueDefault(
       "m_tokenTotalOut",
@@ -7159,18 +5123,13 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
       params.color as string | undefined,
     );
   },
-  // v0.8.0+ — total_input_tokens under the labelTotalIn label
-  // family. Reads the same input as m_tokenInTotal; the two
-  // modules differ in which labels.* axis labels them.
-  //
-  // v0.8.13+ — non-zero, non-null default tint: when
-  // totals.tokenTotalIn is a positive number, wrap in
-  // DEFAULT_COLORS.m_tokenTotalIn (blue). value=0 stays plain;
-  // null → placeholderWithColor.
+  // total_input_tokens under the labelTotalIn label family — same input as
+  // m_tokenInTotal, differing only in the labels.* axis. Positive value gets
+  // the blue default tint; value=0 stays plain; null → placeholderWithColor.
   m_tokenTotalIn: (params, ctx) => {
     const t = ctx.tokens;
     if (!t || t.totals.tokenTotalIn == null) return placeholderWithColor("m_tokenTotalIn", params, ctx);
-    // vX.X.X+ — |valueOnly|true drops the "total:" prefix.
+    // |valueOnly|true drops the "total:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("totalIn");
     return wrapValueDefault(
       "m_tokenTotalIn",
@@ -7179,55 +5138,40 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
       params.color as string | undefined,
     );
   },
-  // v0.4.x — project-wide count of valid API calls (sumApiCount
-  // in tickStatus). Reads the same project-wide slot the
-  // accumulator writes to. Renders "calls:N"; renders "calls:0"
-  // (plain, or in the `|color|<c>` SGR) when the slot is
-  // uninitialized. (`:nulldrop|` is a no-op here — the function
-  // never returns null, same as m_tokenIn / m_tokenOut via
-  // computeTickDelta.)
-  //
-  // v0.8.13+ — non-zero, non-null default tint wraps the chunk
-  // cyan via DEFAULT_COLORS.m_apiCalls when the value is a
-  // positive count. value=0 → plain "calls:0" (value-zero rule),
-  // and any explicit user `:color|<c>` ALWAYS applies even on
-  // the zero path (override wins over the natural plain emit).
+  // Project-wide count of valid API calls (accApiCalls in the project slot).
+  // Renders "calls:N", "calls:0" when uninitialized (:nulldrop is a no-op —
+  // never returns null). Cyan default tint on positive counts; value=0 plain;
+  // an explicit |color| always applies even on the zero path.
   m_apiCalls: (params, ctx) => {
     const cwd = ctx.tokens?.cwd;
-    // v0.8.13+ — prefix routes through labelFor(labels.labelApiCalls);
-    // default "calls:" preserves the v0.8.x literal.
-    // vX.X.X+ — |valueOnly|true drops the "calls:" prefix.
+    // |valueOnly|true drops the "calls:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("apiCalls");
     if (!cwd) return wrapPlainDefault("m_apiCalls", `${prefix}0`, params.color as string | undefined);
     const acc = statusStore.readAccumulator("project", { cwd });
     if (!acc) return wrapPlainDefault("m_apiCalls", `${prefix}0`, params.color as string | undefined);
     return wrapValueDefault("m_apiCalls", acc.accApiCalls, `${prefix}${acc.accApiCalls}`, params.color as string | undefined);
   },
-  // v0.8.0+ — inline form of m_contextWindowSize (capacity).
-  // v0.8.23+ — context-window inline forms route through the
-  // dedicated labelContext* axes (labels.labelContext*; defaults
-  // "size:" / "size:" / "used:" / "remain:" preserve the v0.8.22
-  // hardcoded literals).
+  // Inline form of m_contextWindowSize (capacity).
   m_contextWindowSize: (params, ctx) => {
     const sz = ctx.tokens?.contextWindow?.contextWindowSize;
     if (sz == null) return placeholderWithColor("m_contextWindowSize", params, ctx);
-    // vX.X.X+ — |valueOnly|true drops the "size:" prefix.
+    // |valueOnly|true drops the "size:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("contextWindowSize");
     return wrapPlainDefault("m_contextWindowSize", `${prefix}${formatCompactToken(sz)}`, params.color as string | undefined);
   },
-  // v0.8.0+ — inline form of m_contextUsedPercent.
+  // Inline form of m_contextUsedPercent.
   m_contextUsedPercent: (params, ctx) => {
     const pct = ctx.tokens?.contextWindow?.contextUsedPercent;
     if (pct == null) return placeholderWithColor("m_contextUsedPercent", params, ctx);
-    // vX.X.X+ — |valueOnly|true drops the "used:" prefix.
+    // |valueOnly|true drops the "used:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("contextUsedPercent");
     return wrapPlainDefault("m_contextUsedPercent", `${prefix}${pct}%`, params.color as string | undefined);
   },
-  // v0.8.0+ — inline form of m_contextRemainingPercent.
+  // Inline form of m_contextRemainingPercent.
   m_contextRemainingPercent: (params, ctx) => {
     const pct = ctx.tokens?.contextWindow?.contextRemainingPercent;
     if (pct == null) return placeholderWithColor("m_contextRemainingPercent", params, ctx);
-    // vX.X.X+ — |valueOnly|true drops the "remain:" prefix.
+    // |valueOnly|true drops the "remain:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("contextRemainingPercent");
     return wrapPlainDefault("m_contextRemainingPercent", `${prefix}${pct}%`, params.color as string | undefined);
   },
@@ -7238,18 +5182,12 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const color = params.color as string | undefined;
     if (valueOnly) return formatPercentOnly(ctx.contextWindow, mode, color);
     if (color) return formatOneChunkColored(ctx.contextWindow, mode, color);
-    // v0.6.0+: stale-aware — see m_window5h/7d path. :color| above
-    // always wins, so explicit user color stays sticky even on stale.
+    // :color| above always wins, so explicit user color stays sticky even on stale.
     return formatOneChunk(ctx.contextWindow, mode, cfg().bar.width, false);
   },
-  // v0.8.16 — TTL gauge inline-args renderer. Mirror of the bare
-  // MODULES entry but with the user's |color|<c> override applied
-  // before the scale color (override always wins; matches the
-  // wrapPlainDefault contract for every other module). v0.9.x —
-  // also append the fixed-second TTL suffix via formatTtlSeconds
-  // (see MODULES entry for the rationale), AND route through the
-  // ACTIVE provider's cache row (see MODULES entry for the
-  // per-provider rationale).
+  // TTL gauge inline renderer: same as the MODULES entry but with |color|<c>
+  // applied before the scale color (override always wins), the fixed-second
+  // suffix, and the ACTIVE provider's cache row (see MODULES entry).
   m_cacheTtlStatus: (params, ctx) => {
     const key = ctx.currentProvider;
     if (key == null) return placeholderWithColor("m_cacheTtlStatus", params, ctx);
@@ -7270,13 +5208,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const suffix = formatTtlSeconds(entry.ttlMs - entry.ageMs);
     return `${color}${ttlStatusChar(remaining)}${RESET} ${suffix}`;
   },
-  // v0.9.8+ — inline form of m_sumTtlStatus. Mirrors the bare
-  // MODULES entry but with the user's |color|<c> override
-  // applied before the default 5-band scale (override always
-  // wins; matches the m_statTtlStatus / m_cacheTtlStatus inline
-  // contract). parseWindowScope reads from `merged` so an outer
-  // m_template passthrough on model/window/align/term flows in
-  // (whitelist extends TERM_PARAM since v0.9.8).
+  // Inline form of m_sumTtlStatus: |color|<c> override wins before the
+  // default 5-band scale. parseWindowScope reads from `merged` so an outer
+  // m_template passthrough on model/window/align/term flows in (whitelist
+  // extends TERM_PARAM since v0.9.8).
   m_sumTtlStatus: (params, ctx) => {
     const merged = mergePassThrough(params, ctx);
     const filter = parseWindowScope(ctx, merged);
@@ -7290,20 +5225,17 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const suffix = formatTtlSeconds(entry.ttlMs - entry.ageMs);
     return `${color}${ttlStatusChar(remaining)}${RESET} ${suffix}`;
   },
-  // v0.8.17+ — system RAM usage inline form. Mirror of the bare
-  // MODULES entry but with the user's |color|<c> override applied
-  // before the default tint (override always wins; matches the
-  // wrapPlainDefault contract for every other module).
+  // System RAM usage inline form. |color|<c> override wins before the
+  // default tint (matches the wrapPlainDefault contract).
   m_memUsage: (params, ctx) => {
     const m = getMemUsage();
     if (!m) return placeholderWithColor("m_memUsage", params, ctx);
-    // vX.X.X+ — |valueOnly|true drops the "Mem:" prefix.
+    // |valueOnly|true drops the "Mem:" prefix.
     const prefix = params.valueOnly === "true" ? "" : labelFor("memUsage");
     return renderMemUsageBody(prefix, m.used, m.total, params.color as string | undefined);
   },
-  // vX.X.X+ — context-window usage inline form. Mirror of the bare
-  // MODULES entry but with the user's |color|<c> override applied
-  // before the default tint (override always wins).
+  // Context-window usage inline form. |color|<c> override wins before the
+  // default tint.
   m_contextUsage: (params, ctx) => {
     const used = ctx.tokens?.totals?.tokenTotalIn;
     const total = ctx.tokens?.contextWindow?.contextWindowSize;
@@ -7311,8 +5243,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const prefix = params.valueOnly === "true" ? "" : labelFor("contextUsage");
     return renderContextUsageBody(prefix, used, total, params.color as string | undefined);
   },
-  // vX.X.X+ — system RAM used bytes inline form. Mirrors the bare
-  // MODULES entry but with the user's |color|<c> override.
+  // System RAM used bytes inline form. |color|<c> override wins.
   m_memUsed: (params, ctx) => {
     const m = getMemUsage();
     if (!m) return placeholderWithColor("m_memUsed", params, ctx);
@@ -7320,8 +5251,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const body = `${prefix}${formatMemBytes(m.used)}`;
     return wrapPlainDefault("m_memUsed", body, params.color as string | undefined);
   },
-  // vX.X.X+ — system RAM total bytes inline form. Same shape as
-  // m_memUsed but reads m.total.
+  // System RAM total bytes inline form. Same shape as m_memUsed but reads m.total.
   m_memTotal: (params, ctx) => {
     const m = getMemUsage();
     if (!m) return placeholderWithColor("m_memTotal", params, ctx);
@@ -7329,11 +5259,9 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const body = `${prefix}${formatMemBytes(m.total)}`;
     return wrapPlainDefault("m_memTotal", body, params.color as string | undefined);
   },
-  // v0.8.36+ — inline form of m_windowMemUsage. Mirror of the
-  // m_windowContext inline path: |color|<c> override → use the
-  // fixed-color chunk; no |color| → use formatOneChunk so the
-  // band color follows percentBands. |display| overrides the
-  // mode (used/remaining) the same way m_windowContext does.
+  // Inline form of m_windowMemUsage. |color|<c> → fixed-color chunk; no
+  // |color| → formatOneChunk so band color follows percentBands. |display|
+  // overrides the mode (used/remaining) like m_windowContext.
   m_windowMemUsage: (params, ctx) => {
     const m = getMemUsage();
     if (!m || m.total <= 0) return placeholderWithColor("m_windowMemUsage", params, ctx);
@@ -7346,14 +5274,12 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (color) return formatOneChunkColored(window, mode, color);
     return formatOneChunk(window, mode, cfg().bar.width, false);
   },
-  // v0.4.0+ — expand a registered lineTemplates fragment. The
-  // loader strips any `m_template:` tokens from lineTemplates
-  // arrays (config.ts applyOverrides), so the recursive call below
-  // cannot itself reach an `m_template:` token. We `.slice()` the
-  // inner array to defend against any future in-place mutation.
-  // Missing key → warn + drop (renderer null path, same as bare
-  // MODULES drop). Type mismatch → silent drop (no warn; the user
-  // explicitly asked for a type filter).
+  // Expand a registered lineTemplates fragment. The loader strips any
+  // `m_template:` tokens from lineTemplates arrays (config.ts
+  // applyOverrides), so the recursive call below cannot itself reach an
+  // `m_template:` token; we `.slice()` the inner array defensively.
+  // Missing key → warn + drop (renderer null path). Type mismatch → silent
+  // drop (no warn; the user explicitly asked for a type filter).
   m_template: (params, ctx) => {
     const key = params.key as string;
     const inner = cfg().lineTemplates[key];
@@ -7363,52 +5289,21 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
       );
       return null;
     }
-    // v0.8.15+ — `type` is the only intrinsic name; matches
-    // ctx.providerType values verbatim (`quota` / `balance` /
-    // `unknown`). Explicit `|type:quota` / `|type:balance` /
-    // `|type:unknown` is strict-match against ctx.providerType
-    // — an unknown provider (matchProvider returned null) does NOT
-    // match `quota` or `balance`, so an explicit-type fragment is
-    // silently dropped when ANTHROPIC_BASE_URL doesn't match a
-    // configured provider. That's intentional: a fragment gated on
-    // `type:quota` is asking for quota-only data, which doesn't
-    // exist on an unknown provider. Conversely, `type:unknown`
-    // renders ONLY when no configured provider matches.
-    //
-    // v0.8.37 — when the user does NOT pass `type`, the
-    // fragment is provider-agnostic and renders under "quota" /
-    // "balance" providers (context-level templates like `context` /
-    // `git_info` / `realtime` / `tokens_acc` / `tokens_stat`
-    // typically fall in this bucket — they read from stdin +
-    // per-project state, not from provider-specific fields, and the
-    // user's intent is "show this on every tick regardless of
-    // provider"). The previous "default = plan" silently dropped
-    // these on the balance provider.
-    //
-    // v0.8.47+ — extend the agnostic guarantee to unknown providers.
-    // The previous v0.8.37 contract said "provider-agnostic renders
-    // on every tick regardless of provider", but the implementation
-    // dropped the fragment on ctx.providerType === "unknown" (i.e.
-    // when matchProvider returned null because ANTHROPIC_BASE_URL
-    // didn't match any configured entry). That contradicted the
-    // surrounding architecture: dispatch.ts already routes
-    // provider-AGNOSTIC modules (m_token*, m_session, m_version,
-    // m_branch, …) through renderProviderLine on the unknown path,
-    // and m_windowMemUsage / m_memUsage / m_label render fine on
-    // that path. Dropping only the m_template|<key> chunks broke
-    // the "one statusline slot, agnostic modules still emit on
-    // every provider" promise for users who organize their
-    // template as a top-level statuslineTemplate composed of named
-    // fragments. Now the agnostic gate has no provider-type filter
-    // at all — only explicit `|type:…` does strict-match.
+    // `type` is the only intrinsic name; matches ctx.providerType verbatim
+    // (`quota` / `balance` / `unknown`). Explicit |type:quota| / |type:balance|
+    // is strict-match — an unknown provider does NOT match quota/balance, so
+    // an explicit-type fragment is silently dropped (intentional: quota-gated
+    // fragments want quota-only data). `type:unknown` renders only when no
+    // configured provider matches. No `type` → fragment is provider-agnostic
+    // and renders on every provider regardless of ctx.providerType (context-
+    // level templates like `context` / `realtime` / `tokens_stat` read from
+    // stdin + per-project state; the old v0.8.37 "default = plan" silently
+    // dropped these on balance and unknown providers).
     const wantExplicit = params.type as "quota" | "balance" | undefined;
     if (wantExplicit != null && ctx.providerType !== wantExplicit) return null;
-    // v0.9.0+ — `providers:<id1,id2,...>` OR-match gate against
-    // the active provider instance id. Absent → no gate (renders on
-    // every provider, same as `type`-less). Present as a comma-
-    // separated list → drop unless `ctx.currentProvider` (the
-    // `provider` arg of renderProviderLine) is in the list.
-    // null ctx.currentProvider means ANTHROPIC_BASE_URL didn't
+    // `providers:<id1,id2,...>` OR-match gate against the active provider
+    // instance id. Absent → no gate. Present → drop unless ctx.currentProvider
+    // is in the list. null ctx.currentProvider means ANTHROPIC_BASE_URL didn't
     // match any configured entry, so the gate returns false (drop).
     const wantProvidersRaw = params.providers as string | undefined;
     if (wantProvidersRaw != null) {
@@ -7417,14 +5312,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
         return null;
       }
     }
-    // v0.8.7+ — passthrough: build a passThrough view from every
-    // param except the THREE intrinsics (`key` is the lookup target;
-    // `type` / `provider` are m_template-local provider-gate
-    // concerns — NOT values to push to inner modules). Nested
-    // m_template is
-    // impossible because config.ts strips them at load time, so we
-    // don't need to merge with a pre-existing passThrough on the
-    // outer context.
+    // Passthrough: every param except the intrinsics (`key` is the lookup
+    // target; `type` / `providers` are m_template-local gates, NOT values to
+    // push to inner modules). Nested m_template is impossible (config.ts
+    // strips them), so no merge with a pre-existing passThrough is needed.
     const passThrough: Record<string, ResolvedValue> = {};
     for (const [k, v] of Object.entries(params)) {
       if (k === "key" || k === "type" || k === "providers") continue;
@@ -7436,40 +5327,20 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   },
 };
 
-// v0.x.x+ — Two-class separator scheme for inline args.
-// First-class separator is `|` (single-purpose: structural, splits
-// the token into [moduleName, (implicitValue,), pair1, pair2, …]).
-// Second-class separator is `:` or `=` (splits a pair into
-// [name, value] at the FIRST occurrence; the remainder of the
-// string is part of the value).
+// Two-class separator scheme for inline args (v0.8.33+). First-class `|` is
+// structural (splits token into [moduleName, (implicitValue,), pair…]).
+// Second-class `:` or `=` splits a pair at the FIRST occurrence; the rest of
+// the string is the value (multi-`:` values are allowed — no error). The old
+// v0.7.1+ position-based scheme made values unable to contain `|` and was
+// unreadable; now `m_tokenIn|color:red` is natural, `m_label|GPU: A100|color:x`
+// keeps `:` in the implicit value, `color:red:blue` → value "red:blue".
 //
-// Why two classes: the previous v0.7.1+ design used `|` for BOTH
-// module-boundary and pair-boundary, with position (odd/even
-// segment) deciding whether a segment was a name or a value.
-// That made param values unable to contain `|` at all, and the
-// grammar was unreadable (`m_tokenIn|color|red` reads as three
-// opaque tokens). With the new scheme:
-//   - `m_tokenIn|color:red` — natural: the `:` marks name/value
-//     boundary.
-//   - `m_label|GPU: A100|color:brightGreen` — implicit value
-//     contains `:` because it sits BEFORE any pair-separator.
-//   - `m_tokenIn|color:red:blue` — the FIRST `:` is the boundary,
-//     the rest is the literal value passed to the resolver. Users
-//     who need a `:` in a value should not write it; the parser
-//     does not error on multi-`:` values (per spec 2026-07-09).
+// Layout: implicit param → FIRST segment is its value (verbatim). Otherwise the
+// FIRST segment, if present, must be a pair (`<name>[:=]<value>`). Each
+// remaining segment is one pair.
 //
-// Layout:
-//   - If the schema has an `implicit` param, the FIRST segment is
-//     its value (verbatim, may contain `:` / `=`).
-//   - Otherwise the FIRST segment, if present, must be a pair
-//     (i.e. start with `<name>[:=]<value>`).
-//   - Each remaining segment is one pair.
-//
-// Returns null on:
-//   - any resolver returning null (bad value)
-//   - pair missing `:` / `=` separator
-//   - pair with empty name (e.g. `:red` or `=red`)
-//   - unknown param name in the named section
+// Returns null on: resolver returning null, pair missing `:` / `=`, empty
+// pair name, or unknown param name in the named section.
 function parseInlineArgs(
   remainder: string,
   schema: InlineSchema,
@@ -7493,10 +5364,9 @@ function parseInlineArgs(
     i = 1;
   }
 
-  // vX.X.X+ — `prefix` / `suffix` accepted on every m_* module
-  // (EXCEPT m_label / m_template) via a global allowlist instead of
-  // being spread into ~50 schemas. Separators (s_ / s_move) and the
-  // two excluded modules reject them → badarg.
+  // `prefix` / `suffix` accepted on every m_* module (EXCEPT m_label /
+  // m_template) via a global allowlist instead of ~50 schemas. Separators
+  // (s_ / s_move) and the two excluded modules reject them → badarg.
   const allowAffix =
     key != null && key.startsWith("m_") && key !== "m_label" && key !== "m_template";
 
@@ -7513,9 +5383,8 @@ function parseInlineArgs(
       if (r === null) return null;
       out[name] = r;
     } else if (allowAffix && (name === "prefix" || name === "suffix")) {
-      // Any string value including empty (empty = explicit "off").
-      // Affix values are verbatim — no quote stripping. Use a
-      // trailing space in the token (or an s_ separator) to express
+      // Any string value including empty (empty = explicit "off"); affix values
+      // are verbatim, no quote stripping. Use a trailing space (or s_) for
       // leading/trailing whitespace.
       out[name] = raw;
     } else {
@@ -7525,23 +5394,15 @@ function parseInlineArgs(
   return out;
 }
 
-// Try to expand an inline-args token. Returns one of:
-//   - { kind: "ok",     value }    — chunk text (possibly empty)
-//   - { kind: "badarg" }            — parse failed (warn + drop)
-//   - undefined                     — no schema for this prefix (caller
-//                                     falls through to the unknown-module
-//                                     path; rare — only fires when a
-//                                     typo slips past the dispatcher).
-//
-// `key` is the bare prefix (used as the schema/renderer lookup key —
-// no trailing colon). `skipLen` is how many characters of the token
-// to consume before the remainder starts.
-//
-// v0.3.4+ — distinguish parse failure from "renderer returned null
-// for valid args but missing data". Previously the dispatcher warned
-// on ANY null return, which made modules like m_tokenOut (returns
-// null when stdin lacks total_output_tokens) wrongly warn on the
-// "unknown lineTemplate module" path.
+// Try to expand an inline-args token. Returns:
+//   - { kind: "ok", value } — chunk text (possibly empty)
+//   - { kind: "badarg" }    — parse failed (warn + drop)
+//   - undefined             — no schema for this prefix (caller falls through
+//                             to the unknown-module path).
+// `key` is the bare prefix (schema/renderer lookup key, no trailing colon);
+// `skipLen` is how many chars to consume before the remainder starts.
+// Distinguishes parse failure from "renderer returned null for valid args but
+// missing data" (v0.3.4+), so modules like m_tokenOut don't wrongly warn.
 type InlineResult =
   | { kind: "ok"; value: string | null; affix?: { prefix?: string; suffix?: string } }
   | { kind: "badarg" };
@@ -7558,8 +5419,7 @@ function expandInlineToken(
   if (params === null) return { kind: "badarg" };
   const rendered = INLINE_RENDERERS[key]!(params, ctx);
   if (rendered === INLINE_BADARG) return { kind: "badarg" };
-  // vX.X.X+ — thread explicit prefix/suffix out to renderTemplate,
-  // which applies them per the R1/R2/R3 rules.
+  // Thread explicit prefix/suffix out to renderTemplate (R1/R2/R3 rules).
   const affix: { prefix?: string; suffix?: string } = {};
   if (params.prefix !== undefined) affix.prefix = params.prefix as string;
   if (params.suffix !== undefined) affix.suffix = params.suffix as string;
@@ -7570,19 +5430,18 @@ function expandInlineToken(
   };
 }
 
-// vX.X.X+ — strip SGR color codes so the auto-space rules can inspect
-// the VISIBLE trailing character of the in-progress line.
+// Strip SGR color codes so the auto-space rules can inspect the VISIBLE
+// trailing character of the in-progress line.
 function stripSgrCodes(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, "");
 }
 
-// vX.X.X+ — auto-space affix application for m_* module chunks.
-//   explicit (|prefix:| / |suffix:|) always wins over the global
-//   defaults (cfg.prefixSpace / cfg.suffixSpace). Auto prefix fires
-//   only when the immediately preceding token was an m_* module (R3),
-//   the line is non-empty (R1), and the visible line doesn't already
-//   end in whitespace (R2). Auto suffix fires only when the NEXT
-//   token is an m_* module (symmetric lookahead).
+// Auto-space affix application for m_* module chunks. Explicit (|prefix:| /
+// |suffix:|) always wins over the global defaults (cfg.prefixSpace /
+// cfg.suffixSpace). Auto prefix fires only when the preceding token was an
+// m_* module (R3), the line is non-empty (R1), and the visible line doesn't
+// already end in whitespace (R2). Auto suffix fires only when the NEXT token
+// is an m_* module (symmetric lookahead).
 function applyAffix(
   piece: string,
   explicit: { prefix?: string; suffix?: string } | undefined,
@@ -7620,11 +5479,10 @@ function applyAffix(
 }
 
 export function renderTemplate(template: readonly string[], ctx: RenderContext): string[] {
-  // v0.9.4 — synthesize a guaranteed non-null `intervals` dict. The
-  // type allows it to be absent (test helpers + legacy call sites
-  // supply the flat `shortInterval` / `midInterval` /
-  // `longInterval` fields instead); module code can then rely on
-  // `ctx.intervals[term]` without a nullable guard.
+  // Synthesize a guaranteed non-null `intervals` dict. The type allows it to
+  // be absent (test helpers + legacy call sites supply the flat
+  // shortInterval / midInterval / longInterval fields instead); module code
+  // can then rely on `ctx.intervals[term]` without a nullable guard.
   if (
     !ctx.intervals &&
     (ctx.shortInterval != null || ctx.midInterval != null || ctx.longInterval != null)
@@ -7644,70 +5502,45 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
   // Even when neither is supplied, ensure `ctx.intervals` is a
   // non-null dict so per-module placeholders fire uniformly.
   if (!ctx.intervals) ctx = { ...ctx, intervals: {} };
-  // v1.0 — _renderDepth tracking and the deferred setPrevTick
-  // commit are GONE. The -processor (processTick Stage 3)
-  // sets PREV_TICK_KEY once per tick BEFORE render begins, so
-  // every render context (outer, m_template inner) sees the same
-  // baseline via peekPrevTick. No depth counter needed.
+  // v1.0 — _renderDepth tracking and the deferred setPrevTick commit are
+  // gone: processTick Stage 3 sets PREV_TICK_KEY once BEFORE render begins,
+  // so every render context (outer, m_template inner) sees the same baseline
+  // via peekPrevTick. No depth counter needed.
   const lines: string[] = [];
   let current = "";
-  // v0.9.0+ — column cursor for `s_move|pos:<n>`. Tracked
-  // in-statement (closure) instead of mutating ctx so a render
-  // mid-flight (e.g. nested m_template) can't see a half-baked
-  // cursor value. Mutated on every chunk; reset to 0 on `\n`.
+  // Column cursor for `s_move|pos:<n>`. Kept in a closure (not on ctx) so a
+  // render mid-flight (e.g. nested m_template) can't see a half-baked value.
+  // Mutated on every chunk; reset to 0 on `\n`.
   let lineCursor = 0;
-  // vX.X.X+ — auto-space tracking. prevIsModule = was the previous
-  // token an m_* module (incl. dropped ones / m_template); prevEndsWs
-  // = does the current line's visible text end in whitespace.
+  // Auto-space tracking. prevIsModule = previous token was an m_* module
+  // (incl. dropped ones / m_template); prevEndsWs = the line's visible text
+  // ends in whitespace.
   let prevIsModule = false;
   let prevEndsWs = false;
   for (let i = 0; i < template.length; i++) {
     const tok = template[i];
     if (tok == null) continue;
-    // v0.9.0+ — sync the closure cursor into ctx so inline-args
-    // renderers (s_move) can read it. The renderer returns the
-    // padding chunk; the dispatcher's normal chunk-accumulate
-    // step bumps the closure cursor by that chunk's width, which
-    // for a correctly-aligned s_move is exactly `pos - old cursor`,
-    // landing the cursor on `pos` for the next chunk to consume.
+    // Sync the closure cursor into ctx so inline-args renderers (s_move) can
+    // read it. The renderer returns the padding chunk; the dispatcher's
+    // normal accumulate step bumps the closure cursor by that chunk's width.
     ctx.lineCursor = lineCursor;
     let piece: string | null = null;
-    // vX.X.X+ — per-token affix flags. isModule = this token is an
-    // m_* module that receives an auto/explicit affix (m_template is
-    // excluded: the fragment's first inner module is at its own line-
-    // start, so an outer auto-prefix would double-space); explicitAffix
-    // = the |prefix:| / |suffix:| parsed out of this token (if any).
+    // Per-token affix flags. isModule = this token receives an auto/explicit
+    // affix (m_template excluded: the fragment's first inner module is at its
+    // own line-start, so an outer auto-prefix would double-space);
+    // explicitAffix = the |prefix:| / |suffix:| parsed from this token.
     let isModule = false;
     let explicitAffix: { prefix?: string; suffix?: string } | undefined;
-    // v0.3.3+ — inline-args tokens (s_<n>|…, m_label|…, m_modeLabel|…,
-    // and every other m_<name>|…). Only fire when the token contains
-    // "|" so the bare forms (s_0, m_modeLabel, m_window5h, …) keep
-    // routing through MODULES as before.
+    // Inline-args tokens (s_<name>|…, m_label|…, every other m_<name>|…). Only
+    // fire when the token contains "|" so bare forms route through MODULES.
     if (tok.includes("|")) {
-      // v0.4.x — provider-type filter for inline-args tokens. We
-      // extract the prefix (everything before the first "|") and
-      // consult INLINE_TYPE_FILTERS. When the prefix carries a tag
-      // and it doesn't match ctx.providerType, we silently drop
-      // the whole token WITHOUT entering the long prefix chain
-      // below. This keeps the per-prefix `type` tag symmetrical
-      // with MODULES' `type` field so a `m_window5h|color:red` in a
-      // balance provider's template drops identically to its bare
-      // form.
-      //
-      // Special case: s_<n>|… is a separator, not a module, so we
-      // skip the type check (separators are provider-agnostic).
-      // m_label|… and m_template|… are also provider-agnostic by
-      // design; their prefix is absent from INLINE_TYPE_FILTERS so
-      // the lookup is a no-op. Missing-key (unknown prefix) is also
-      // a no-op — the long chain below will produce inline=undefined
-      // and the unknown-module warn path will fire there.
-      //
-      // Renamed from the v0.4.x-beta `INLINE_MODE_FILTERS` /
-      // `ctx.providerModeKey` to avoid collision with the
-      // display-mode field on RenderContext.
-      //
-      // v0.7.1+ — inline-args separator is `|`, not `:`. See
-      // parseInlineArgs for the rationale.
+      // Provider-type filter (INLINE_TYPE_FILTERS): when the prefix carries a
+      // tag that doesn't match ctx.providerType, silently drop the whole token
+      // without entering the prefix chain — symmetric with MODULES' `type`
+      // field. s_<name>|… is a separator (provider-agnostic), m_label/m_template
+      // are provider-agnostic (absent from the filters), and unknown prefixes
+      // are a no-op (the unknown-module warn path fires later). Separator is
+      // `|` (v0.7.1+), see parseInlineArgs.
       const pipeAt = tok.indexOf("|");
       const inlinePrefix = pipeAt > 0 && tok.startsWith("m_")
         ? tok.slice(0, pipeAt)
@@ -7715,36 +5548,27 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       if (inlinePrefix) {
         const need = INLINE_TYPE_FILTERS[inlinePrefix];
         if (need && need !== ctx.providerType) {
-          // vX.X.X+ — known m_ module dropped by provider type → still
-          // counts as a module for the next token's auto-space.
+          // A known m_ module dropped by provider type still counts as a module
+          // for the next token's auto-space.
           prevIsModule = true;
           continue;
         }
       }
-      // The prefix → key/skipLen table. Keep them in sync with the
-      // INLINE_SCHEMAS / INLINE_RENDERERS entries above. A typo here
-      // means the token silently routes through MODULES (which won't
-      // match the literal pipe-bearing string) and falls through
-      // to the unknown-module warn.
+      // Prefix → key/skipLen table. Keep in sync with INLINE_SCHEMAS /
+      // INLINE_RENDERERS; a typo routes the token through MODULES (no match)
+      // and falls to the unknown-module warn.
       let inline: InlineResult | undefined;
       if (tok.startsWith("s_")) {
-        // s_<name>|… → skip "s_" (length 2), remainder starts at
-        // the alias name. vX.X.X+: unknown aliases (numeric
-        // `s_0|color:red`, or unknown `s_xyz|repeat:3`) emit the
-        // WHOLE token as a literal, no parsing, no warning. KNOWN
-        // aliases with bad args (e.g. `s_dot|repeat:9`) still fall
-        // through to the badarg warn-and-drop path below.
+        // s_<name>|… → skip "s_" (length 2), remainder starts at the alias
+        // name. UNKNOWN aliases (numeric s_0, unknown s_xyz) emit the WHOLE
+        // token as a literal, no parse, no warn; KNOWN aliases with bad args
+        // still hit the badarg warn-and-drop path.
         //
-        // v0.9.0+ — s_move gets its own route: it isn't a NAMED
-        // separator (it has params, not a literal body), so it
-        // doesn't sit in NAMED_SEPARATORS, but it still wants the
-        // inline-args parse path. Detect "s_move|" specifically and
-        // dispatch through expandInlineToken with skipLen=7. Bare
-        // `s_move` (no `|`) hits the unknown-alias literal path
-        // below (which matches the user's "没带参数相当于无效"
-        // contract — without params there's nothing to dispatch,
-        // and emitting the bare token verbatim is the consistent
-        // "unknown s_* alias" behavior).
+        // s_move gets its own route: it isn't a NAMED separator (params, not
+        // a literal body) so it's not in NAMED_SEPARATORS, but it still wants
+        // the inline-args parse path — dispatch "s_move|" via skipLen=7. Bare
+        // `s_move` (no `|`) hits the unknown-alias literal path (no params →
+        // nothing to dispatch → emit verbatim).
         const aliasPart = tok.slice(2, tok.indexOf("|"));
         if (aliasPart === "move") {
           inline = expandInlineToken(tok, "s_move", 7, ctx);
@@ -7754,26 +5578,21 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
           inline = undefined;
         }
       } else if (tok.startsWith("m_label|")) {
-        // m_label|<args> → skip "m_|" (length 8), remainder starts
-        // at the string value.
+        // m_label|<args> → skip "m_label|" (length 8); remainder is the string value.
         inline = expandInlineToken(tok, "m_label", 8, ctx);
       } else if (tok.startsWith("m_modeLabel|")) {
-        // m_modeLabel|<args> → skip "m_|" (length 12).
+        // m_modeLabel|<args> → skip "m_modeLabel|" (length 12).
         inline = expandInlineToken(tok, "m_modeLabel", 12, ctx);
       } else if (tok.startsWith("m_windowQuota|")) {
-        // v0.9.0+ — unified window module. `m_windowQuota|term|short`
-        // (default) → shortInterval; `|term|mid` → midInterval;
-        // `|term|long` → longInterval. Inline args: color, display,
-        // term, nulldrop. Skip "m_windowQuota|" (length 14).
+        // Unified window module: `|term|short` (default) / mid / long select
+        // the interval. Inline args: color, display, term, nulldrop. Skip 14.
         inline = expandInlineToken(tok, "m_windowQuota", 14, ctx);
       } else if (tok.startsWith("m_countdown|")) {
-        // v0.9.0+ — unified countdown module. Same `term` arg as
-        // m_windowQuota. Skip "m_countdown|" (length 12).
+        // Unified countdown module. Same `term` arg as m_windowQuota. Skip 12.
         inline = expandInlineToken(tok, "m_countdown", 12, ctx);
       } else if (tok.startsWith("m_quota|")) {
-        // v0.9.0+ — new quota module. Renders the quota group as
-        // `${labelQuota}<used>/<limit>`. Same `term`
-        // arg as m_windowQuota / m_countdown. Skip "m_quota|" (length 8).
+        // Quota module — renders `${labelQuota}<used>/<limit>`. Same `term`
+        // arg as m_windowQuota / m_countdown. Skip 8.
         inline = expandInlineToken(tok, "m_quota", 8, ctx);
       } else if (tok.startsWith("m_balance|")) {
         inline = expandInlineToken(tok, "m_balance", 10, ctx);
@@ -7782,27 +5601,23 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       } else if (tok.startsWith("m_version|")) {
         inline = expandInlineToken(tok, "m_version", 10, ctx);
       } else if (tok.startsWith("m_pluginSource|")) {
-        // m_pluginSource → skip "m_pluginSource|" (length 15). Unique
-        // stem, no prefix-shadowing concern.
+        // Unique stem, no prefix-shadowing concern. Skip 15.
         inline = expandInlineToken(tok, "m_pluginSource", 15, ctx);
       } else if (tok.startsWith("m_tokenIn|")) {
         inline = expandInlineToken(tok, "m_tokenIn", 10, ctx);
       } else if (tok.startsWith("m_tokenOut|")) {
         inline = expandInlineToken(tok, "m_tokenOut", 11, ctx);
       } else if (tok.startsWith("m_tokenInTotal|")) {
-        // Longer prefix must come BEFORE m_tokenIn: would match first;
-        // m_tokenIn: would shadow m_tokenInTotal|color|… if ordered
-        // the other way.
+        // Longer prefix MUST come before m_tokenIn — otherwise m_tokenIn
+        // shadows m_tokenInTotal|color|….
         inline = expandInlineToken(tok, "m_tokenInTotal", 15, ctx);
       } else if (tok.startsWith("m_tokenTotalOut|")) {
-        // m_tokenTotalOut: (16 chars) must come BEFORE m_tokenOut:
-        // (12 chars) so the longer literal wins — otherwise
-        // `m_tokenTotalOut|color|red` would match the m_tokenOut:
-        // branch with remainder "TotalOut|color|red" and parse-fail.
+        // 16 chars BEFORE m_tokenOut (12) so the longer literal wins —
+        // otherwise `m_tokenTotalOut|color|red` matches m_tokenOut with
+        // remainder "TotalOut|color|red" and parse-fails.
         inline = expandInlineToken(tok, "m_tokenTotalOut", 16, ctx);
       } else if (tok.startsWith("m_apiCalls|")) {
-        // m_apiCalls|color|<c> / |nulldrop|… → skip "m_apiCalls|"
-        // (length 11).
+        // Skip "m_apiCalls|" (length 11).
         inline = expandInlineToken(tok, "m_apiCalls", 11, ctx);
       } else if (tok.startsWith("m_tokenTotalIn|")) {
         inline = expandInlineToken(tok, "m_tokenTotalIn", 15, ctx);
@@ -7820,136 +5635,88 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       } else if (tok.startsWith("m_tokenOutSpeed|")) {
         inline = expandInlineToken(tok, "m_tokenOutSpeed", 16, ctx);
       } else if (tok.startsWith("m_accTokenCachedIn|")) {
-        // Longer prefix listed first defensively (18 chars) — siblings
-        // m_accTokenIn (12), m_accTokenOut (13), m_accTokenTotalIn
-        // (16) share the "m_accToken" stem but differ at index 13/14/15.
+        // Longer prefix listed first (19 chars) — siblings share the
+        // "m_accToken" stem.
         inline = expandInlineToken(tok, "m_accTokenCachedIn", 19, ctx);
       } else if (tok.startsWith("m_accTokenTotalIn|")) {
-        // m_accTokenTotalIn → skip prefix+pipe (18 chars). Listed
-        // before m_accTokenIn / m_accTokenOut to avoid prefix-shadow.
+        // Skip prefix+pipe (18 chars). Listed before m_accTokenIn / m_accTokenOut
+        // to avoid prefix-shadow.
         inline = expandInlineToken(tok, "m_accTokenTotalIn", 18, ctx);
       } else if (tok.startsWith("m_accTokenInSpeed|")) {
-        // v0.8.13+ — m_accTokenInSpeed → skip prefix+pipe (18).
-        // MUST be listed BEFORE m_accTokenIn (13) so the longer
-        // literal wins — otherwise `m_accTokenInSpeed|color|red`
-        // would match the m_accTokenIn branch and parse-fail.
+        // Skip prefix+pipe (18). MUST be before m_accTokenIn (13) so the
+        // longer literal wins.
         inline = expandInlineToken(tok, "m_accTokenInSpeed", 18, ctx);
       } else if (tok.startsWith("m_accTokenOutSpeed|")) {
-        // v0.8.13+ — m_accTokenOutSpeed → skip prefix+pipe (19).
-        // MUST be listed BEFORE m_accTokenOut (14) so the longer
-        // literal wins — `m_accTokenOutSpeed|...|xxx` would
-        // otherwise match the m_accTokenOut branch and parse-fail.
+        // Skip prefix+pipe (19). MUST be before m_accTokenOut (14) so the
+        // longer literal wins.
         inline = expandInlineToken(tok, "m_accTokenOutSpeed", 19, ctx);
       } else if (tok.startsWith("m_accTokenCost|")) {
-        // vX.X.X+ — m_accTokenCost → skip prefix+pipe (15 chars).
-        // Listed before m_accTokenOut (14) so the longer literal wins.
+        // Skip prefix+pipe (15). Before m_accTokenOut (14) so the longer wins.
         inline = expandInlineToken(tok, "m_accTokenCost", 15, ctx);
       } else if (tok.startsWith("m_accTokenOut|")) {
-        // m_accTokenOut → skip prefix+pipe (14 chars).
+        // Skip prefix+pipe (14).
         inline = expandInlineToken(tok, "m_accTokenOut", 14, ctx);
       } else if (tok.startsWith("m_accTokenIn|")) {
-        // m_accTokenIn → skip prefix+pipe (13 chars).
+        // Skip prefix+pipe (13).
         inline = expandInlineToken(tok, "m_accTokenIn", 13, ctx);
       } else if (tok.startsWith("m_accApiMs|")) {
-        // m_accApiMs → skip prefix+pipe (11 chars).
+        // Skip prefix+pipe (11).
         inline = expandInlineToken(tok, "m_accApiMs", 11, ctx);
       } else if (tok.startsWith("m_accApiCalls|")) {
-        // m_accApiCalls → skip prefix+pipe (14 chars). Listed
-        // before m_accTokenHitRate (19) and the m_sum* family to
-        // keep the m_acc* cluster contiguous; shares length with
-        // m_sumApiCalls (14) but diverges at index 5 ('c' vs 's').
+        // Skip prefix+pipe (14). Diverges from m_sumApiCalls (14) at index 5
+        // ('c' vs 's').
         inline = expandInlineToken(tok, "m_accApiCalls", 14, ctx);
       } else if (tok.startsWith("m_accTokenHitRate|")) {
-        // m_accTokenHitRate → skip prefix+pipe (18 chars). Renamed
-        // from m_accCacheHitRate to align the namespace with
-        // m_tokenHitRate (per-turn) / m_sumTokenHitRate
-        // (cross-project). 18 chars shares length with
-        // m_accTokenTotalIn (18) and m_sumTokenTotalIn (18) but
-        // diverges at position 14 ('H' vs 'T' / 'T'), so no shadow.
+        // Skip prefix+pipe (18). Diverges from m_accTokenTotalIn (18) at
+        // position 14 ('H' vs 'T'), so no shadow.
         inline = expandInlineToken(tok, "m_accTokenHitRate", 18, ctx);
       } else if (tok.startsWith("m_accStartTime|")) {
-        // v0.8.24+ — m_accStartTime → skip prefix+pipe (15 chars).
-        // Diverges from m_accTokenHitRate (18) at position 14
-        // ('S' vs 'H') so no shadow despite being in the m_acc*
-        // cluster.
+        // Skip prefix+pipe (15). Diverges from m_accTokenHitRate (18) at
+        // position 14 ('S' vs 'H').
         inline = expandInlineToken(tok, "m_accStartTime", 15, ctx);
       } else if (tok.startsWith("m_sumTokenOutSpeed|")) {
-        // v0.8.x — m_avgTokenOutSpeed renamed to m_sumTokenOutSpeed.
-        // "m_sumTokenOutSpeed" is 18 chars + "|" = 19 chars of
-        // prefix. Shares length with m_sumTokenCachedIn (19)
-        // but diverges at position 14 ('O' vs 'C'). MUST be
-        // listed before m_sumTokenOut (14) to avoid the
-        // m_sumTokenOutSpeed|...|xxx token being matched by
-        // startsWith("m_sumTokenOut|").
-        // v0.8.13+ — fixed skipLen from buggy 20 to 19 (off-by-one).
+        // Skip prefix+pipe (19). MUST be before m_sumTokenOut (14) so
+        // `m_sumTokenOutSpeed|…` doesn't match startsWith("m_sumTokenOut|").
+        // skipLen fixed 20→19 (off-by-one).
         inline = expandInlineToken(tok, "m_sumTokenOutSpeed", 19, ctx);
       } else if (tok.startsWith("m_sumEstQuota|")) {
-        // vX.X.X+ — m_sumEstQuota → skip prefix+pipe (14 chars).
-        // Listed before m_sumTokenCost (also 14 chars + "|" = 15)
-        // because both share the "m_sum" + 14-char stem and differ
-        // at position 5 ('E' vs 'T'); whichever branch runs first
-        // is fine (the startsWith guards make them disjoint), but
-        // grouping all est-related tokens near the top of the
-        // m_sum* cluster keeps related logic co-located.
+        // Skip prefix+pipe (14). Grouped near the top of the m_sum* cluster.
         inline = expandInlineToken(tok, "m_sumEstQuota", 14, ctx);
       } else if (tok.startsWith("m_sumTokenCost|")) {
-        // vX.X.X+ — m_sumTokenCost → skip prefix+pipe (15 chars).
-        // Listed before m_sumTokenCachedIn (19) / m_sumTokenIn (13) /
-        // m_sumTokenOut (14) — diverges at position 11 ('C' vs 'I'/'O'),
-        // but convention is longer-first within the m_sum* cluster.
-        // Length 15: "m_sumTokenCost" = 14 chars + "|" = 15.
+        // Skip prefix+pipe (15). Longer-first within the m_sum* cluster.
         inline = expandInlineToken(tok, "m_sumTokenCost", 15, ctx);
       } else if (tok.startsWith("m_sumTokenCachedIn|")) {
-        // 19 chars; siblings m_sumTokenIn (12) / m_sumTokenOut (13) /
-        // m_sumTokenTotalIn (17) / m_sumApiMs (10) /
-        // m_sumTokenInSpeed (18) / m_sumTokenHitRate (18) differ at
-        // later positions.
+        // Skip prefix+pipe (19). Siblings differ at later positions.
         inline = expandInlineToken(tok, "m_sumTokenCachedIn", 19, ctx);
       } else if (tok.startsWith("m_sumTokenInSpeed|")) {
-        // v0.8.x — m_avgTokenInSpeed renamed to m_sumTokenInSpeed.
-        // "m_sumTokenInSpeed" is 17 chars + "|" = 18 chars of prefix.
-        // Shares length with m_sumTokenTotalIn (18) and
-        // m_sumTokenHitRate (18) but diverges at position 14 ('I' vs
-        // 'T' / 'H'). MUST be listed before m_sumTokenIn (13) to
-        // avoid the m_sumTokenInSpeed|...|xxx token being matched
-        // by startsWith("m_sumTokenIn|").
-        // v0.8.13+ — fixed skipLen from buggy 19 to 18 (the prior
-        // off-by-one caused parseInlineArgs to slice the leading
-        // 'n' off 'nulldrop|false' and return params=null).
+        // Skip prefix+pipe (18). MUST be before m_sumTokenIn (13) so
+        // `m_sumTokenInSpeed|…` doesn't match startsWith("m_sumTokenIn|").
+        // skipLen fixed 19→18 (off-by-one sliced leading 'n' off
+        // 'nulldrop|false' → params=null).
         inline = expandInlineToken(tok, "m_sumTokenInSpeed", 18, ctx);
       } else if (tok.startsWith("m_sumTokenTotalIn|")) {
         inline = expandInlineToken(tok, "m_sumTokenTotalIn", 18, ctx);
       } else if (tok.startsWith("m_sumTokenHitRate|")) {
-        // v0.8.x — m_avgCacheHitRate renamed to m_sumTokenHitRate.
-        // 18 chars; shares length with m_sumTokenTotalIn (18) and
-        // m_sumTokenInSpeed (18) but diverges at position 14 ('H'
-        // vs 'T' / 'I'). The user-facing hit-rate prefix ("hit:N%")
-        // is unchanged; the rename aligns the namespace with the
-        // cross-project JSONL scan family (sits next to
-        // m_sumTokenIn/Out/etc.).
+        // Skip prefix+pipe (18). User-facing prefix ("hit:N%") unchanged.
         inline = expandInlineToken(tok, "m_sumTokenHitRate", 18, ctx);
       } else if (tok.startsWith("m_sumTokenOut|")) {
         inline = expandInlineToken(tok, "m_sumTokenOut", 14, ctx);
       } else if (tok.startsWith("m_sumApiCalls|")) {
         inline = expandInlineToken(tok, "m_sumApiCalls", 14, ctx);
       } else if (tok.startsWith("m_sumStartTime|")) {
-        // v0.8.24+ — m_sumStartTime → skip prefix+pipe (15 chars).
-        // Listed before the 14-char m_sum* siblings to keep the
-        // "longer literal first" defensive ordering convention.
-        // Diverges from m_sumTokenOut / m_sumApiCalls (14) at
-        // position 6 ('S' vs 'T' / 'A') so no shadow.
+        // Skip prefix+pipe (15). Diverges from 14-char siblings at
+        // position 6 ('S'), so no shadow.
         inline = expandInlineToken(tok, "m_sumStartTime", 15, ctx);
       } else if (tok.startsWith("m_sumEndTime|")) {
-        // v0.8.24+ — m_sumEndTime → skip prefix+pipe (13 chars).
-        // Shares length with m_sumTokenIn (13) but diverges at
-        // position 6 ('E' vs 'T'), so no shadow.
+        // Skip prefix+pipe (13). Shares length with m_sumTokenIn but
+        // diverges at position 6 ('E' vs 'T'), so no shadow.
         inline = expandInlineToken(tok, "m_sumEndTime", 13, ctx);
       } else if (tok.startsWith("m_sumTokenIn|")) {
         inline = expandInlineToken(tok, "m_sumTokenIn", 13, ctx);
       } else if (tok.startsWith("m_sumApiMs|")) {
         inline = expandInlineToken(tok, "m_sumApiMs", 11, ctx);
       } else if (tok.startsWith("m_quote|")) {
-        // m_quote|freq|<…>|color|<…> → skip "m_quote|" (length 8).
+        // Skip "m_quote|" (length 8).
         inline = expandInlineToken(tok, "m_quote", 8, ctx);
       } else if (tok.startsWith("m_session|")) {
         inline = expandInlineToken(tok, "m_session", 10, ctx);
@@ -7962,39 +5729,34 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       } else if (tok.startsWith("m_repo|")) {
         inline = expandInlineToken(tok, "m_repo", 7, ctx);
       } else if (tok.startsWith("m_branch|")) {
-        // m_branch|color|<c> → skip "m_|" (length 9).
+        // Skip "m_branch|" (length 9).
         inline = expandInlineToken(tok, "m_branch", 9, ctx);
       } else if (tok.startsWith("m_gitStatus|")) {
-        // m_gitStatus|color|<c> → skip "m_|" (length 12).
+        // Skip "m_gitStatus|" (length 12).
         inline = expandInlineToken(tok, "m_gitStatus", 12, ctx);
       } else if (tok.startsWith("m_ccVersion|")) {
-        // m_ccVersion|color|<c> → skip "m_|" (length 12).
+        // Skip "m_ccVersion|" (length 12).
         inline = expandInlineToken(tok, "m_ccVersion", 12, ctx);
       } else if (tok.startsWith("m_ccversion|")) {
-        // Deprecated alias — same dispatch as m_ccVersion: above.
-        // Pre-rename configs may still use the lowercase form.
+        // Deprecated lowercase alias — pre-rename configs may still use it.
         inline = expandInlineToken(tok, "m_ccversion", 12, ctx);
       } else if (tok.startsWith("m_sessionApiDuration|")) {
-        // Longer prefix must come BEFORE m_sessionDuration: for the
-        // same prefix-shadowing reason as the m_tokenIn family.
+        // Longer prefix must come BEFORE m_sessionDuration (same
+        // prefix-shadowing reason as the m_tokenIn family).
         inline = expandInlineToken(tok, "m_sessionApiDuration", 21, ctx);
       } else if (tok.startsWith("m_sessionDuration|")) {
         inline = expandInlineToken(tok, "m_sessionDuration", 18, ctx);
       } else if (tok.startsWith("m_apiMs|")) {
-        // v0.8.0+ — per-turn API-ms delta. No prefix-shadowing
-        // concern: m_apiMs (8) and m_accApiMs (11) share the
-        // "m_a" prefix but diverge at position 3 ("piMs" vs
-        // "ccApiMs"), so the literal startsWith check is exact.
-        // Placed adjacent to m_sessionDuration for cohesion
-        // (both are dhms time-format modules).
+        // Per-turn API-ms delta. No shadow concern: m_apiMs (8) and
+        // m_accApiMs (11) diverge at position 3, so startsWith is exact.
         inline = expandInlineToken(tok, "m_apiMs", 8, ctx);
       } else if (tok.startsWith("m_linesAdded|")) {
         inline = expandInlineToken(tok, "m_linesAdded", 13, ctx);
       } else if (tok.startsWith("m_linesRemoved|")) {
-        // m_linesRemoved|color|<c> → skip "m_|" (length 15).
+        // Skip "m_linesRemoved|" (length 15).
         inline = expandInlineToken(tok, "m_linesRemoved", 15, ctx);
       } else if (tok.startsWith("m_contextWindowSize|")) {
-        // m_contextWindowSize → skip prefix+colon (20 chars).
+        // Skip prefix+pipe (20 chars).
         inline = expandInlineToken(tok, "m_contextWindowSize", 20, ctx);
       } else if (tok.startsWith("m_contextUsedPercent|")) {
         inline = expandInlineToken(tok, "m_contextUsedPercent", 21, ctx);
@@ -8003,127 +5765,100 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
       } else if (tok.startsWith("m_windowContext|")) {
         inline = expandInlineToken(tok, "m_windowContext", 16, ctx);
       } else if (tok.startsWith("m_template|")) {
-        // m_template|<key>[|type|<plan|balance>][|nulldrop|<bool>]
-        // → skip "m_template|" (length 11). v0.8.15+ — `type` is
-        // the recommended intrinsic name; legacy `mode` arg is
-        // still accepted (parseInlineArgs goes through both
-        // resolvers; the renderer-side check prefers `type` when
-        // both are present).
+        // m_template|<key>[|type|<quota|balance|unknown>]
+        // [|providers|<id1,id2>][|nulldrop|<bool>] → skip 11. Named args:
+        // `type` (provider-type gate) and plural `providers` (per-instance
+        // OR-match); there is no `mode` arg.
         inline = expandInlineToken(tok, "m_template", 11, ctx);
       } else if (tok.startsWith("m_cacheTtlStatus|")) {
-        // m_cacheTtlStatus → 16 chars + "|" = 17 skipLen.
+        // Skip prefix+pipe (17).
         inline = expandInlineToken(tok, "m_cacheTtlStatus", 17, ctx);
       } else if (tok.startsWith("m_statTtlStatus|")) {
-        // m_statTtlStatus → 15 chars + "|" = 16 skipLen.
+        // Skip prefix+pipe (16).
         inline = expandInlineToken(tok, "m_statTtlStatus", 16, ctx);
       } else if (tok.startsWith("m_sumTtlStatus|")) {
-        // m_sumTtlStatus → 14 chars + "|" = 15 skipLen. Co-located
-        // with m_statTtlStatus because both render a TTL gauge
-        // glyph + fixed-second suffix; differs only in key source
-        // (per-filter vs freshest). No collision with the other
-        // m_sum* prefixes (the 5th char after "m_sum" is "T" here
-        // vs "E"/"T"/"A"/"C"/"H"/"I"/"O" for the rest).
+        // Skip prefix+pipe (15). Differs from other m_sum* prefixes at the
+        // 5th char after "m_sum" ('T'), so no collision.
         inline = expandInlineToken(tok, "m_sumTtlStatus", 15, ctx);
       } else if (tok.startsWith("m_memUsage|")) {
-        // m_memUsage → 10 chars + "|" = 11 skipLen.
+        // Skip prefix+pipe (11).
         inline = expandInlineToken(tok, "m_memUsage", 11, ctx);
       } else if (tok.startsWith("m_windowMemUsage|")) {
-        // m_windowMemUsage → 16 chars + "|" = 17 skipLen.
+        // Skip prefix+pipe (17).
         inline = expandInlineToken(tok, "m_windowMemUsage", 17, ctx);
       } else if (tok.startsWith("m_memUsed|")) {
-        // m_memUsed → 9 chars + "|" = 10 skipLen.
+        // Skip prefix+pipe (10).
         inline = expandInlineToken(tok, "m_memUsed", 10, ctx);
       } else if (tok.startsWith("m_contextUsage|")) {
-        // m_contextUsage → 14 chars + "|" = 15 skipLen.
+        // Skip prefix+pipe (15).
         inline = expandInlineToken(tok, "m_contextUsage", 15, ctx);
       } else if (tok.startsWith("m_memTotal|")) {
-        // m_memTotal → 10 chars + "|" = 11 skipLen.
+        // Skip prefix+pipe (11).
         inline = expandInlineToken(tok, "m_memTotal", 11, ctx);
       }
       // Parse failure (bad |color|, unknown param, odd segment count)
-// → warn + drop. Renderer returning null for valid args (e.g.
-// m_tokenOut when stdin lacks total_output_tokens) is NOT a
-// parse failure — silently skip the chunk, same as the bare
-// MODULES path. (v0.3.4+: previously we conflated the two
-// and wrongly warned "unknown module" on missing data.)
-//
-// vX.X.X+ — `s_*|…` tokens with an unknown alias leave `inline`
-// undefined, so they skip the badarg path below and fall through to
-// the `else` branch, which emits the WHOLE token verbatim. This
-// preserves the new "unrecognized token → verbatim" contract for
-// inline-args forms too.
+// → warn + drop. Renderer returning null for valid args (e.g. m_tokenOut
+// when stdin lacks total_output_tokens) is NOT a parse failure — silently
+// skip, same as the bare MODULES path (v0.3.4+: previously conflated the two
+// and wrongly warned "unknown module"). Unknown s_*|… aliases leave `inline`
+// undefined → skip badarg, fall to `else`, emit the whole token verbatim.
       if (inline?.kind === "badarg") {
         warnUnknownModuleOnce(tok);
-        // vX.X.X+ — a badarg-dropped m_ module still counts as a
-        // module for the next token's auto-space (same preserve-
-        // spacing-on-drop contract as the provider-type drop).
+        // A badarg-dropped m_ module still counts as a module for the next
+        // token's auto-space (same preserve-spacing-on-drop as the
+        // provider-type drop).
         prevIsModule = true;
         continue;
       } else {
         piece = inline?.kind === "ok" ? inline.value : tok;
         if (inline?.kind === "ok") {
-          // vX.X.X+ — inline m_* modules carry the affix. m_template
-          // is excluded from the affix path (the fragment's first
-          // inner module is at its own line-start), but it still
+          // Inline m_* modules carry the affix. m_template is excluded (the
+          // fragment's first inner module is at its own line-start) but still
           // counts as a module predecessor via prevIsModule below.
           isModule = tok.startsWith("m_") && !tok.startsWith("m_template|");
           if (inline.affix) explicitAffix = inline.affix;
         }
       }
     } else if (tok.startsWith("s_")) {
-      // Bare s_<…> fast path. Only named aliases (s_space, s_dot,
-      // s_newline, s_tab, s_colon, s_pipe) resolve to a literal —
-      // any other s_* suffix is unrecognized and the WHOLE token is
-      // emitted as a literal string. Inline-args (with optional
-      // color|) handles the `s_<…>|color|<c>` form via the new path
-      // above; this branch only fires for the no-pipe shorthand.
+      // Bare s_<…> fast path (no-pipe shorthand; `s_<…>|color|<c>` is
+      // handled by the inline path above). Only named aliases resolve to a
+      // literal; any other s_* suffix is emitted verbatim, no parse, no warn.
       const suffix = tok.slice(2);
       const alias = NAMED_SEPARATORS.get(suffix);
       if (alias !== undefined) {
         piece = alias;
       } else {
-        // Unknown s_* suffix → emit the original token verbatim,
-        // no parsing, no warning. (No compat fallback; the user
-        // gets exactly what they wrote.)
+        // Unknown s_* suffix → emit the original token verbatim (no compat
+        // fallback; the user gets exactly what they wrote).
         piece = tok;
       }
     } else if (tok.startsWith("m_")) {
       const mod = MODULES[tok];
       if (!mod) {
-        // Unknown m_* module → emit the original token verbatim,
-        // no parsing, no warning.
+        // Unknown m_* module → emit the original token verbatim, no warn.
         piece = tok;
       } else {
-        // v0.4.x — provider-type filter. Modules tagged with a type
-        // (`m_windowQuota: "quota"`, `m_balance: "balance"`, …) silently
-        // drop on a non-matching provider type. Untagged modules
-        // (m_token*, m_age, m_version, …) skip the check and emit
-        // on every ctx — those are provider-agnostic by design.
-        //
-        // The drop is a no-op — the chunk is skipped AND adjacent
-        // s_<name> separators are skipped too via the same null-
-        // fall-through the MODULES renderer already implements.
+        // Provider-type filter: type-tagged modules (m_windowQuota: "quota",
+        // m_balance: "balance") silently drop on a non-matching provider type.
+        // Untagged modules (m_token*, m_age, m_version) are provider-agnostic
+        // and emit on every ctx.
         if (mod.type != null && mod.type !== ctx.providerType) {
-          // vX.X.X+ — type-dropped module still counts as a module for
-          // the next token's auto-space (spacing survives the drop).
+          // A type-dropped module still counts as a module for the next
+          // token's auto-space (spacing survives the drop).
           prevIsModule = true;
           continue;
         }
         piece = mod(ctx);
-        // vX.X.X+ — a rendered bare m_ module gets the auto affix.
+        // A rendered bare m_ module gets the auto affix.
         isModule = true;
       }
     } else {
-      // Anything that didn't start with `m_` or `s_` (or didn't
-      // match an inline prefix in the long chain above) is treated
-      // as a free-form literal token. vX.X.X+: unrecognized tokens
-      // are emitted verbatim — no parsing, no warning. Useful for
-      // dropping a free-text label like `prompt: ` or `STATUS` into
-      // the template without escaping.
+      // Anything that didn't start with `m_` or `s_` (or match an inline
+      // prefix) is a free-form literal token, emitted verbatim — useful for
+      // dropping a free-text label like `prompt: ` or `STATUS` without escaping.
       piece = tok;
     }
-    // vX.X.X+ — apply prefix/suffix to m_* module chunks, then update
-    // the adjacency state for the next token.
+    // Apply prefix/suffix to m_* module chunks, then update adjacency state.
     if (isModule && piece != null && piece !== "") {
       piece = applyAffix(piece, explicitAffix, {
         prevIsModule,
@@ -8134,103 +5869,81 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
     }
     prevIsModule = isModule || tok.startsWith("m_");
     if (piece == null || piece === "") continue;
-    // Split the piece on '\n' so a "\n" separator or a future module
-    // that embeds newlines naturally produces multi-line output. The
-    // first segment is appended to the in-progress current line; any
-    // further segments start a new line (and the trailing one keeps
-    // the new "current" line for the next piece to append to).
+    // Split the piece on '\n' so a "\n" separator (or a module embedding
+    // newlines) produces multi-line output. First segment appends to the
+    // in-progress line; further segments start new lines.
     const segments = piece.split("\n");
     for (let j = 0; j < segments.length; j++) {
       const seg = segments[j]!;
       if (j === 0) {
         current += seg;
       } else {
-        // Push the completed line and start a new one. Skip empty
-        // lines that arise from consecutive "\n\n" splits.
+        // Push the completed line and start a new one. Skip empty lines
+        // that arise from consecutive "\n\n" splits.
         if (current.length > 0) lines.push(current);
         current = seg;
       }
-      // v0.9.0+ — update the visible-cell cursor on every segment.
-      // The cursor is what `s_move|pos:<n>` reads via
-      // ctx.lineCursor (which is initialized from the closure at
-      // the top of renderTemplate). ANSI SGR bytes are stripped
-      // before counting so color/style output doesn't inflate the
-      // column count. Each `\n` resets the cursor to 0 because
-      // the new line starts at column 0.
+      // Update the visible-cell cursor on every segment (what `s_move|pos:<n>`
+      // reads via ctx.lineCursor). ANSI SGR bytes are stripped before counting
+      // so color output doesn't inflate the column count. Each `\n` resets the
+      // cursor to 0 because the new line starts at column 0.
       if (j < segments.length - 1) {
         lineCursor = visibleCellLength(seg);
       } else {
         lineCursor += visibleCellLength(seg);
       }
     }
-    // vX.X.X+ — after the whole piece lands, record whether the line's
-    // VISIBLE text now ends in whitespace (R2 check for the next
-    // token's auto-prefix). ANSI-stripped so colored chunks don't
-    // hide a trailing space.
+    // After the whole piece lands, record whether the line's VISIBLE text now
+    // ends in whitespace (R2 check for the next token's auto-prefix).
+    // ANSI-stripped so colored chunks don't hide a trailing space.
     prevEndsWs = /\s$/.test(stripSgrCodes(current));
   }
   // Flush whatever's left in the in-progress line.
   if (current.length > 0) lines.push(current);
-  // v1.0 — _renderDepth tracking removed. setPrevTick fires
-  // from the -processor BEFORE render begins, so no deferred
-  // commit / depth counter is needed here.
+  // v1.0 — setPrevTick fires from the -processor BEFORE render begins, so no
+  // deferred commit / depth counter is needed here.
   return lines;
 }
 
-// Top-level renderer used by dispatch.ts. Selects the right template
-// for the provider, builds the context, and — critically — force-
-// appends the m_age stale suffix when the result is `stale` AND the
-// template didn't already emit it. This preserves the v0.2.16
-// invariant that a stale-on-error tick always carries a visible
-// broken-chain indicator, regardless of what the user put in their
-// lineTemplate.
+// Top-level renderer used by dispatch.ts. Selects the right template for the
+// provider, builds the context, and force-appends the m_age stale suffix when
+// the result is `stale` AND the template didn't already emit it — preserving
+// the invariant that a stale-on-error tick always carries a visible
+// broken-chain indicator regardless of lineTemplate.
 export function renderProviderLine(
   provider: import("./types.ts").Provider,
   ctx: Omit<RenderContext, "intervals" | "balance" | "tokens" | "contextWindow" | "providerType"> & {
-    // v0.9.4 — open-ended `intervals` dict replaces the v0.9.0 trio
-    // of fixed slots (`shortInterval` / `midInterval` /
-    // `longInterval`). Caller (dispatch.ts) passes the parsed
-    // Quota's intervals dict directly. Missing → empty dict,
-    // which the renderer treats as "all slots null" and the
-    // per-module placeholder fires.
+    // Open-ended `intervals` dict replaces the v0.9.0 trio of fixed slots
+    // (shortInterval / midInterval / longInterval). Caller passes the parsed
+    // Quota's intervals dict directly. Missing → empty dict → "all slots
+    // null" → per-module placeholder fires.
     intervals?: Record<string, Interval | null>;
-    // v0.9.4 — back-compat: legacy callers (and existing tests) still
-    // pass `shortInterval` / `midInterval` / `longInterval` as flat
-    // fields. When present and `intervals` is absent, we fold them
-    // into the reserved dict keys (`short` / `mid` / `long`).
+    // Back-compat: legacy callers/tests pass the flat slots. When present and
+    // `intervals` is absent, we fold them into the reserved keys
+    // (`short` / `mid` / `long`).
     shortInterval?: Interval | null;
     midInterval?: Interval | null;
     longInterval?: Interval | null;
     balance?: BalanceLike | null;
-    // v0.4.0+ — optional for back-compat with tests/callers that
-    // don't thread a TokenSnapshot. Defaults to null, which causes
-    // all m_token* modules to skip rendering.
+    // Optional for back-compat with callers that don't thread a TokenSnapshot.
+    // Defaults to null → all m_token* modules skip rendering.
     tokens?: TokenSnapshot | null;
-    // v0.4.0+ — optional. Synthesized from tokens.contextWindow.contextUsedPercent
-    // when omitted. Only read by m_windowContext.
+    // Optional. Synthesized from tokens.contextWindow.contextUsedPercent when
+    // omitted. Only read by m_windowContext.
     contextWindow?: Window | null;
-    // v0.8.21+ — optional. Pre-fetched quote bodies from
-    // `preFetchQuotes` (see `src/api.quote.ts`). The m_quote
-    // address-mode renderer reads this map; absent means "no
-    // pre-fetched bodies for this tick" and the renderer falls
-    // back to local QUOTES.
+    // Optional. Pre-fetched quote bodies from `preFetchQuotes` (src/api.quote.ts);
+    // absent → m_quote falls back to local QUOTES.
     quoteBodies?: Map<string, string>;
-    // v0.9.0+ — optional. Which side of the user-vs-builtin fence
-    // the active provider's plugin was loaded from, or `"missing"`
-    // when the matched provider id has no plugin (neither user
-    // override nor built-in). Populated by
-    // `dispatch.ts:buildProviderLine` from the per-provider cache
-    // row. Absent → null → m_pluginSource drops to no-op (per the
-    // "Drop 整个 module" decision 2026-07-11 — we don't surface
-    // "source:n/a" for unconfigured users). The `"missing"`
-    // value previously collapsed to null here too; it now
-    // surfaces as ❗ so a misconfigured provider id (e.g. user
-    // set providers.copilot but never installed the plugin)
-    // is loud instead of silent.
+    // Optional. Which side of the user-vs-builtin fence the active provider's
+    // plugin was loaded from, or `"missing"` when the matched id has no plugin.
+    // Populated by dispatch.ts:buildProviderLine from the per-provider cache
+    // row. Absent → null → m_pluginSource drops to no-op (no "source:n/a" for
+    // unconfigured users). `"missing"` surfaces as ❗ so a misconfigured
+    // provider id (e.g. providers.copilot without the plugin) is loud.
     pluginSource?: "user" | "builtin" | "missing" | null;
   },
 ): string {
-  // v0.4.0+ — synthesize the contextWindow Window from
+  // Synthesize the contextWindow Window from
   // tokens.contextWindow.contextUsedPercent when not supplied. formatOneChunk
   // only reads `pct`, so this minimal shape is enough.
   const usedPct = ctx.tokens?.contextWindow?.contextUsedPercent;
@@ -8240,33 +5953,23 @@ export function renderProviderLine(
       : usedPct != null
         ? { pct: usedPct }
         : null;
-  // v0.2.21: template picked by provider TYPE via providers.ts, not
-  // by provider-name literal. Same outward behavior — defaults put
-  // Quota at "quota" and BALANCE at "balance" — but the
-  // indirection lets a third provider slot in without code changes.
+  // Template picked by provider TYPE via providerTypeFor ("quota"/"balance"/
+  // "unknown") — the indirection lets a third provider slot in without code
+  // changes, and the type is threaded to ctx so per-module `type` filters
+  // compare against it.
   //
-  // v0.8.14+ — `statuslineTemplate` is always `string[]`. The legacy
-  // preset-name lookup against PLAN_PRESETS / BALANCE_PRESETS (v0.4.0
-  // –v0.8.13) is gone — the seven plan + two balance presets are now
-  // first-class entries in `cfg().lineTemplates` with `_`-prefixed
-  // keys, and the user references them via `m_template|_X` (with
-  // optional `|mode|plan|balance` to constrain dispatch to one
-  // provider type — `m_template` defaults to `mode:plan`).
-  //
-  // The provider type is still threaded through to the full ctx so
-  // per-module `type` filters can compare against it.
-  // providerTypeFor returns "quota" / "balance" / "unknown"
-  // (replaces the older templateKeyForProvider name).
+  // `statuslineTemplate` accepts an array (raw token list) or a string-form
+  // preset name resolved against DEFAULT_STATUSLINE_PRESETS (simple/compact/
+  // standard) at config load; fragments (DEFAULT_LINE_TEMPLATES) are
+  // referenced via `m_template|<fragment>`.
   const providerType = providerTypeFor(provider);
   const cfgSnap = cfg();
   const fullCtx: RenderContext = {
     mode: ctx.mode,
     nowMs: ctx.nowMs,
-    // v0.9.4 — prefer explicit `intervals` dict (new dispatch path);
-    // fall back to folding flat `shortInterval` / `midInterval` /
-    // `longInterval` (legacy callers + existing tests). When neither
-    // is provided, treat as "all slots null" so per-module
-    // placeholders fire.
+    // Prefer explicit `intervals` dict (new dispatch path); fall back to
+    // folding the flat slots (legacy callers + tests). Neither → "all slots
+    // null" so per-module placeholders fire.
     intervals:
       ctx.intervals ??
       (ctx.shortInterval != null || ctx.midInterval != null || ctx.longInterval != null
@@ -8283,53 +5986,42 @@ export function renderProviderLine(
     tokens: ctx.tokens ?? null,
     contextWindow,
     providerType,
-    // v0.9.0+ — active provider instance id (e.g. `"minimax"`).
-    // Drives `m_template|<key>|providers:<id1,id2>` OR-match gates;
-    // null when ANTHROPIC_BASE_URL didn't match a configured entry
-    // so a `|providers:<id1,id2,...>` gate returns false and the fragment drops.
+    // Active provider instance id (e.g. "minimax"). Drives
+    // `m_template|<key>|providers:<id1,id2>` OR-match gates; null when
+    // ANTHROPIC_BASE_URL didn't match a configured entry → the gate returns
+    // false and the fragment drops.
     currentProvider: provider,
-    // v0.6.0+ — single-owner dedup ref. Propagated by reference
-    // through any nested m_template: expansions; each m_age instance
-    // (bare + inline-args) checks + sets this slot so the WHOLE render
-    // emits ⛓️‍💥/🔗 at most once even when the user's template contains
-    // m_age in multiple places.
+    // Single-owner dedup ref, propagated by reference through nested
+    // m_template expansions. Each m_age instance (bare + inline) checks/sets
+    // this slot so the whole render emits the broken-chain glyph at most once.
     ageEmittedRef: { value: false },
-    // v0.8.21+ — per-tick quote body map from preFetchQuotes.
-    // Undefined when no address-mode m_quote token is active.
+    // Per-tick quote body map from preFetchQuotes. Undefined when no
+    // address-mode m_quote token is active.
     quoteBodies: ctx.quoteBodies,
-    // v0.9.0+ — default to null so older callers (tests that
-    // construct ctx inline) don't have to thread the field.
-    // m_pluginSource drops to no-op in that case.
+    // Default to null so legacy callers (tests constructing ctx inline) don't
+    // have to thread the field; m_pluginSource drops to no-op in that case.
     pluginSource: ctx.pluginSource ?? null,
-    // vX.X.X+ — default provider filter for m_sum* modules.
-    // Computed from ANTHROPIC_BASE_URL; empty/unset → undefined
-    // (skip provider filtering). Used by parseWindowScope.
+    // Default provider filter for m_sum* modules. Computed from
+    // ANTHROPIC_BASE_URL; empty/unset → undefined (skip provider filtering).
+    // Used by parseWindowScope.
     providerBaseUrl: (() => {
       const raw = process.env.ANTHROPIC_BASE_URL ?? "";
       return raw ? normalizeUrl(raw) : undefined;
     })(),
   };
-  // v0.8.14+ — `statuslineTemplate` is always a `string[]` after
-  // loader-side auto-migration. `.slice()` keeps the snapshot-
-  // defensive pattern (we don't want subsequent external mutations
-  // to leak into the render).
+  // statuslineTemplate is normalized to `string[]` at config load (string-form
+  // preset names resolve to their body there). `.slice()` is snapshot-defensive
+  // so subsequent external mutations can't leak into the render.
   const template = cfgSnap.statuslineTemplate.slice();
   const lines = renderTemplate(template, fullCtx);
-  // Forced visibility for the age annotation (stale-only fallback):
-  // when the user did NOT put m_age in their lineTemplate AND the
-  // fetch was stale, append the broken-chain suffix to the rendered
-  // line. This preserves the v0.2.16 invariant that a network
-  // failure is always visible, no matter what the user put in their
-  // template.
+  // Forced visibility for the age annotation: when the user did NOT put m_age
+  // in their lineTemplate AND the fetch was stale, append the broken-chain
+  // suffix (v0.2.16 invariant: a network failure is always visible).
   //
-  // Dedup v0.6.0+ — moved from a top-level string scan
-  // (`templateHasAgeModule`, which only saw the outermost tokens and
-  // missed m_age nested inside lineTemplates.* fragments) to a
-  // render-recursion-aware check: `fullCtx.ageEmittedRef.value`
-  // flips to true the moment ANY m_age instance (bare or inline,
-  // top-level or nested via m_template:) fires. The first m_age
-  // emits; this fallback sees the ref and skips, eliminating the
-  // "⛓️‍💥 ⛓️‍💥" double-append the old logic produced.
+  // Dedup is render-recursion-aware: `fullCtx.ageEmittedRef.value` flips true
+  // the moment ANY m_age instance (bare or inline, top-level or nested via
+  // m_template) fires — replacing the old top-level string scan that missed
+  // m_age inside fragments and double-appended the glyph.
   if (
     ctx.ageMs != null &&
     ctx.stale &&
@@ -8338,8 +6030,8 @@ export function renderProviderLine(
   ) {
     fullCtx.ageEmittedRef.value = true;
     const suffix = formatStaleSuffix(ctx.ageMs, false);
-    // The suffix carries its own SGR close, so it slots onto the
-    // last line regardless of how many lines the template emitted.
+    // The suffix carries its own SGR close, so it slots onto the last line
+    // regardless of how many lines the template emitted.
     if (lines.length === 0) {
       lines.push(suffix);
     } else {

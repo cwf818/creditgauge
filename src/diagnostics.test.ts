@@ -160,10 +160,9 @@ describe("diagnostics — append + readLatest", () => {
     assert.equal(lastKept.msg, "e1099");
   });
 
-  // v0.4.x+ Per-Project Layout: when a cwd is provided, the entry
-  // is written to `state/<projectHash>/diagnostics.jsonl` rather
-  // than the top-level file. Two concurrent projects must not see
-  // each other's entries when readLatest is given the same cwd.
+  // v0.4.x+ Per-Project Layout: cwd routes the entry to
+  // `state/<projectHash>/diagnostics.jsonl`; concurrent projects must
+  // not see each other's rows.
   it("per-project: append with cwd lands in state/<hash>/diagnostics.jsonl", () => {
     enable();
     const cwdA = "D:\\WorkSpace\\alpha";
@@ -239,14 +238,10 @@ describe("diagnostics — append + readLatest", () => {
 });
 
 describe("diagnostics — file-IO audit helpers (v0.8.x+)", () => {
-  // v0.8.x+ — per-tick file IO (cache.ts, token-store.ts,
-  // status-store.ts, config.ts, index.ts) is routed through thin
-  // logFs* wrappers that record each fs call to the diagnostics
-  // JSONL under sources 'fs:read' / 'fs:write' / 'fs:list' /
-  // 'fs:stat' / 'fs:mkdir'. The audit rides the same gate
-  // (CREDITGAUGE_DIAGNOSTICS_ENABLE) and 60s dedupe as fetch
-  // warnings — distinct enough row that a postmortem can
-  // `level=info & source=fs:*` filter for it.
+  // v0.8.x+ — per-tick fs calls route through logFs* wrappers that
+  // record each call under sources 'fs:read' / 'fs:write' /
+  // 'fs:list' / 'fs:stat' / 'fs:mkdir', riding the same gate + 60s
+  // dedupe as fetch warnings so a postmortem can filter `source=fs:*`.
   let sandbox: string;
   let prevConfigDir: string | undefined;
   let prevEnable: string | undefined;
@@ -370,12 +365,9 @@ describe("diagnostics — file-IO audit helpers (v0.8.x+)", () => {
 });
 
 describe("diagnostics — Entry schema (v0.8.x+: iso + fn)", () => {
-  // v0.8.x+ — every JSONL row carries two new fields: `iso` (a
-  // human-readable local-tz ISO8601 timestamp derived from `at`)
-  // and an optional `fn` identifying the calling function in
-  // `module.funcName` form. The `fn` field is set by the file-IO
-  // audit helpers and omitted from fetch / config / stdin rows so
-  // pre-existing warning flows are unchanged.
+  // v0.8.x+ — every row carries `iso` (local-tz ISO8601 from `at`)
+  // and an optional `fn` (`module.funcName`). `fn` is set by the
+  // file-IO audit helpers and omitted from fetch/config/stdin rows.
   let sandbox: string;
   let prevConfigDir: string | undefined;
   let prevEnable: string | undefined;
@@ -599,12 +591,9 @@ describe("diagnostics — Entry schema (v0.8.x+: iso + fn)", () => {
 });
 
 describe("diagnostics — fetch error dedupe (v0.6.x+)", () => {
-  // v0.6.x+ — fetch failures fire on every statusline tick (~1Hz in
-  // active sessions). Unguarded append would flood the JSONL log
-  // and burn through the 200-line cap in 3 minutes of sustained
-  // outage, hiding genuinely new errors. The dedupe map keeps a
-  // single entry per (source, message, 60s window) so a sustained
-  // failure is logged once per minute, not once per tick.
+  // v0.6.x+ — fetch failures fire every tick; unguarded append would
+  // flood the log and hide new errors. The dedupe map keeps one entry
+  // per (source, message, 60s window) so an outage logs once/minute.
   let sandbox: string;
   let prevConfigDir: string | undefined;
   let prevEnable: string | undefined;

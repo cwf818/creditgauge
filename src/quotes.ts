@@ -1,61 +1,35 @@
-// v0.3.6+ — Inspirational-quote pool + per-character rainbow/hue
-// helpers backing the `m_quote` template module.
+// Inspirational-quote pool + per-character rainbow/hue helpers backing the
+// m_quote module. QUOTES is a curated list of 100+ short bilingual (EN + 中文)
+// phrases with no attribution strings — a "— Confucius" tail would dominate
+// the narrow statusline.
 //
-// Design:
-//   - QUOTES: a hand-curated list of 100+ short, internationally
-//     recognizable inspirational phrases (mix of English + 中文 to
-//     match the plugin's bilingual tone in the README). No
-//     attribution strings — the statusline is a narrow strip and a
-//     long "— Confucius" tail would dominate the layout. The author
-//     is implicitly part of the "voice" the user opted into.
-//   - parseFreq(raw) → QuoteFreq: parses the `:freq:<…>` token.
-//     Grammar is the single-unit time format `<digits><unit>` where
-//     unit ∈ {"d","h","m","s"} and bare unit letters are shorthand
-//     for "1<unit>" (so `h` ≡ `1h`). Multi-unit forms like "2h10m"
-//     are rejected; users express 130 minutes as "130m".
-//   - pickQuote(freq, nowMs): deterministic per frequency window.
-//     The bucket index is derived from the parsed `freq.ms`. When
-//     `freq.ms` divides one day (24h, 12h, 6h, 3h, 4h, 8h, 30m, …)
-//     the boundary is anchored to UTC midnight so predictable
-//     rollover times are preserved; otherwise it rolls at Unix-
-//     epoch multiples (e.g. "13h" rolls every 13 hours from epoch).
-//   - buildRainbow(text, seed): per-character 256-color SGR wrap.
-//     Same text + same seed → identical output. Used for the
-//     `rainbow` and `rand-rainbow` color shortcuts.
-//   - buildHue(text, seed): single-color wrap, hue picked from the
-//     hash. Used for the `hue` shortcut.
+// parseFreq(raw) → QuoteFreq: single-unit time format `<digits><unit>`
+// (unit ∈ d/h/m/s), bare unit = 1<unit> (`h` ≡ `1h`); multi-unit forms like
+// "2h10m" are rejected (use "130m"). pickQuote(freq, nowMs) is deterministic
+// per frequency window; when freq.ms divides one day the boundary anchors to
+// UTC midnight, otherwise it rolls at Unix-epoch multiples. buildRainbow /
+// buildHue wrap text in per-char 256-color SGR.
 //
-// All functions are PURE (no Date.now / no Math.random / no I/O) so
-// they're testable with fixed inputs and produce the same bytes
-// across the whole statusline process — critical because the
-// renderer is called on every Claude Code tick.
+// All functions are PURE (no Date.now / Math.random / I/O) so the same
+// (freq, nowMs, text, seed) yields the same bytes every tick.
 
 // ----- Quote pool -----
 //
-// Keep this as a const array (not a Set) so test code can index
-// directly into it. ≥100 entries; keep entries ≤ 50 chars so a
-// quote + the rest of the statusline still fits on a single
-// terminal row at 80 cols (e.g. with the default 5h/7d windows + a
-// 60-char quote = 88 chars, within typical wrap tolerance).
+// Const array (not a Set) so tests can index directly. Entries ≤ 50 chars
+// keep a quote + the rest of the statusline within one 80-col row.
 //
-// v0.8.21+ — quote record. `author` is optional; when null or
-// blank, the renderer emits `~<quote>~` with no `--<author>`
-// suffix. `lang` lets the user filter rotation to one language
-// via the inline `|lang|<csv>` arg; an empty/missing `lang`
-// filter means "no filter, any language is eligible".
+// `author` is optional (null/blank → renderer emits `~<quote>~` with no
+// `--<author>` suffix). `lang` lets `|lang|<csv>` filter rotation to one
+// language; empty filter = any language eligible.
 export interface QuoteEntry {
   readonly author: string | null;
   readonly quote: string;
   readonly lang: string;
 }
 
-// v0.8.21+ — defaults. English (lang="en") and 中文 (lang="zh").
-// `author` is left null for the bulk of the table — most of the
-// quotes are folk wisdom / untraceable, and the renderer drops
-// the `--<author>` suffix when the value is null/blank. Add an
-// explicit author where the source is well-known and useful
-// (Shakespeare, Lincoln, MLK, …) so the user can see it in the
-// statusline output.
+// Defaults: English (lang="en") and 中文 (lang="zh"). `author` is null for
+// the bulk of the table (folk wisdom / untraceable); set it where the source
+// is well-known (Shakespeare, Lincoln, MLK, …).
 const EN = (q: string, author: string | null = null): QuoteEntry => ({
   author,
   quote: q,
@@ -199,38 +173,17 @@ export const QUOTES: readonly QuoteEntry[] = [
 
 // ----- Frequency → bucket size -----
 //
-// Bucket = the smallest time unit at which the displayed quote can
-// change. Two ticks within the same bucket show the same quote.
+// Bucket = the smallest time unit at which the displayed quote can change;
+// two ticks in the same bucket show the same quote.
 //
-// Grammar (single-unit time format, mirrors the reset countdown):
-//   freq := <digits><unit>            e.g. "12h", "30m", "7d", "130m"
-//         |  <unit>                   shorthand for 1<unit>
+// Grammar (single-unit time format): `<digits><unit>` (e.g. "12h", "30m",
+// "130m") or a bare unit letter = 1<unit> ("h" ≡ "1h"); unit ∈ d/h/m/s.
+// Anything else (multi-unit "2h10m", unknown unit, zero, overflow, empty,
+// "h10") → null; the renderer drops the token with a one-shot stderr warn.
 //
-//   <unit> := "d" | "h" | "m" | "s"
-//   <digits> := [0-9]+
-//
-// So:
-//   "d"   == "1d"   → 24h
-//   "h"   == "1h"   → 1h
-//   "m"   == "1m"   → 1m
-//   "s"   == "1s"   → 1s
-//   "12h"           → 12h
-//   "30m"           → 30m
-//   "130m"          → 130m
-//
-// Anything else (multi-unit like "2h10m", unknown units, zero, overflow,
-// empty, "h10") → null. The caller (render.ts) treats null as a parse
-// failure: drop the token with a one-shot stderr warn.
-//
-// Anchoring rule — when does the bucket boundary sit on the wall clock?
-//   - If `bucketMs` divides one day (86_400_000) exactly, the boundary
-//     is UTC midnight: floor(nowMs / bucket) is the same regardless of
-//     when in the day you check, so a user who picked "12h" sees the
-//     quote roll at 00:00 and 12:00 UTC — the predictable behavior the
-//     old `hd` form gave.
-//   - Otherwise (bucketMs does not divide one day), the boundary is
-//     Unix-epoch zero. "7d" happens to divide (so it gets UTC midnight
-//     boundaries); "13h" does not (so it rolls relative to the epoch).
+// Anchoring: if bucketMs divides one day (86_400_000) the boundary sits at
+// UTC midnight ("12h" rolls at 00:00/12:00 UTC); otherwise it rolls at
+// Unix-epoch multiples. "7d" divides (UTC-midnight); "13h" does not (epoch).
 export type QuoteFreqUnit = "d" | "h" | "m" | "s";
 
 // Parsed freq spec. Carrying the unit-ms separately (instead of a
@@ -249,12 +202,9 @@ const UNIT_MS: Readonly<Record<QuoteFreqUnit, number>> = {
   s: 1_000,
 };
 
-// Hard upper bound on count: 1_000_000 of any unit. Largest legal value
-// is "1000000s" ≈ 11.6 days, "1000000m" ≈ 694 days, "1000000h" ≈ 114
-// years, "1000000d" ≈ 2738 years. Anything bigger is rejected so the
-// seed index can't overflow Math.floor(nowMs / 1) ranges on real
-// timestamps. (nowMs is ~1.7e12 today, so even 1e12 would be safely
-// in range — 1e6 is generous without inviting pathological inputs.)
+// Upper bound on count: 1_000_000 of any unit ("1000000s" ≈ 11.6 days, …
+// "1000000d" ≈ 2738 years). Bigger is rejected so the seed index can't
+// overflow Math.floor(nowMs / bucket).
 const MAX_COUNT = 1_000_000;
 
 export function parseFreq(raw: string): QuoteFreq | null {
@@ -284,34 +234,17 @@ export function parseFreq(raw: string): QuoteFreq | null {
   return { count: n, unit: u, ms: n * UNIT_MS[u] };
 }
 
-// True when the bucket boundary aligns with UTC midnight — i.e. when
-// bucketMs divides one day exactly. 86_400_000 has divisors of the
-// form (d × h × m × s) where d ∈ {1,2,3,4,6,8,12,24}, h ∈ {1,2,3,4,6,8,12,24},
-// m ∈ {1..60 if h divides 24}, s ∈ {1..60 if m divides 60}. So e.g.
-// 12h, 6h, 3h, 4h, 8h, 24h/24h, 30m, 15m, 20m, 60s, etc. all qualify.
-// 7d divides by exactly 7 — yes. 13h doesn't divide 24h — no.
+// True when bucketMs divides one day exactly (UTC-midnight alignment):
+// "12h", "6h", "30m", "60s", "7d" qualify; "13h" does not.
 export function utcAnchored(bucketMs: number): boolean {
   if (bucketMs <= 0) return false;
   return 86_400_000 % bucketMs === 0;
 }
 
-// Pure: given a freq + a wall-clock ms, return the quote index. Same
-// (freq, nowMs) always returns the same index — critical for the
-// "stays stable within a window" guarantee. Exported so tests can
-// verify determinism without going through `pickQuote`.
-//
-// Formula: seed = floor(nowMs / bucket). This works for BOTH anchor
-// modes:
-//   - Rolling: boundaries are at Unix-epoch multiples of `bucket`,
-//     so floor(nowMs/bucket) is the bucket index.
-//   - UTC-anchored: bucket divides one day (86_400_000), so bucket
-//     boundaries are also at multiples of 86_400_000 from epoch.
-//     floor(nowMs/bucket) gives the bucket index from epoch, which
-//     for two times within the same calendar day will differ by
-//     an integer multiple of (86_400_000/bucket) — same mod-pool
-//     residue. The seed is the same, so the picked quote is the
-//     same. Crossing a UTC-midnight boundary advances the bucket
-//     index exactly when expected.
+// Pure: seed = floor(nowMs / bucket), mapped into the pool via modulo. Same
+// (freq, nowMs) → same index ("stays stable within a window"). Works for both
+// anchor modes: rolling (epoch multiples) and UTC-anchored (bucket divides
+// one day, so within-day times land on the same pool residue).
 export function quoteIndex(freq: QuoteFreq, nowMs: number): number {
   const bucket = freq.ms;
   const seed = Math.floor(nowMs / bucket);
@@ -327,23 +260,9 @@ export function pickQuote(freq: QuoteFreq, nowMs: number): string {
   return QUOTES[quoteIndex(freq, nowMs)]!.quote;
 }
 
-// v0.8.21+ — sanitize + truncate a quote string for the
-// statusline. Two passes:
-//
-//   1. Strip CRLF / TAB → single space (so an honest quote with
-//      a literal newline collapses to one separator, NOT a layout
-//      break); strip the rest of C0 controls + DEL.
-//   2. Collapse multiple spaces to one (a stray CR+LF would have
-//      become two spaces after pass 1).
-//
-// Truncation (maxCharBudget, default 60): CJK characters (Unicode
-// `Block=Han / Hangul / Hiragana / Katakana / CJK Unified
-// Ideographs` etc, generic per char weight = 2) count as 2
-// budget, anything else = 1. When the budget is exhausted, the
-// visible body is sliced AND `...` is appended (so the user
-// sees an ellipsis and isn't misled into thinking the long
-// quote is a short one). Pass max=0 to opt out of truncation
-// (sanitize only).
+// Sanitize a quote: (1) CRLF/TAB → single space, drop other C0 controls +
+// DEL; (2) collapse whitespace runs. Truncation is a separate pass (see
+// truncateQuote); pass max=0 to opt out.
 export function sanitizeQuote(text: string): string {
   let out = "";
   for (let i = 0; i < text.length; i++) {
@@ -363,11 +282,8 @@ export function sanitizeQuote(text: string): string {
   return out.replace(/ {2,}/g, " ");
 }
 
-// CJK ranges — coarse unicode blocks consumed as 2-char width
-// for the quote-budget heuristic. Each char in one of these
-// ranges uses 2 budget units (matching the user's spec: 中文 30
-// chars vs 英文 60 chars with a 60-budget cap → CJK budget is
-// 2/unit, latin is 1/unit). Anything outside consumes 1.
+// Coarse CJK block ranges: these chars consume 2 budget units (中文 30 chars
+// ≈ 英文 60 under a 60-budget cap); anything else consumes 1.
 export function quoteWeight(code: number): number {
   // CJK Unified Ideographs + extension blocks
   if (code >= 0x4e00 && code <= 0x9fff) return 2;
@@ -392,17 +308,10 @@ export function quoteWeight(code: number): number {
   return 1;
 }
 
-// v0.8.21+ — sanitize + truncate a quote to fit the statusline.
-// `max` is the CJK-weighted budget (CJK=2, latin=1, total ≤ max).
-// When `max <= 0` truncation is skipped (sanitize only — useful
-// for testing or for users who want the raw body). When the
-// truncated output is strictly shorter than the sanitized input,
-// append `...` so the user can see the quote was clipped.
-//
-// The slicing walks the string once with an O(1) budget counter
-// over code-point indices — punctuation / combining marks / emoji
-// sit at their own code points and count per spec the same way as
-// any other non-CJK char (so an emoji counts as 1).
+// Sanitize + truncate to the CJK-weighted budget (CJK=2, latin=1, total ≤
+// max; max<=0 = sanitize only). Appends `...` when the body was clipped.
+// Single O(n) walk over code points — emoji / punctuation count 1 like
+// any non-CJK char.
 export function truncateQuote(text: string, max: number): string {
   const clean = sanitizeQuote(text);
   if (max <= 0) return clean;
@@ -420,10 +329,8 @@ export function truncateQuote(text: string, max: number): string {
   return clean.slice(0, cutAt) + "...";
 }
 
-// v0.8.21+ — pick the full QuoteEntry record for the current
-// window. Used by the `m_quote` inline renderer to also surface
-// an `author` suffix (`~<quote>--<author>~`); `author === null`
-// means the renderer elides the `--<author>` half.
+// Full QuoteEntry for the current window, so the renderer can surface an
+// `author` suffix (`~<quote>--<author>~`); null author elides the half.
 export function pickQuoteEntry(
   freq: QuoteFreq,
   nowMs: number,
@@ -431,12 +338,9 @@ export function pickQuoteEntry(
   return QUOTES[quoteIndex(freq, nowMs)]!;
 }
 
-// v0.8.21+ — language-filtered picker. Used by `m_quote|lang|<csv>`
-// to restrict rotation to the listed `lang` values (e.g. "en" or
-// "zh"). Walks forward from the current window index until one of
-// the listed languages is found, bounded to one full table to
-// guarantee termination. Empty / unknown lang list falls back to
-// `pickQuoteEntry`.
+// Language-filtered picker for `m_quote|lang|<csv>`. Walks forward from the
+// current window index to the first matching lang, bounded to one full table
+// (termination). Empty / unknown list falls back to pickQuoteEntry.
 export function pickQuoteEntryFiltered(
   freq: QuoteFreq,
   nowMs: number,
@@ -453,27 +357,16 @@ export function pickQuoteEntryFiltered(
 
 // ----- Color helpers -----
 //
-// These three helpers back the three new color shortcut values
-// accepted by `m_quote:color:<c>`:
-//   - "rainbow"        → buildRainbow(text, 0)
-//   - "rand-rainbow"   → buildRainbow(text, seed + 1)
-//   - "hue"            → buildHue(text, seed)
-//
-// `seed` is the freq-window bucket index from `quoteIndex`. Same
-// bucket → same color output (consistent with the quote's stability
-// window). The renderer wires these up — see src/render.ts.
+// Back m_quote:color values: "rainbow" → buildRainbow(text, 0);
+// "rand-rainbow" → buildRainbow(text, seed+1); "hue" → buildHue(text, seed).
+// `seed` is the quoteIndex bucket, so same bucket → same color. Wired up in
+// src/render.ts.
 
 const RESET = "\x1b[0m";
 
-// 256-color rainbow palette: 16 hues × N brightness steps. Sampling
-// 6 evenly-spaced hue indices from the 6×6×6 color cube (xterm's
-// `colors -1` table) gives a smooth spectrum without the eye-strain
-// of `colors 16-231` random sampling.
-//
-// Palette indices chosen for visibility on dark AND light terminals:
-//   39 (cyan-3),  45 (blue-2),   99 (purple-2),
-//  201 (magenta-2),  208 (orange-3), 220 (yellow-3)
-// Reused cyclically for short strings.
+// 6 hues sampled evenly from the 6×6×6 cube, picked for visibility on dark
+// AND light terminals: 39 (cyan), 45 (blue), 99 (purple), 201 (magenta),
+// 208 (orange), 220 (yellow). Reused cyclically.
 const RAINBOW_PALETTE: readonly number[] = [
   39, 45, 99, 201, 208, 220,
 ];
@@ -501,13 +394,8 @@ export function buildRainbow(text: string, seed: number): string {
   return out.join("");
 }
 
-// Build a single-hue-wrapped string. Hue picked from the 256-color
-// cube's first row (0..15 are the system + base colors, 16..231
-// is the 6×6×6 cube, 232..255 is grayscale). We sample from the
-// cube at a fixed gray step to keep every quote readable.
-//
-// Use a tiny DJB2 hash so the same text → same hue. (Seed ignored
-// intentionally — `hue` always reflects the text.)
+// Single-hue wrap: hue from a DJB2 hash of the text (same text → same hue;
+// seed ignored intentionally). Sampled from the 6×6×6 cube.
 export function buildHue(text: string, _seed: number): string {
   if (text === "") return "";
   // DJB2 — small, deterministic, no need for crypto here.
@@ -515,9 +403,7 @@ export function buildHue(text: string, _seed: number): string {
   for (let i = 0; i < text.length; i++) {
     h = ((h << 5) + h + text.charCodeAt(i)) | 0;
   }
-  // Sample from the high half of the 6×6×6 cube (rows 2-5 of each
-  // RGB channel) so colors are saturated but not eye-searing.
-  // Map the hash (signed 32-bit) to a cube index.
+  // Sample the 6×6×6 cube (rows 2-5 of each channel) so colors stay saturated.
   const idx = 16 + ((Math.abs(h) % 216) | 0); // 16..231
   return `\x1b[38;5;${idx}m${text}${RESET}`;
 }

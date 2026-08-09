@@ -1,8 +1,9 @@
-// Tests for src/token-store.ts — append-only JSONL state file under
-// state/<projectHash>/<sessionId>.jsonl (v0.4.x+ Per-Project Layout;
-// was state/token-samples/<projectHash>/<sessionId>.jsonl in
-// v0.4.0–v0.4.<n-1>). Pure path-shape logic — the I/O paths are
-// covered by integration (dev smoke test).
+// Tests for the sample-file path helpers (src/status-store.ts), kept
+// under the legacy token-store.test.ts name. Covers the append-only
+// JSONL layout state/<projectHash>/<sessionId>.jsonl (Per-Project
+// Layout; was state/token-samples/<projectHash>/<sessionId>.jsonl).
+// Pure path-shape logic — the I/O paths are covered by integration
+// (dev smoke test).
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";

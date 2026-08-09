@@ -1,9 +1,8 @@
-// v1.0 — tests for the data-processor / tick-state pipeline.
-// Data-processing (src/data-processor.ts:processTick) owns all
-// writes to pending; tick-state.ts (src/tick-state.ts) is the
-// in-memory Store backing those writes plus the on-disk commit.
-// Each test isolates to a tmp status.json via setStatusPathResolver
-// + __resetForTest, mirroring the harness used by render-tokens.test.ts.
+// Tests for the per-tick pipeline in src/status-store.ts: processTick
+// owns all writes to the in-memory pending store, which commit()
+// flushes to disk once per tick. Each test isolates to a tmp state
+// file via setStatusPathResolver + __resetForTest, mirroring the
+// harness used by render-tokens.test.ts.
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -272,17 +271,14 @@ describe("data-processor — getState throws without beginTick", () => {
   });
 });
 
-// v0.8.15-alpha — stdin-side error guard for context_window.used_percentage.
-// Some stdins from error states surface `used_percentage=0` instead of
-// `null`. The previous pipeline propagated the 0 straight to render,
-// which displayed a misleading "0%". The fix: beginTick's normalizeTick
-// path now substitutes the prev tick's contextUsedPercent when stdin
-// reports exactly 0 AND prev has a usable value. Pinned cases:
+// v0.8.15-alpha — stdin-side guard for context_window.used_percentage:
+// error-state stdins surface `used_percentage=0` and previously rendered
+// a misleading "0%". normalizeTick now substitutes prev.contextUsedPercent
+// when stdin reports exactly 0 AND prev has a usable value. Pinned cases:
 //   - prev=null → stdin=0 stays 0 (no history to lie about)
 //   - prev=null → stdin=null stays null (real "no data")
 //   - prev=N   → stdin=0 substitutes N
 //   - prev=N   → stdin=N keeps N
-//   - prev=null → stdin=N keeps N
 describe("data-processor — contextUsedPercent=0 carry-over (v0.8.15-alpha)", () => {
   // Wrap validTokens so each test can produce a fresh snapshot with
   // a chosen contextWindow; the helper spreads overrides cleanly.
@@ -407,20 +403,12 @@ describe("data-processor — contextUsedPercent=0 carry-over (v0.8.15-alpha)", (
   });
 });
 
-// v0.8.24 — sanity ceiling on the per-tick apiMs sample. The
-// validation gate (src/status-store.ts:validateNormalizedTick)
-// rejects samples with apiMs >= MAX_SAMPLE_API_MS so a single
-// pathological stdin reading (clock skew, provider bug, stale
-// baseline) cannot pollute the JSONL sample stream / the
-// accApiMs accumulator. Pinned here so future constant changes
-// surface in tests, not in production diagnostics.
-//
-// IMPORTANT: on the FIRST tick (no prev baseline), normalizeTick
-// back-derives apiMs from tokenOut via `(out * 1000) / 50`
-// (v0.8.10-alpha.2 fallback). To exercise the gate with a
-// controlled apiMs value, each test seeds a prev tick with
-// totalApiMs=0 first, so the next beginTick computes
-// apiMs = totalApiMs - prevTotalApiMs = totalApiMs.
+// v0.8.24 — sanity ceiling on the per-tick apiMs sample: the gate
+// rejects apiMs >= MAX_SAMPLE_API_MS so a pathological stdin reading
+// can't pollute the sample stream / accApiMs accumulator. IMPORTANT:
+// on the FIRST tick normalizeTick back-derives apiMs from tokenOut
+// via `(out * 1000) / 50`, so each test seeds a prev tick with
+// totalApiMs=0 first (next beginTick computes apiMs = totalApiMs).
 describe("data-processor — MAX_SAMPLE_API_MS sanity ceiling (v0.8.24)", () => {
   // Lock the constant value via an explicit import. If someone
   // bumps the constant, the test that asserts equality below
@@ -482,14 +470,10 @@ describe("data-processor — MAX_SAMPLE_API_MS sanity ceiling (v0.8.24)", () => 
   });
 });
 
-// v0.8.24 — startAt field on TickStatusValue / AvgSnapshot.
-// The slot's "first-write" wall-clock instant. Read by
-// m_accStartTime (per-slot) and (in aggregated form) by
-// m_sumStartTime (cross-project min over JSONL rows). All three
-// surviving slots (session / project / model) are stamped once
-// on the first valid write and never refreshed — there's no
-// roll-over semantic for those. (Pre-cleanup ccsession used to
-// refresh on detectRegression; that scope was REMOVED.)
+// v0.8.24 — startAt field: the slot's "first-write" wall-clock
+// instant, read by m_accStartTime / m_sumStartTime. The three
+// surviving slots (session / project / model) are stamped once on
+// the first valid write and never refreshed.
 describe("data-processor — startAt first-write stamp (v0.8.24)", () => {
   it("setAvg first-write stamps startAt = Date.now() on a fresh session slot", () => {
     // setAvg's mark() call requires a prior beginTick to

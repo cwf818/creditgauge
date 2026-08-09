@@ -1,18 +1,14 @@
-// Compose our token-plan line with an arbitrary upstream statusline output.
-// Upstream is passed by the bash wrapper via the CREDITGAUGE_UPSTREAM env var.
+// Compose our line with arbitrary upstream statusline output (passed by the
+// bash wrapper via CREDITGAUGE_UPSTREAM).
 //
 // Rules:
-//   - Preserve interior newlines in upstream (multi-line statuslines are valid).
-//   - Strip only trailing whitespace from upstream.
-//   - Ensure exactly one newline separator between upstream and our plan line.
-//   - If upstream contains an ANSI SGR sequence (\x1b[) whose last escape does
-//     not terminate with \x1b[0m (or the equivalent \x1b[m), inject \x1b[0m so
-//     our plan line is not colored by upstream's last open style.
-//   - The plan line itself may contain newlines (v0.4.0+ — when a
-//     lineTemplate separator is "\n", the renderer emits multi-line output).
-//     Each plan line is treated independently: any unclosed SGR is closed
-//     before the line ends, so the next line starts clean. Blank lines
-//     from trailing "\n" or consecutive "\n\n" are dropped.
+//   - Preserve interior newlines in upstream (multi-line is valid); strip only
+//     trailing whitespace; ensure exactly one newline separator upstream ↔ our line.
+//   - If upstream's last SGR escape doesn't terminate with \x1b[0m (or \x1b[m),
+//     inject a reset so our line isn't colored by upstream's last open style.
+//   - The plan line may itself be multi-line (a lineTemplate separator of "\n"
+//     makes the renderer emit multi-line output). Each plan line is closed
+//     independently so the next starts clean; blank lines are dropped.
 
 const RESET = "\x1b[0m";
 

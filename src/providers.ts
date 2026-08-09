@@ -17,24 +17,15 @@ import { normalizeUrl } from "./utils.ts";
 
 // ----- URL matching -----
 
-// Three modes, all case-insensitive AND trailing-slash-insensitive
-// (matches the v0.2.20 behavior of the hardcoded MiniMax / DeepSeek
-// matchers, both of which called `.toLowerCase()` on the URL before
-// comparing, plus the 2026-07-15 trailing-slash normalization so a
-// user with `ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic/`
-// matches against the EXACT-registered
-// `https://api.minimaxi.com/anthropic` and vice versa).
+// Three modes, all case-insensitive AND trailing-slash-insensitive: URLs are
+// normalized (lowercased, trailing slash stripped) before comparing, so a user
+// with a trailing-slash ANTHROPIC_BASE_URL matches an EXACT-registered
+// base and vice versa.
 //
-// `STARTWITH` has an extra suffix-attack guard: the character right
-// after the prefix must be undefined (end of string), "/", "?", or
-// "#". This rejects `https://api.deepseek.com.evil.example` even
-// though it technically `startsWith("https://api.deepseek.com")` —
-// the "." immediately after the prefix is not a valid boundary. The
-// guard indexes into the ORIGINAL `baseUrl` at `pattern.length` (not
-// the stripped length) so a trailing-slash variant like
-// `https://api.minimaxi.com/anthropic/` against a pattern
-// `https://api.minimaxi.com/anthropic` still has the boundary check
-// land on the trailing `/` (a legal boundary char).
+// `STARTWITH` adds a suffix-attack guard: the char right after the prefix must
+// be undefined (end), "/", "?", or "#" — rejecting `https://api.deepseek.com.evil.example`.
+// The guard indexes the ORIGINAL baseUrl at pattern.length (not the stripped
+// length) so a trailing-slash variant still lands the check on the trailing "/".
 export function compareUrl(
   method: CompareMethod,
   baseUrl: string,
@@ -87,19 +78,12 @@ export function getProviderEntry(provider: Provider): ProviderEntry | null {
 
 // ----- Type-driven dispatch -----
 
-// Fetch the provider's data through its dynamically imported plugin.
-// Returns the canonical data shape (Quota for Quota, Balance for
-// BALANCE). Throws on plugin or network error; the caller catches and
-// falls back to stale cache.
-//
-// The `unknown` return type is intentional: callers narrow at the
-// call site based on `entry.TYPE`. This keeps providers.ts ignorant
-// of the concrete data shapes.
-// v0.9.0+ — kind-returning sibling of the legacy
-// `fetchForProvider` (deleted in v0.9.x dead-export cleanup).
-// Same dispatch path but also returns the resolution side
-// (`"user" | "builtin" | "missing"`), so the host can persist the
-// side into cache.json for the m_pluginSource renderer.
+// Fetch the provider's data through its dynamically imported plugin, returning
+// the canonical shape (Quota for QUOTA, Balance for BALANCE). Throws on plugin
+// or network error; the caller catches and falls back to stale cache. The
+// `unknown` return is intentional — callers narrow by entry.TYPE, keeping this
+// module ignorant of concrete shapes. Also returns the plugin-resolution side
+// ("user" | "builtin" | "missing") so the host can persist it for m_pluginSource.
 export async function fetchForProviderWithKind(
   provider: Provider,
   token: string,
@@ -113,9 +97,7 @@ export async function fetchForProviderWithKind(
   return { data: r.data, pluginSource: r.pluginSource };
 }
 
-// The "fail" line's prefix label, picked from modeLabels based on
-// TYPE. Replaces the hardcoded `"Usage: "` / `"Balance: "` literals
-// previously in dispatch.ts:68-69 and render.ts:503.
+// The "fail" line's prefix label, picked from modeLabels by TYPE.
 export function failLabelForProvider(provider: Provider): string {
   const entry = getProviderEntry(provider);
   const modeLabels = configStore.get().modeLabels;
@@ -124,28 +106,13 @@ export function failLabelForProvider(provider: Provider): string {
   return modeLabels.balance;
 }
 
-// Map a provider's TYPE to the renderer-facing type discriminator.
-// `Quota → "quota"`, `BALANCE → "balance"`, and null entry (no
-// matching ANTHROPIC_BASE_URL) → `"unknown"`. The renderer uses
-// this as the per-module `type` filter comparison target, and as
-// the m_modeLabel routing key. Replaces the older
-// `templateKeyForProvider` name — kept as a deprecated alias below
-// for the build's lifetime.
-//
-// v0.4.x — return type widened to include `"unknown"`. Previously
-// null entry fell through to `"plan"` so a user with no configured
-// provider but a default quota template still rendered the quota
-// line. With Phase 2 of the provider-agnostic refactor we want a
-// distinct value here so:
-//
-//   1. `m_modeLabel` can choose a dedicated label for the "no
-//      provider configured" case (vs "this provider is quota type").
-//   2. Per-module `type` filters can opt-in to the unknown case
-//      independently of quota. (None exist today; reserved for
-//      future use.)
-//   3. `m_template|<key>|type|quota` and the equivalent `m_windowQuota`
-//      module still drop on unknown — that's the same as quota-only
-//      modules dropping on balance.
+// Map a provider's TYPE to the renderer-facing discriminator:
+// QUOTA → "quota", BALANCE → "balance", null entry → "unknown". The renderer
+// uses it as the per-module `type` filter target and the m_modeLabel routing
+// key. A distinct "unknown" (vs the old "plan" fallthrough) lets m_modeLabel
+// choose a dedicated no-provider label, lets type filters opt into unknown
+// independently of quota, and keeps quota-only modules (m_template|type|quota,
+// m_windowQuota) dropping on unknown like they do on balance.
 export function providerTypeFor(
   provider: Provider,
 ): "quota" | "balance" | "unknown" {

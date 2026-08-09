@@ -1,27 +1,13 @@
 // v0.4.x — regression tests for the per-module `type` filter on
-// MODULES / INLINE_RENDERERS (added alongside the renderPlanLine
-// unification in Phase 1, then renamed `mode` → `type` and widened
-// to include `"unknown"` for unregistered providers; the
-// `formatBalanceLine` shim was removed in v0.9.x but the filter
-// contract is unchanged).
-//
-// The filter gates rendering on ctx.providerType:
-//   m_windowQuota|term:short|mid|long, m_countdown|term:*, m_quota|term:* → "plan"
-//   m_balance                                                        → "balance"
-//   everything else (m_modeLabel, m_token*, m_age, …)                → agnostic
-//
-// A bare token matching these prefixes on a non-matching provider
-// type MUST silently drop (no warn, no stray "·", no chunk).
-// Adjacent s_<n> separators are skipped too via the existing
-// null-fall-through path. A token on the matching provider type
-// MUST render.
-//
-// "unknown" coverage: a hypothetical `m_xxx:type:"unknown"` would
-// only emit when ANTHROPIC_BASE_URL doesn't match any configured
-// provider. No module currently uses this; the test asserts that
-// existing plan-only / balance-only modules drop on "unknown" (a
-// regression guard if a future change accidentally re-adds the
-// old "plan" fallback for null entry).
+// MODULES / INLINE_RENDERERS (mode→type rename, widened to include
+// "unknown"; the formatBalanceLine shim is gone but the filter
+// contract is unchanged). The filter gates on ctx.providerType:
+//   plan-only (m_windowQuota / m_countdown / m_quota), balance-only
+//   (m_balance), everything else agnostic.
+// A token on a non-matching provider type MUST silently drop (no warn,
+// no stray "·", no chunk); on the matching type it MUST render.
+// "unknown" coverage guards that plan-only / balance-only modules drop
+// when no provider matches.
 
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";

@@ -11,23 +11,15 @@ export type Interval = {
   limitQuota: number | null;
 };
 
-// v0.9.4 — the `intervals` dict IS the source of truth. Three reserved
-// keys (short / mid / long) ship with the historical defaults
-// (5h / 7d / 30d) so existing plugin authors and the built-in
-// minimax/deepseek/kimi/copilot plugins keep working without
-// renaming; the dict is otherwise OPEN — a plugin may declare any
-// additional key (e.g. "monthly", "yearly", "weekday-peak") and
-// reference it via `m_windowQuota|term|<key>`. Empty dict is the
-// legitimate "no data" case (the host treats it as "all slots
-// null" and the per-module placeholder fires).
+// The `intervals` dict IS the source of truth. Three reserved keys
+// (short / mid / long) ship with historical defaults (5h / 7d / 30d); the dict
+// is otherwise OPEN — a plugin may declare any key (e.g. "monthly") referenced
+// via `m_windowQuota|term|<key>`. An empty dict is the legitimate "no data"
+// case (host treats it as all-null; the per-module placeholder fires).
 //
-// For backward compat, the host's `ensureQuota` ALSO accepts the
-// legacy `shortInterval` / `midInterval` / `longInterval` fields on
-// the raw plugin output and maps them onto the reserved keys. The
-// Quota type itself only exposes `intervals` — the legacy fields
-// are an `ensureQuota`-level concern, not part of the canonical
-// shape (so render-time reads go through `ctx.intervals["short"]`
-// / `ctx.intervals[anyOtherKey]` uniformly).
+// `ensureQuota` treats every dict key as a literal interval (no legacy
+// shortInterval/midInterval/longInterval field mapping). Render reads go
+// through ctx.intervals[key] uniformly.
 export type Quota = {
   intervals: Record<string, Interval | null>;
 };
@@ -40,11 +32,9 @@ export type BalanceEntry = {
 export type Balance = {
   isAvailable: boolean;
   entries: BalanceEntry[];
-  // v2026.07.17+: host-computed worst-case entry value (lowest
-  // totalBalance). The renderer no longer consults this for color
-  // (per-entry 5-band now drives hue). The field is retained so
-  // plugins reading it for alerting/introspection keep working,
-  // and ensureBalance keeps computing it.
+  // Host-computed worst-case entry (lowest totalBalance). Not consulted by the
+  // renderer (per-entry 5-band drives hue); retained for plugins doing
+  // alerting/introspection, and ensureBalance keeps computing it.
   minValue: number | null;
 };
 
@@ -52,20 +42,16 @@ export type PluginContext = {
   providerId: string;
   type: "QUOTA" | "BALANCE";
   signal?: AbortSignal;
-  /** The raw provider entry from config.json, minus the internal
-   *  `config` override block. User-defined fields in
-   *  `config.json:providers.<id>` (beyond the well-known keys) flow
-   *  through here so plugins can read custom parameters without
-   *  hardcoding them in the plugin source. */
+  /** Raw provider entry from config.json (minus the internal `config` override
+   *  block); user-defined fields flow through so plugins read custom params
+   *  without hardcoding them. */
   providerEntry?: Record<string, unknown>;
 };
 
-// v0.8.47+ — single-method ABI. The plugin returns whatever shape
-// it decided to project from the raw response (a Partial<Quota> /
-// Partial<Balance>, or any opaque object the plugin wants). The
-// host then runs ensureQuota / ensureBalance on the result. Plugins
-// never see the canonical Quota / Balance types — only their fill
-// contract + the ctx argument (signal).
+// Single-method ABI. The plugin returns whatever shape it projected from the
+// raw response (Partial<Quota> / Partial<Balance> / any opaque object); the
+// host then runs ensureQuota / ensureBalance. Plugins never see the canonical
+// Quota / Balance types — only their fill contract + ctx (signal).
 export type AccountCreditPlugin = {
   fetchAccountCredit: (
     authenticationKey: string,

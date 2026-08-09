@@ -15,7 +15,7 @@ access and never prints `ANTHROPIC_AUTH_TOKEN`.
   `~/.claude/plugins/creditgauge/config.json`. All other config keys and the
   file's line ending are preserved; an absent config.json is created. A custom
   `string[]` template is replaced (with a notice). Valid presets:
-  `simple`, `compact`, `standard`, `abundant`, `standard-slim`.
+  `simple`, `compact`, `standard`.
 - **`--disable-upstream`** — disables the upstream statusline chain by
   renaming `state/upstream-cmd.sh` → `state/upstream-cmd.sh.disabled`
   (the original command is preserved and can be re-enabled).

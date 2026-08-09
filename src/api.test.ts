@@ -36,11 +36,9 @@ afterEach(() => {
   rmSync(tempHome, { recursive: true, force: true });
 });
 
-// v0.9.x — parseQuota + parseBalance were REMOVED. The host
-// no longer ships a path-expression projection layer — plugins
-// do their own parsing in `fillQuota` / `fillBalance` and ship
-// canonical Quota/Balance objects directly. The `ensure*`
-// validators below still cover the canonical-shape contract.
+// v0.9.x — parseQuota/parseBalance REMOVED: plugins parse in their
+// own fetchAccountCredit and ship canonical Quota/Balance; the
+// ensure* validators below cover the shape contract.
 
 describe("ensure quota", () => {
   it("fills a partial interval with canonical nullable fields and derives values", () => {
@@ -88,12 +86,9 @@ describe("ensure quota", () => {
   });
 });
 
-// MiniMax built-in plugin — exercises the full
-// fetchAccountCredit → fill → ensureQuota pipeline by mocking the
-// HTTP layer. v0.8.47+: the fill helper is no longer exported; the
-// plugin inlines raw→Partial inside its fetchAccountCredit. Tests
-// here mock fetch and assert the canonical Quota that flows out of
-// fetchForProviderByIdWithKind.
+// MiniMax built-in plugin — mocks fetch and asserts the canonical
+// Quota flowing out of fetchForProviderByIdWithKind (the fill helper
+// is inlined in the plugin since v0.8.47+).
 describe("MiniMax built-in plugin (end-to-end)", () => {
   it("selects the general model regardless of array order", async () => {
     const raw = fixture("quota.real.minimax.json") as {
@@ -314,14 +309,10 @@ describe("dynamic plugin loader", () => {
   });
 });
 
-// v0.9.0+ — user plugins at ~/.claude/plugins/creditgauge/query_plugins/<id>/
-// override built-ins. Built-in IDs (minimax / deepseek) are no
-// longer a closed set; anyone can ship a same-id user plugin to replace
-// the bundled one. (copilot was a built-in until v0.9.x; it now ships
-// only as a user plugin at query_plugins/copilot/.) Override is silent
-// (no stderr, no diagnostics). These tests pin that contract — both
-// the path-resolution function and the end-to-end pluginTransport
-// loading path.
+// v0.9.0+ — user plugins at query_plugins/<id>/ override built-ins;
+// built-in IDs are no longer a closed set. Override is silent (no
+// stderr, no diagnostics). Pins the path-resolution contract and the
+// end-to-end pluginTransport loading path.
 describe("resolvePluginOnDiskWithKind (v0.9.0+ override)", () => {
   function userDir(id: string): string {
     return resolve(tempHome, ".claude", "plugins", "creditgauge", "query_plugins", id);
@@ -437,12 +428,9 @@ describe("resolvePluginOnDiskWithKind (v0.9.0+ override)", () => {
   });
 });
 
-// v0.9.0+ — end-to-end load through pluginTransport: a user plugin
-// placed at query_plugins/minimax/ actually runs in place of the
-// bundled built-in. Catches the whole "resolution → dynamic import →
-// default.export.fetchAccountCredit" chain. Uses an .mjs plugin (no
-// transpile needed for the host loader) and a stub fetch to prove
-// the user file was the one that ran.
+// v0.9.0+ — end-to-end: a user plugin at query_plugins/minimax/ runs
+// in place of the bundled built-in. Uses an .mjs plugin + a stub fetch
+// to prove the user file was the one that ran.
 describe("pluginTransport override end-to-end (v0.9.0+)", () => {
   it("user plugin at query_plugins/minimax/index.mjs wins over the bundled built-in", async () => {
     const userDirPath = resolve(tempHome, ".claude", "plugins", "creditgauge", "query_plugins", "minimax");

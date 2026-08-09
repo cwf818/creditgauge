@@ -1,29 +1,21 @@
 // Entry point. Runs as the Claude Code statusline child process:
-//   - Reads the session JSON from stdin (we don't use it; we drain it so the
-//     child doesn't block on the parent).
-//   - Gates on ANTHROPIC_BASE_URL via the providers config block
-//     (src/providers.ts): only when pointing at a configured provider
-//     does it fetch and render a line. Otherwise the line is hidden and
-//     upstream output passes through.
+//   - Drains the session JSON from stdin (so the child never blocks on the
+//     parent) and feeds it to parseTokenSnapshot for the m_token* modules.
+//   - Gates on ANTHROPIC_BASE_URL via the providers config block: only when
+//     it points at a configured provider does it fetch and render a line;
+//     otherwise the line is hidden and upstream output passes through.
 //   - Composes with upstream claude-hud output (passed via CREDITGAUGE_UPSTREAM
-//     by the bash wrapper in scripts/wrapper.sh).
-//   - Loads config.json (optional — falls back to DEFAULT_CONFIG if absent)
-//     once at startup; every tunable (cache TTL, fetch timeout, colors, display
-//     mode, …) reads from there via the configStore singleton.
+//     by scripts/wrapper.sh).
+//   - Loads config.json once (falls back to DEFAULT_CONFIG if absent); every
+//     tunable reads from there via the configStore singleton.
 //
-// v0.4.0+: three-layer config precedence
-//   defaults  ⊕  config.json top-level  ⊕  providerEntry.config
-// with providerEntry.config having the highest priority. After
-// matchProvider() resolves the active provider, main() invokes
-// applyProviderOverrides(providerEntry.config) so every downstream
-// cfg() call sees the merged view. Useful for per-provider tuning
-// (e.g. "minimax needs fetchTimeoutMs=3000 because the API is slow;
-// deepseek uses the default 5000") without restating the global
-// config for each provider.
+// Three-layer config precedence: defaults ⊕ config.json top-level ⊕
+// providerEntry.config (highest). After matchProvider() resolves the active
+// provider, applyProviderOverrides() merges its config so every cfg() call
+// sees the per-provider view.
 //
-// Provider dispatch is data-driven via the providers config block. A
-// single `fetchProviderData(provider, …)` resolves the matching plugin;
-// TYPE only selects the canonical result shape and renderer branch.
+// Provider dispatch is data-driven: `fetchProviderData(provider, …)` resolves
+// the matching plugin; TYPE only selects the canonical shape and renderer branch.
 
 import * as cache from "./cache.ts";
 import { type Quota, type Balance } from "./api.ts";
@@ -76,39 +68,23 @@ async function readStdin(): Promise<string> {
 // FetchResult and buildProviderLine live in src/dispatch.ts so tests can
 // import them without dragging in index.ts's stdin side effects.
 
-// The plugin is a per-tick child process — every invocation is a fresh
-// process, so the in-memory cache is reset on every tick. Within a
-// single tick we still go through `cache.get` for the (defensive) hot
-// path, but its only real consumer is the `cache.peek` fallback in the
-// fetch-failed branch. There is no persistent cross-tick cache by
-// design: the age suffix is computed from the API response itself
-// (`Window.resetStartAt` → "time since this window started"), so the
-// user sees a meaningful value on every successful tick without any
-// disk state.
+// Per-tick child process: the in-memory cache resets every invocation.
+// `cache.get` is the (defensive) hot path; `cache.peek` is the stale
+// fallback in the fetch-failed branch. No persistent cross-tick cache by
+// design — the age suffix is computed from the API response itself
+// (`Window.resetStartAt` → "time since this window started").
 
-// v0.2.21: the cache key is now the provider NAME (was a constant
-// string per TYPE in v0.2.20). Two Quota providers would share
-// a key today — that's fine since they have identical data shapes,
-// but if a future provider of the same TYPE returns a different
-// shape, this becomes a real distinction to make.
+// Cache key is the provider NAME (two Quota providers share a key — fine
+// while their data shapes match). The data generic is `unknown`; the
+// dispatcher narrows by entry.TYPE via the runtime `getWithAge<T>` overload.
 //
-// The data generic is `unknown` because the dispatcher narrows
-// based on entry.TYPE. We do a runtime check below to pick the right
-// `getWithAge<T>` overload.
-// `token` is the env-sourced value read once by main() from
-// process.env.ANTHROPIC_AUTH_TOKEN (may be empty). Each fetcher
-// prefers the entry's AUTHENTICATION_KEY over this; an empty `token` plus an
-// empty AUTHENTICATION_KEY causes the fetcher to return null and the
-// dispatcher to fall back to the stale cache / fail line. The
-// previous v0.5.x behavior of short-circuiting the whole tick on
-// empty env token was dropped in v0.6.0 to support per-provider
-// credential overrides (see the ProviderEntry.AUTHENTICATION_KEY docstring
-// in src/types.ts for the "always wins" rule).
-// v0.9.x — exported for unit tests so the cache-row invariant
-// (`<provider>:pluginSource` written independently of `data`
-// being null) can be pinned without spinning up the full
-// stdin → render pipeline. Not part of the public API surface;
-// treat as @internal.
+// `token` comes from process.env.ANTHROPIC_AUTH_TOKEN (may be empty). Each
+// fetcher prefers the entry's AUTHENTICATION_KEY over it ("always wins" — see
+// ProviderEntry.AUTHENTICATION_KEY in src/types.ts); empty token AND empty
+// AUTHENTICATION_KEY makes the fetcher return null → stale cache / fail line.
+//
+// Exported for unit tests to pin the `<provider>:pluginSource` cache-row
+// invariant without the stdin→render pipeline. @internal — not public API.
 export async function fetchProviderData(
   provider: Provider,
   token: string,
@@ -123,14 +99,10 @@ export async function fetchProviderData(
   const ttlMs = configStore.get().cacheTtlMs;
   const timeoutMs = configStore.get().fetchTimeoutMs;
 
-  // cache.getWithAge is generic on the data shape. We dispatch on
-  // TYPE for the concrete type; unknown is the cross-type union.
-  // (noinspection is needed because TS can't narrow `unknown` to
-  // Quota/Balance purely from entry.TYPE.) The audit row in
-  // diagnostics.jsonl picks up cwd via the process-level session
-  // cwd store (set by `setSessionCwd` once `parseTokenSnapshot`
-  // has parsed stdin above), so the top-level cache.json row
-  // is automatically attributed to the originating session.
+  // cache.getWithAge is generic; we dispatch on TYPE for the concrete
+  // type (TS can't narrow `unknown` from entry.TYPE). The audit row
+  // picks up cwd via the process-level session cwd store, so the
+  // top-level cache.json row is attributed to the originating session.
   const readCache = <T>(): { value: T; ageMs: number } | null => {
     const hit = cache.getWithAge<T>(cacheKey, ttlMs);
     return hit ? { value: hit.value, ageMs: hit.ageMs } : null;
@@ -152,29 +124,20 @@ export async function fetchProviderData(
   }
 
   try {
-    // v0.9.0+ — fetchForProviderWithKind also reports which side of
-    // the user-vs-builtin fence resolved the provider. The kind is
-    // persisted into cache.json under a sibling key
-    // (`<provider>:pluginSource`) so the m_pluginSource renderer can
-    // read it back across ticks even on cached data hits. The data
-    // cache row and the pluginSource cache row share a TTL — a stale
-    // data row also renders a stale kind (which is correct: the user
-    // could have swapped their override file since the last fetch,
-    // so the renderer reads the kind via cache.peek WITHOUT a TTL
-    // gate — see src/render.ts m_pluginSource).
+    // fetchForProviderWithKind also reports which side of the user-vs-builtin
+    // fence resolved the provider. The kind is persisted under
+    // `<provider>:pluginSource`, sharing the data row's TTL; the renderer
+    // reads it via cache.peek WITHOUT a TTL gate so an override-file swap
+    // reflects on the next tick even on a within-TTL data hit.
     const { data, pluginSource } = await fetchForProviderWithKind(
       provider,
       token,
       AbortSignal.timeout(timeoutMs),
     );
-    // vX.X.X+ — always persist the pluginSource side, even when
-    // data is null. The previous `if (data)` gate suppressed the
-    // kind row on the missing-plugin path, so m_pluginSource
-    // dropped to no-op instead of rendering ❗ for a misconfigured
-    // provider id. Now the kind lives independently of the data
-    // row: a user whose provider resolves to kind="missing"
-    // (no query_plugins/<id>/ file + not a built-in) sees ❗
-    // regardless of whether the fetcher returned usable data.
+    // Always persist the pluginSource side, even when data is null, so
+    // m_pluginSource renders ❗ for kind="missing" (no query_plugins/<id>/
+    // file + not a built-in) regardless of whether the fetcher returned
+    // usable data.
     cache.set(`${cacheKey}:pluginSource`, pluginSource, ttlMs);
     if (data) {
       cache.set(cacheKey, data, ttlMs);
@@ -190,17 +153,13 @@ export async function fetchProviderData(
     return { kind: "fail" };
   } catch {
     // Network / plugin error. Stale-on-error: keep showing the last good
-    // value. The dynamic plugin loader records the underlying error; this
-    // layer translates the throw to a FetchResult.
+    // value; the plugin loader records the underlying error.
     //
-    // vX.X.X+ — also persist the pluginSource side. The import-time
-    // 404 path (`query_plugins/<id>/index.js` does not exist for a
-    // non-builtin id like `kimi`) throws BEFORE
-    // fetchForProviderWithKind returns, so the `pluginSource: "missing"`
-    // row would otherwise never be written. Computing the kind eagerly
-    // via resolvePluginOnDiskWithKind + writing it here makes the
-    // missing-plugin failure mode loud: the next tick renders ❗
-    // instead of dropping silently.
+    // Also persist the pluginSource side: the import-time 404 path
+    // (`query_plugins/<id>/index.js` missing for a non-builtin id) throws
+    // BEFORE fetchForProviderWithKind returns, so computing the kind eagerly
+    // via resolvePluginOnDiskWithKind here makes kind="missing" loud (❗)
+    // on the next tick instead of silent.
     try {
       const { kind } = resolvePluginOnDiskWithKind(provider!);
       cache.set(`${cacheKey}:pluginSource`, kind, ttlMs);
@@ -216,76 +175,46 @@ export async function fetchProviderData(
 }
 
 async function main(): Promise<void> {
-  // Drain stdin ONCE at the top. The raw string is fed to
-  // parseTokenSnapshot, which produces a TokenSnapshot for the
-  // m_token* renderer modules. A previous dev-only runProbe() helper
-  // used to also consume the raw for schema discovery; it was removed
-  // in v0.4.0 once the schema was confirmed.
+  // Drain stdin ONCE at the top; the raw string feeds parseTokenSnapshot.
   const stdinRaw = await readStdin().catch(() => "");
-  // v0.4.x+: parse FIRST so the per-project cwd is available to the
-  // diagnostics append (Per-Project Layout — see src/diagnostics.ts).
-  // TokenSnapshot parsing is cheap (regex + small object walk) and
-  // does not depend on anything in this function.
+  // Parse FIRST so the per-project cwd is available to the diagnostics
+  // append; parsing is cheap and depends on nothing else in main().
   const tokens = parseTokenSnapshot(stdinRaw);
-  // Populate the process-level session cwd store BEFORE any subsequent
-  // logFs* call. This is the architectural decision behind the v0.8.7+
-  // fs-audit rework: cwd-unaware modules (cache.ts reading the shared
-  // top-level cache.json, config.ts loading the shared top-level
-  // config.json, index.ts probing the plugin manifest) can call
-  // logFs*(path, fn) with no cwd parameter and still have their audit
-  // rows stamped with the originating session's cwd. The store is
-  // reset on every tick — the plugin is a per-tick child process so
-  // _sessionCwd never leaks across sessions.
+  // Populate the process-level session cwd store BEFORE any logFs* call so
+  // cwd-unaware modules (cache.ts, config.ts, index.ts) get their audit rows
+  // stamped with the originating session's cwd. Reset every tick (per-tick
+  // child process) — _sessionCwd never leaks across sessions.
   diagnostics.setSessionCwd(tokens?.cwd ?? null);
-  // Record the raw stdin frame for postmortem. Gated by the same
-  // CREDITGAUGE_DIAGNOSTICS_ENABLE switch as the rest of diagnostics.jsonl
-  // (no-op when off). Source "stdin" so it doesn't collide with the
-  // existing "config" warning source. Always append — even when empty —
-  // so a postmortem reader can distinguish "plugin never reached this
-  // line" from "Claude Code sent an empty stdin this tick".
-  //
-  // cwd is passed so the line lands in
-  // `state/<projectHash>/diagnostics.jsonl` rather than the legacy
-  // top-level file — keeping concurrent Claude Code instances on
-  // different projects from racing on the same write stream.
+  // Record the raw stdin frame for postmortem (gated by
+  // CREDITGAUGE_DIAGNOSTICS_ENABLE). Always append — even empty — so a
+  // reader can distinguish "plugin never reached this line" from "empty
+  // stdin this tick". cwd routes the row to state/<projectHash>/diagnostics.jsonl
+  // (avoids cross-project races).
   diagnostics.append("info", "stdin", stdinRaw, Date.now(), tokens?.cwd ?? null, undefined, "stdin");
 
   const baseUrl = process.env.ANTHROPIC_BASE_URL;
   const upstream = UPSTREAM;
   const provider = matchProvider(baseUrl);
 
-  // v0.4.0+ — apply the active provider's `config` overlay BEFORE
-  // processAndSaveTick so the cost computation sees the fully merged
-  // config (including tokenPricesOverride). Three-layer precedence:
-  //   defaults  ⊕  config.json top-level  ⊕  providerEntry.config
-  // with providerEntry.config having the highest priority.
+  // Apply the active provider's `config` overlay BEFORE processAndSaveTick
+  // so the cost computation sees the fully merged config (three-layer
+  // precedence, providerEntry.config highest).
   const entry = provider !== null ? getProviderEntry(provider) : null;
   if (entry?.config) {
     applyProviderOverrides(entry.config);
   }
 
-  // vX.X.X+ — centralized stdin-derived state pipeline. Runs AFTER
-  // provider resolution and override application so the cost
-  // computation in normalizeTick can use the 5-layer token price
-  // resolution cascade (which depends on both the active provider
-  // and the applied provider overrides). Runs regardless of whether
-  // any module produces output.
+  // Centralized stdin-derived state pipeline. Runs AFTER provider resolution
+  // and override application so normalizeTick can use the 5-layer token-price
+  // cascade; always fires, regardless of whether any module produces output.
   statusStore.processAndSaveTick(tokens?.cwd ?? null, tokens, provider);
 
-  // v0.4.x — when no provider entry matches ANTHROPIC_BASE_URL,
-  // dispatch through buildProviderLine anyway so provider-AGNOSTIC
-  // modules (m_token*, m_session, m_version, m_model, …) can still
-  // emit. Previously the plugin was a pure Quota / BALANCE
-  // frontend, so a missing provider entry meant there was nothing
-  // meaningful to display; returning null early was a clean signal
-  // for the upstream wrapper to fall through. Now the dispatcher is
-  // entry-tolerant (see renderDataLine in dispatch.ts): a null
-  // provider skips both TYPE branches, calls renderProviderLine
-  // with empty ctx data slots, and the per-module `mode` filter
-  // drops plan-only / balance-only modules naturally. The empty-
-  // output guard translates "renderer ran but produced nothing"
-  // back to a null line so the upstream wrapper still falls through
-  // when no agnostic modules fired either.
+  // No provider match: still dispatch through buildProviderLine so
+  // provider-AGNOSTIC modules (m_token*, m_session, m_version, m_model, …)
+  // can emit. The dispatcher is entry-tolerant (renderDataLine in dispatch.ts):
+  // a null provider skips both TYPE branches and the per-module `mode` filter
+  // drops plan-/balance-only modules. The empty-output guard turns "ran but
+  // produced nothing" back into a null line so upstream still falls through.
   if (provider === null) {
     const quoteBodies = await preFetchQuotes(tokens?.cwd ?? null, Date.now());
     const line = buildProviderLine(
@@ -298,28 +227,21 @@ async function main(): Promise<void> {
     return;
   }
 
-  // v0.6.0+ — pre-read the env token once but DON'T short-circuit
-  // on empty. The fetcher decides whether to make the call (it sees
-  // entry.AUTHENTICATION_KEY). An empty env token with a non-empty
-  // entry.AUTHENTICATION_KEY is a valid config-driven setup (e.g. CI without
-  // env vars); the previous v0.5.x behavior of writing nothing on
-  // empty env would silently break that flow.
+  // Pre-read the env token once but DON'T short-circuit on empty: the
+  // fetcher decides whether to call (it sees entry.AUTHENTICATION_KEY), so
+  // an empty env token + configured AUTHENTICATION_KEY is a valid CI setup.
   const envToken = process.env.ANTHROPIC_AUTH_TOKEN;
   const result = await fetchProviderData(provider, envToken ?? "");
-  // v0.8.21+ — pre-fetch m_quote|address|… bodies (Node fetch,
-  // per-(freqMs,address) disk cache keyed by binIndex). See
-  // src/api.quote.ts. Runs after fetchProviderData so the user
-  // never sees a statusline where a stale provider value blocks
-  // a fresh quote, and before buildProviderLine so the renderer
-  // can read the populated Map via ctx.quoteBodies.
+  // Pre-fetch m_quote|address|… bodies (see src/api.quote.ts). Runs after
+  // fetchProviderData so a stale provider value can't block a fresh quote,
+  // and before buildProviderLine so the renderer reads the Map via ctx.
   const quoteBodies = await preFetchQuotes(tokens?.cwd ?? null, Date.now());
   const line = buildProviderLine(provider, result, tokens, quoteBodies);
 
   process.stdout.write(compose(upstream, line));
-  // v1.0 — tickStateCommit() moved up (before the null-provider
-  // branch) so the data-processor's writes flush regardless of
-  // whether render ran. See the call above, between
-  // diagnostics.append and the provider dispatch.
+  // The tick commit() (above, after diagnostics.append) runs before the
+  // null-provider branch so the status-store's writes flush regardless of
+  // whether render ran.
 }
 
 // parseTokenSnapshot lives in ./session-parse.ts so unit tests can
@@ -338,18 +260,13 @@ process.on("uncaughtException", (err) => {
 // fall back to DEFAULT_CONFIG (with a stderr line) — never blocks
 // startup on a missing file.
 await loadConfig();
-// v0.10.x — wire the diagnostics subkey gate. Called once per cc
-// tick after loadConfig() so isSubkeyEnabled() can AND-gate against
-// the master env switch.
+// Wire the diagnostics subkey gate once per tick so isSubkeyEnabled() can
+// AND-gate against the master env switch.
 diagnostics.setDebugFlags(configStore.get().debug ?? {});
-// v0.2.17: load the plugin version from .claude-plugin/plugin.json
-// and inject it into the configStore so the m_version display module
-// can render it. Failure to find/parse the manifest is non-fatal —
-// m_version simply renders nothing when version is empty. We try
-// both "<runtime>/../.claude-plugin/plugin.json" (production layout
-// where the bundle lives at <plugin-cache>/dist/index.js) and
-// "<runtime>/.claude-plugin/plugin.json" (dev layout where the
-// runtime file lives next to the manifest in the repo root).
+// Load the plugin version from .claude-plugin/plugin.json for m_version.
+// Non-fatal if missing/parse-error (m_version renders ""). Tries
+// "<runtime>/../.claude-plugin/plugin.json" (production cache layout) then
+// "<runtime>/.claude-plugin/plugin.json" (dev checkout layout).
 loadPluginVersion();
 await main();
 

@@ -1,34 +1,18 @@
-// Parse the Claude Code session JSON piped to stdin into a
-// TokenSnapshot suitable for the m_token* / m_session* renderer
-// modules.
+// Parse the Claude Code session JSON from stdin into a TokenSnapshot for the
+// m_token* / m_session* modules. Extracted from index.ts so unit tests can
+// import it without index.ts's top-level `await main()` side effects.
 //
-// Extracted from src/index.ts so unit tests can import it without
-// pulling in index.ts's top-level `await main()` and `loadConfig()`
-// side effects (which would hang in node:test). The behavior is
-// identical — same field paths, same null-coercion rules.
+// Tolerates partial input — any field may be missing; each renderer module
+// null-checks its own piece.
 //
-// Tolerates partial input: any field can be missing. The renderer
-// modules each independently null-check their piece. v0.4.0+ adds
-// session-identity / metadata fields (sessionName, modelDisplayName,
-// effort, repo, ccversion), context-window stats (size, usedPct,
-// remainingPct), and extended cost fields (totalApiDurationMs,
-// totalLinesAdded, totalLinesRemoved).
+// Invariant: total_input_tokens == current.input_tokens +
+// cache_read_input_tokens. A violation appends a `warning` to the per-project
+// diagnostics log (gated by CREDITGAUGE_DIAGNOSTICS_ENABLE) — surfacing
+// schema drift without breaking the render path.
 //
-// v0.8.0+ — invariant check on the parsed TokenSnapshot:
-//   total_input_tokens == current.input_tokens + current.cache_read_input_tokens
-// When violated, a `warning` is appended to the per-project
-// diagnostics log (gated by CREDITGAUGE_DIAGNOSTICS_ENABLE). This
-// surfaces schema drift early (e.g. a provider changing the
-// cache_read accounting) without breaking the render path — the
-// renderer still gets a fully populated snapshot. See
-// [[token-modules-redesign-v0-8-0]] for the contract.
-//
-// v0.9.x — module-keyed naming (the parser's output shape is named
-// after the modules that consume it): `current.input → current.tokenIn`
-// (m_tokenIn), `current.cacheRead → current.tokenCachedIn`
-// (m_tokenCachedIn), `totals.input → totals.tokenTotalIn` (m_tokenTotalIn
-// + m_tokenInTotal + m_contextSize — same source, three module names).
-// The invariant check below reads through the renamed fields.
+// Field names are module-keyed (named for their primary reader): current.tokenIn
+// (m_tokenIn), current.tokenCachedIn (m_tokenCachedIn), totals.tokenTotalIn
+// (m_tokenTotalIn / m_tokenInTotal / m_contextSize — one source, three names).
 import type { TokenSnapshot } from "./types.ts";
 import * as diagnostics from "./diagnostics.ts";
 
@@ -63,15 +47,13 @@ export function parseTokenSnapshot(raw: string): TokenSnapshot | null {
   const strOrNull = (v: unknown): string | null =>
     typeof v === "string" && v.length > 0 ? v : null;
 
-  // v0.4.0+ — extract session identity / metadata.
   // `model` is a nested object: { id, display_name }.
   const modelObj =
     r.model && typeof r.model === "object" && !Array.isArray(r.model)
       ? (r.model as Record<string, unknown>)
       : null;
-  // `effort` is polymorphic: either a bare string ("high") or an
-  // object ({ level: "high", ... }). We coerce both shapes to a
-  // string|null at parse time so the renderer doesn't need a branch.
+  // `effort` is polymorphic (bare string or { level, … }); coerce both to
+  // string|null so the renderer needs no branch.
   const effortRaw = r.effort;
   let effort: string | null = null;
   if (typeof effortRaw === "string" && effortRaw.length > 0) {
@@ -81,9 +63,8 @@ export function parseTokenSnapshot(raw: string): TokenSnapshot | null {
   ) {
     effort = strOrNull((effortRaw as Record<string, unknown>).level);
   }
-  // `workspace.repo` is { host, owner, name }. We extract per-field
-  // and let the renderer decide whether to render (it filters null
-  // components and joins with `/`).
+  // `workspace.repo` is { host, owner, name }; the renderer filters null
+  // components and joins with `/`.
   const workspaceObj =
     r.workspace && typeof r.workspace === "object" && !Array.isArray(r.workspace)
       ? (r.workspace as Record<string, unknown>)
@@ -122,11 +103,9 @@ export function parseTokenSnapshot(raw: string): TokenSnapshot | null {
     },
     sessionName: strOrNull(r.session_name),
     modelDisplayName: strOrNull(modelObj?.display_name),
-    // v0.9.x — read stdin.model.id as the canonical active-model
-    // identifier. Powers tokenPrices lookup (per-model pricing
-    // dict), JSONL sample.model stamp, and per-model accumulator
-    // slot key. Independent of modelDisplayName so the display axis
-    // (m_model) and the id axis (cost modules) can diverge.
+    // stdin.model.id is the canonical active-model identifier: powers
+    // tokenPrices lookup, the JSONL sample.model stamp, and the per-model
+    // accumulator slot key. Independent of modelDisplayName (display vs id).
     modelId: strOrNull(modelObj?.id),
     effort,
     repo,
@@ -138,19 +117,12 @@ export function parseTokenSnapshot(raw: string): TokenSnapshot | null {
     },
   };
 
-  // v0.8.0+ — invariant check: total_input_tokens must equal
-  // (input_tokens + cache_read_input_tokens). Verified on the live
-  // 2026-06-29 stdin sample (140 + 126720 = 126860) and on the
-  // captured `stdin.real.json` fixture. A violation indicates
-  // schema drift from a provider (cache_read accounting change,
-  // a new "cache_creation" channel, etc.) — record it but don't
-  // break the render path. The warning is gated by the
-  // diagnostics system (env CREDITGAUGE_DIAGNOSTICS_ENABLE=1) and
-  // deduped 60s per unique message. See diagnostics.ts.
-  //
-  // v0.9.x — reads through the module-keyed field names:
-  // `snap.totals.tokenTotalIn` / `snap.current.tokenIn` /
-  // `snap.current.tokenCachedIn`.
+  // Invariant check: total_input_tokens must equal input_tokens +
+  // cache_read_input_tokens (verified on the live 2026-06-29 sample and the
+  // stdin.real.json fixture). A violation means provider schema drift — record
+  // it (gated by CREDITGAUGE_DIAGNOSTICS_ENABLE, 60s dedupe) but don't break
+  // the render path. Reads the module-keyed fields tokenTotalIn / tokenIn /
+  // tokenCachedIn.
   if (
     snap.totals.tokenTotalIn != null &&
     snap.current.tokenIn != null &&

@@ -9,22 +9,17 @@
 // dropped in as a free-form token (the renderer emits unknown tokens
 // verbatim), or wrapped via `m_label|<your-text>`.
 
-// Default line layout. A template is an ordered list of tokens; each
-// token is either a display module ("m_<name>"), a named separator
-// ("s_space" / "s_dot" / …), or a free-form literal. The renderer
-// walks the list left-to-right and concatenates the output of each
-// module. See render.ts:renderTemplate for the full grammar.
+// Default line layout. A template is an ordered token list — display modules
+// ("m_<name>"), named separators ("s_space" / "s_dot" / …), or free-form
+// literals — concatenated left-to-right by render.ts:renderTemplate.
 //
-// Default layouts:
-//   quota:   "Usage: <5h> <countdown5h> · <7d> <countdown7d>"
-//   balance: "Balance: <balance>"
-// The " · " between windows is a single self-padding `s_dot|wrap:true`;
-// the spacing between adjacent m_* modules comes from auto-space
-// (prefixSpace=true auto-prepends one space before each module).
+// Default layouts: quota = "Usage: <5h> <countdown5h> · <7d> <countdown7d>";
+// balance = "Balance: <balance>". The " · " is a single self-padding
+// `s_dot|wrap:true`; inter-module spacing comes from auto-space
+// (prefixSpace=true).
 //
-// Source of truth for the `quota` / `balance` entries in
-// DEFAULT_LINE_TEMPLATES. Tests reference this constant via __testing,
-// so keep it in sync with the fragments.
+// Source of truth for DEFAULT_LINE_TEMPLATES.quota / .balance; tests reference
+// it via __testing, so keep it in sync with the fragments.
 const DEFAULT_LINE_TEMPLATE: {
   quota: string[];
   balance: string[];
@@ -46,18 +41,11 @@ const DEFAULT_LINE_TEMPLATE: {
   balance: ["m_modeLabel|color:yellow", "m_balance", "m_age"],
 };
 
-// Registry of reusable template fragments. Each value is a token array
-// (the same shape as `statuslineTemplate`). Allowed tokens: `m_*`
-// modules EXCEPT `m_template`, plus `s_*` separators. The loader strips
-// `m_template` tokens at load time, so a fragment can never reference
-// another fragment (no nesting).
-//
-// The renderer reads from this registry when it encounters an
-// `m_template|<key>` token inside `statuslineTemplate` or a preset.
-// Keys are user-overridable via `lineTemplates.<key>` in config.json;
-// a `_`-prefixed user key is only rejected if it collides with a
-// built-in key — a no-op safety net today, since no built-in fragment
-// uses the `_` prefix.
+// Registry of reusable template fragments (same token-array shape as
+// `statuslineTemplate`). Allowed: `m_*` modules EXCEPT `m_template`, plus
+// `s_*` separators — the loader strips `m_template` at load time, so a
+// fragment can never nest another. Keys are user-overridable via
+// `lineTemplates.<key>` in config.json.
 export type LineTemplates = Record<string, string[]>;
 
 // A statusline is a flat token array. The loader accepts
@@ -69,12 +57,10 @@ export type StatuslineTemplate = string[];
 // fails to resolve. Dispatches quota / balance by provider TYPE.
 export const DEFAULT_STATUSLINE_TEMPLATE: StatuslineTemplate = ["m_template|quota|type:quota", "m_template|balance|type:balance"];
 
-// Fragment library. `DEFAULT_LINE_TEMPLATES.<key>` is consumed via
-// `m_template|<key>` indirection — fragments can be inlined anywhere in
-// a template. This registry is DISTINCT from DEFAULT_STATUSLINE_PRESETS
-// below: a preset is the WHOLE statusline (resolved by the top-level
-// `statuslineTemplate: "<key>"`), a fragment is a reusable chunk. A
-// fragment name is not a valid preset name and vice versa.
+// Fragment library, consumed via `m_template|<key>`. DISTINCT from
+// DEFAULT_STATUSLINE_PRESETS: a preset IS the whole statusline (resolved by
+// the top-level `statuslineTemplate: "<key>"`); a fragment is a reusable chunk.
+// A fragment name is not a valid preset name and vice versa.
 export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   // Standard quota / balance window renders, referenced by the presets
   // via `m_template|quota|type:quota` / `m_template|balance|type:balance`.
@@ -147,16 +133,11 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   ],
 };
 
-// Top-level `statuslineTemplate` preset registry. Distinct from
-// DEFAULT_LINE_TEMPLATES (fragments consumed via `m_template|<key>`):
-// a preset here IS the whole statusline — the loader resolves a
-// string-form `statuslineTemplate: "<key>"` against this registry and
-// substitutes the body array. Fragment names are NOT valid here and
-// vice versa.
-//
-// Preset bodies reuse fragments freely via `m_template|<fragment>` —
-// the strip-on-load rule that blocks nesting *inside* a lineTemplates
-// entry does not apply at the preset level.
+// Preset registry for string-form `statuslineTemplate: "<key>"`. A preset IS
+// the whole statusline (vs DEFAULT_LINE_TEMPLATES fragments); fragment names
+// are not valid presets and vice versa. Presets reuse fragments via
+// `m_template|<fragment>` — the strip-on-load no-nesting rule applies only
+// inside a lineTemplates entry, not at the preset level.
 export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   // Provider-type dispatch: quota line for Quota providers, balance
   // line for BALANCE providers, plugin info for unknown providers.

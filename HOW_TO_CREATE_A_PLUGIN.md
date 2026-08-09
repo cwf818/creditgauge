@@ -237,7 +237,7 @@ config block by the same id. Edit `~/.claude/plugins/creditgauge/config.json`:
 |------------------------|----------|-------|
 | `TYPE`                 | yes      | `"QUOTA"` (token-plan windows) or `"BALANCE"` (account balance) |
 | `BASE_URL_COMPARED_TO` | yes      | Match target for `ANTHROPIC_BASE_URL`. See `COMPARE_METHOD`. |
-| `COMPARE_METHOD`       | no       | `"EXACT"` (default) · `"INCLUDE"` (substring) · `"STARTWITH"` (prefix with `/`, `?`, `#` boundary guard) |
+| `COMPARE_METHOD`       | no       | `"EXACT"` · `"INCLUDE"` (substring) · `"STARTWITH"` (prefix with `/`, `?`, `#` boundary guard). Missing or invalid → the whole provider entry is **dropped** (no default fallback). |
 | `ENDPOINT`             | no       | URL your plugin hits. Your plugin reads `ENDPOINT` from its own constant — this config field is for the host's URL-matching only, not for the plugin. |
 | `AUTHENTICATION_KEY`   | no       | Sent to your plugin as the first arg. Falls back to `process.env.ANTHROPIC_AUTH_TOKEN`. **Never logged / echoed / persisted by the host.** |
 
@@ -319,8 +319,10 @@ from its own module-level constant.
 
 ### 5b. Bundled plugin catalog
 
-The repo ships two reference plugins under `query_plugins/`. Both are
-plain ESM files you can copy to start your own — read them alongside
+The repo ships four plugins under `query_plugins/` — `bigmodel`,
+`copilot-api`, `kimi`, `opencode` — plus the `plugins.json` metadata
+registry. The two documented in detail below (`kimi` and `copilot-api`)
+are plain ESM files you can copy to start your own — read them alongside
 §4's recipes.
 
 #### `kimi/` — Moonshot Kimi (kimi.com)
@@ -463,7 +465,7 @@ echo '{}' \
   | ANTHROPIC_BASE_URL=https://api.kimi.com/coding/ \
     ANTHROPIC_AUTH_TOKEN="$(jq -r '.providers.kimi.AUTHENTICATION_KEY' \
       ~/.claude/plugins/creditgauge/config.json)" \
-    node /path/to/cache/creditgauge/creditgauge/0.9.2/dist/index.js
+    node /path/to/cache/creditgauge/creditgauge/1.2.0/dist/index.js
 ```
 
 For unit-level testing of the fill function only:

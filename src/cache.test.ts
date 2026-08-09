@@ -16,17 +16,10 @@ const {
   __resetForTest: resetForTest,
 } = cache;
 
-// v0.8.21+ — FILE-SCOPE path resolver. Without this, the cache
-// module's `flushToDisk()` writes to the user's live
-// `~/.claude/plugins/creditgauge/state/cache.json` — which is
-// shared with the running plugin and your interactive shell
-// sessions. Tests fixture values (k1/k2/d--workspace-X/tickSpeed:…)
-// would clobber real cache rows. We point the resolver at an
-// ephemeral mkdtempSync dir ONCE at file load, and override it
-// only inside `describe("cache disk persistence")` and
-// `describe("cache — v0.8.x TTL flush + legacy key cleanup")`.
-// afterEach below restores the file-scope default so inner
-// describes don't leak their tmp dir choice to siblings.
+// v0.8.21+ — file-scope path resolver: point the cache at an
+// ephemeral mkdtempSync dir so flushToDisk() never touches the
+// user's live state/cache.json. Inner describes override it
+// per-test; afterEach restores the file-scope default.
 let _ephemeralDir: string;
 _ephemeralDir = mkdtempSync(join(tmpdir(), "creditgauge-cache-test-"));
 setCachePathResolver(() => join(_ephemeralDir, "cache.json"));
@@ -273,20 +266,13 @@ describe("getWithAge", () => {
   });
 });
 
-// ----- Per-Project Key Isolation (v0.4.x+) -----
+// ----- Caller-chosen key namespaces -----
 //
-// The cache module is intentionally cwd-unaware: a single Map, a
-// single on-disk file. Per-project isolation is achieved by
-// `src/render.ts`'s `projectCacheKey(cwd, key)` helper, which
-// prefixes every key with `projectHash(cwd):` before it reaches
-// this module. This describe block verifies the contract that the
-// render-side helper relies on: when two keys happen to look
-// identical AFTER the projectHash prefix is applied (i.e. the
-// render layer is fed a different cwd, or no cwd), the cache
-// module treats them as distinct entries. (The actual
-// `projectCacheKey` helper is private to render.ts — these tests
-// exercise the public cache API directly with prefixed keys to
-// validate the contract.)
+// The cache is cwd-unaware (one Map, one on-disk file) — isolation is
+// the caller's job via distinct key namespaces (provider rows,
+// `<provider>:pluginSource`, `quote:<freqMs>:<address>`, …). This pins
+// the flat-key contract: distinct keys are distinct entries; re-using a
+// key shares the slot (no hidden prefix added).
 
 describe("cache — per-project key isolation contract", () => {
   beforeEach(() => {
@@ -303,13 +289,13 @@ describe("cache — per-project key isolation contract", () => {
     assert.deepEqual(peek("d--workspace-beta:tickSpeed:sess-1"), { apiMs: 200 });
   });
 
-  it("the same unprefixed key is the global slot (no project isolation)", () => {
-    // Sanity: cache itself does NOT prefix. A writer that omits the
-    // projectHash prefix would collide with a writer that also omits
-    // it (including a writer that runs with cwd=null and falls
-    // through to the literal "_" prefix). render.ts MUST always
-    // call projectCacheKey; this test pins that contract by
-    // showing the bare-key path is shared.
+  it("the same key is the shared slot (no hidden prefixing)", () => {
+    // Sanity: the cache adds NO prefix of its own. Two writers using
+    // the same key (and thus the same namespace) collide — this pins
+    // the flat-key contract that callers like index.ts (provider
+    // keys), api.quote.ts (quote:<freqMs>:<address>) and render.ts
+    // (currentProvider) rely on: isolation comes from distinct keys,
+    // never from the cache itself.
     set("tickSpeed:sess-1", { apiMs: 1 });
     set("tickSpeed:sess-1", { apiMs: 2 });
     assert.deepEqual(peek("tickSpeed:sess-1"), { apiMs: 2 });
@@ -318,13 +304,10 @@ describe("cache — per-project key isolation contract", () => {
 
 // ----- Disk persistence -----
 //
-// v0.2.22: cache entries are shadowed to disk under state/cache.json so
-// cacheTtlMs is meaningful across per-tick child-process spawns. These
-// tests isolate the disk path to a tmp dir per test (via
-// setCachePathResolver) and simulate the "two-tick" sequence by calling
-// resetCachePathResolver / resetCachePathResolver (which doesn't actually
-// exist; the trick is to use the path resolver hook to point at a fresh
-// file each "process") — see the helper below.
+// v0.2.22: entries are disk-shadowed under state/cache.json so TTL is
+// meaningful across per-tick child-process spawns. Each test points the
+// resolver at a fresh tmp file and uses __resetForTest to simulate the
+// "two-tick" boundary (see resetModuleState below).
 
 describe("cache disk persistence", () => {
   // Per-test tmp dir. Each test gets its own file so the in-memory Map
@@ -545,17 +528,11 @@ describe("cache disk persistence", () => {
 
 // ----- v0.8.x: TTL-aware flush + legacy key cleanup -----
 //
-// After the stat cache rewrite (`sum:v1:…` → `stat:model:window:align`)
-// the disk file could hold hundreds of stale `sum:v1:*` entries because
-// cache.set never deletes unreferenced keys. Two new behaviors:
-//
-//   1. set(key, value, ttlMs) records the entry's TTL; flushToDisk
-//      prunes expired entries (those with `ttlMs` AND age > ttlMs).
-//      Entries lacking `ttlMs` (legacy disk entries written by older
-//      versions) are kept verbatim — their TTL is still enforced by
-//      get()/peek(), we just don't proactively reclaim them here.
-//   2. loadFromDisk strips sum:v1:* / avg:v1:* legacy keys before they
-//      re-enter the in-memory store.
+// 1. set(key, value, ttlMs) records the TTL; flushToDisk prunes entries
+//    with ttlMs AND age > ttlMs (entries lacking ttlMs are kept — get()
+//    still enforces their age).
+// 2. loadFromDisk strips legacy `sum:v1:*` / `avg:v1:*` keys before they
+//    re-enter the in-memory store.
 
 describe("cache — v0.8.x TTL flush + legacy key cleanup", () => {
   let dir: string;
@@ -691,12 +668,8 @@ describe("cache — v0.8.x TTL flush + legacy key cleanup", () => {
   });
 });
 
-// v0.8.21+ — file-scope cleanup of the ephemeral dir created at
-// module load (see header). Without this, dozens of test runs would
-// litter `os.tmpdir()` with empty cache.json files; with this, the
-// process leaves no trace. Runs on its own (the inner describes'
-// `teardownTmpDir()` reset the resolver back to `_ephemeralDir`-
-// based one, which is the file-scope default — no conflict).
+// v0.8.21+ — remove the file-scope ephemeral dir created at module
+// load so repeated runs leave no trace in os.tmpdir().
 after(() => {
   resetCachePathResolver();
   try { rmSync(_ephemeralDir, { recursive: true, force: true }); } catch { /* best-effort */ }

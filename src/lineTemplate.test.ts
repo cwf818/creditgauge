@@ -1,18 +1,9 @@
-// v0.2.17: tests for the lineTemplate / module renderer. These cover
-// the new custom-config surface (separators, lineTemplate) and the
-// forced-visibility rule for m_age. Existing render.test.ts and
-// dispatch.test.ts already verify the default templates reproduce
-// the v0.2.16 byte-for-byte output; this file focuses on the new
-// behavior that the old tests don't reach.
-//
-// v0.3.3: added the "inline-args tokens" describe block covering the
-// `m_label|<string>|color:<c>`, `m_modeLabel|color:<c>`, and
-// `s_<n>|color:<c>` token forms.
-//
-// v0.x.x: switched the second-class separator from `|` to `:` or `=`
-// (the `m_label`/`s_<n>` etc. tokens now use `|` for structural
-// splits and `:` / `=` for name/value pairs). See the
-// "two-class separator" describe block at the bottom.
+// v0.2.17: tests for the lineTemplate / module renderer (custom
+// template surface + the forced-visibility rule for m_age); the
+// default templates are covered byte-for-byte in render.test.ts.
+// v0.3.3 added the inline-args token forms; v0.x.x switched the
+// second-class separator from `|` to `:` / `=` (see the two-class
+// separator describe block at the bottom).
 
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
@@ -44,27 +35,18 @@ import { join } from "node:path";
 const STALE_COLOR = "\x1b[90m";
 const strip = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
-// v0.4.0+ — m_tokenInSpeed / m_tokenOutSpeed read the prev-tick
-// cache. Each test needs an isolated tmp dir for the disk-shadowed
-// cache file, otherwise cross-test residue from one run can poison
-// the next. (The render-tokens.test.ts file has the same setup.)
+// v0.4.0+ — speed modules read the prev-tick cache; each test needs
+// an isolated tmp dir for the disk-shadowed cache file. v0.8.11-alpha
+// also isolates status-store's disk root (a stale PREV_TICK_KEY from a
+// prior test would otherwise be flagged as a regression).
 let _tmpDir: string;
 beforeEach(() => {
   _tmpDir = mkdtempSync(join(tmpdir(), "tokenplan-lineTemplate-"));
   setCachePathResolver(() => join(_tmpDir, "cache.json"));
-  // v0.8.11-alpha — also isolate status-store's disk root. Without
-  // this, a prior test's PREV_TICK_KEY entry persists at the default
-  // state root (computed from cwd="C:\\fake") and gets reloaded by
-  // the next test's beginTick — the test would see a stale prev
-  // carrying a DIFFERENT sessionId + non-zero totalApiMs, which the
-  // post-merge v0.8.11 regression detector now correctly flags as a
-  // regression. (Pre-merge, the sessionId mismatch short-circuited
-  // to invalidRegression=false, masking this isolation gap.)
   setStateRoot(() => join(_tmpDir, "state"));
   resetCacheForTest();
-  // v0.9.x — render functions now go through tick-state; seed an
-  // empty tick so the read paths don't throw. null cwd keeps the
-  // in-memory store empty (no commit fires on these tests).
+  // Render reads the status-store per-tick state; seed an empty tick so
+  // the read paths don't throw (null cwd keeps the store empty).
   resetTickStateForTest();
   beginTickForTest(null, null);
 });
@@ -153,9 +135,8 @@ describe("lineTemplate — unknown module token (vX.X.X+: literal pass-through)"
 
 describe("lineTemplate — forced visibility of m_age on stale", () => {
   beforeEach(() => {
-    // Pin minUnit='m' so the assertions like "⛓️‍💥 5m ago" stay
-    // stable — the tests pin exact minute-grain suffixes. The
-    // default minUnit='s' would emit "5m0s ago" instead.
+    // Pin minUnit='m' so "5m ago" stays minute-grain (default 's'
+    // would emit "5m0s ago").
     __resetForTest({ timeFormat: { minUnit: "m", maxUnitCount: 2 } });
   });
   it("appends the broken-chain suffix even when m_age is NOT in the template", () => {
@@ -2072,11 +2053,8 @@ describe("lineTemplate — inline-args regression / round-trip", () => {
 
 // ----- v0.4.0+ m_template module -----
 //
-// End-to-end coverage for the new `m_template:<key>[:mode:<plan|balance>]`
-// inline-arg token. The dispatcher expands `m_template` into the
-// registered `lineTemplates[key]` fragment, filtered by the
-// `providerType` thread (so the same key can render differently for
-// plan vs balance providers).
+// m_template:<key>[:type:<plan|balance>] expands into the registered
+// lineTemplates[key] fragment, filtered by providerType.
 describe("m_template — legacy lineTemplate warns once and is ignored (v0.4.0 hard break)", () => {
   beforeEach(() => {
     __resetForTest();
@@ -2197,15 +2175,10 @@ describe("m_template — mode filter drops on mismatch (deepseek vs plan)", () =
   });
 });
 
-// v0.8.37 — `m_template|<key>` with NO `|type|mode` arg is
-// provider-agnostic. The fragment renders under BOTH "plan" and
-// "balance" providers; only "unknown" drops it. This is the fix
-// for the v0.8.36 regression where context-level templates
-// (`context` / `git_info` / `realtime` / `tokens_acc` /
-// `tokens_stat`) silently disappeared on the deepseek provider
-// because the bare-default "plan" filter dropped them on
-// providerType === "balance". Explicit `|type:quota` /
-// `|type:balance` is still strict-match (see describe above).
+// v0.8.37 — `m_template|<key>` with NO type arg is provider-agnostic:
+// renders under plan AND balance (fixes the v0.8.36 regression where
+// context-level fragments silently dropped on deepseek). Explicit
+// `|type:quota` / `|type:balance` stays strict-match.
 describe("m_template — provider-agnostic fragment (no |mode arg, v0.8.37)", () => {
   beforeEach(() => {
     __resetForTest({
@@ -2276,14 +2249,10 @@ describe("m_template — provider-agnostic fragment (no |mode arg, v0.8.37)", ()
   });
 });
 
-// User-reported regression (v0.8.47): when ANTHROPIC_BASE_URL doesn't
-// match any configured provider, matchProvider returns null,
-// ctx.providerType === "unknown", and the dispatch path runs
-// renderProviderLine. A user who organizes their template as named
-// fragments like `m_template|tokens_acc|scope:session` expected those
-// fragments to render — they don't reference provider-specific data
-// (m_acc* reads from per-project state, not provider fields). Pre-fix
-// the m_template gate dropped them on unknown; post-fix they recurse.
+// User-reported regression (v0.8.47): on unknown providerType
+// (ANTHROPIC_BASE_URL matches nothing), the m_template gate dropped
+// provider-agnostic fragments like `m_template|tokens_acc|scope:session`.
+// Post-fix they recurse.
 describe("m_template agnostic — end-to-end on unknown provider (v0.8.47+)", () => {
   beforeEach(() => {
     __resetForTest({
@@ -2464,13 +2433,10 @@ describe("m_template — providers gate: instance-level filter (v0.9.0+)", () =>
   });
 });
 
-// v0.9.0+ — `s_move|pos:<n>|char:<c>` column-advance separator.
-// Pads the current line with `<c>` until the visible-cell cursor
-// reaches column `<n>`. The cursor tracks ANSI-stripped chunk
-// width in a closure inside renderTemplate; `\n` resets it to 0.
-// Bare `s_move` (no `pos:`) is badarg per the user's "没带参数
-// 相当于无效" contract; `cursor >= pos` is also a no-op + warn
-// (the user's "误操作" spec).
+// v0.9.0+ — `s_move|pos:<n>|char:<c>` column-advance separator: pads
+// until the visible-cell cursor reaches column `<n>` (`\n` resets the
+// cursor). Bare `s_move` (no pos) is badarg; `cursor >= pos` is a
+// no-op + warn.
 describe("s_move — column pad separator (v0.9.0+)", () => {
   beforeEach(() => {
     __resetForTest();
@@ -2656,11 +2622,9 @@ describe("s_move — column pad separator (v0.9.0+)", () => {
     }
   });
 });
-// Demonstrates the user's motivating use case: one shared
-// `token_acc` fragment + 2 callers passing different scopes → 2
-// distinct renders. The bare m_accTokenIn inside the fragment
-// sees the passthrough scope via the MODULES-path hook
-// (render.ts:passThroughScope) and routes to the right slot.
+// One shared `token_acc` fragment + 2 callers passing different scopes
+// → 2 distinct renders (the inner bare m_accTokenIn sees the passthrough
+// scope via render.ts:passThroughScope).
 describe("m_template passthrough — end-to-end via renderProviderLine (v0.8.7+)", () => {
   beforeEach(() => {
     __resetForTest({
@@ -2927,14 +2891,9 @@ describe("lineTemplate — two-class separator (| + : or =)", () => {
   });
 });
 
-// v0.9.x — `m_quote|wrap:<chars>|` is a char-pair inline arg.
-// Empty / missing → no-op (raw text); 1-char → duplicated to a
-// 2-char pair; 2+-chars → first 2 only. Booleans
-// (`wrap|true|false|yes|no`) are hard-rejected as badarg
-// (the resolver only accepts literal strings; the char-pair
-// shape rejects anything non-printable-ASCII). Applies to BOTH
-// local and address-mode (was address-only with hard-coded `~`
-// in v0.8.21+).
+// v0.9.x — `m_quote|wrap:<chars>|` is a char-pair arg: empty/missing →
+// no-op; 1-char duplicated; 2+ → first two. Booleans hard-rejected as
+// badarg. Applies to local AND address mode.
 describe("m_quote — |wrap| char-pair inline arg (v0.9.x)", () => {
   beforeEach(() => {
     __resetForTest();

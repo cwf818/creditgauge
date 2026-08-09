@@ -23,17 +23,13 @@ ANSI colors are 5-band (256-color SGR): bright green / dark green / yellow / ora
 
 ## Snapshots
 
-**`simple` preset** (default `statuslineTemplate`, working with a pre-installed `claude-hud`) — minimal layout, single Quota line on its own:
+**`simple` preset** — minimal layout, single Quota line on its own, working with a pre-installed `claude-hud`:
 
 ![toPGauge simple preset](https://github.com/cwf818/creditgauge/raw/main/screenshots/screenshot-simple.png)
 
-**`standard` preset** — context, memory, git, session / project / 5h-align / 7d-align scanners, m_sumTtlStatus tail, plus the live quota line:
+**`standard` preset** — context, memory, git, session / project / 5h-align / 7d-align scanners, plus the live quota line:
 
 ![toPGauge standard preset](https://github.com/cwf818/creditgauge/raw/main/screenshots/screenshot-standard.png)
-
-**`standard-slim` preset** — slim version of `standard`, contains context, memory, git, session / project / 5h-align / 7d-align scanners, m_sumTtlStatus tail, plus the live quota line:
-
-![toPGauge standard-slim preset](https://github.com/cwf818/creditgauge/raw/main/screenshots/screenshot-standard-slim.png)
 
 ## Documentation
 
@@ -243,8 +239,8 @@ The reset countdown uses the shared time-formatting template:
 
 | Remaining | Rendered  | Note                                       |
 | --------- | --------- | ------------------------------------------ |
-| `-1ms`    | `0m`      | past-due, explicit "this window has reset" |
-| `30s`     | `<1m`     | sub-minUnit floor                          |
+| `-1ms`    | `0s`      | past-due, explicit "this window has reset" |
+| `30s`     | `30s`     |                                            |
 | `5m`      | `5m`      |                                            |
 | `60m`     | `1h0m`    | internal zero preserved                    |
 | `90m`     | `1h30m`   |                                            |
@@ -263,30 +259,30 @@ When `ANTHROPIC_BASE_URL` matches the configured `providers.deepseek` entry (def
 Balance: ¥110.00             # is_available=true, single CNY entry
 Balance: $25.00               # is_available=true, single USD entry
 Balance: ¥110 · $3.5         # multi-currency: ALL entries from balance_infos,
-                             # joined by ' · ', single color band from the
-                             # LOWEST balance (most urgent currency drives hue).
+                             # joined by ' · ', each entry colored independently
+                             # by its own balance.
 Balance: not available!       # is_available=false or no parseable entries
 ```
 
 Per-currency display prefix: `USD` → `$`, `CNY` / `RMB` → `¥`. Any other
 currency code is rendered as itself, uppercased (e.g. `EUR42.50`).
 
-5-band color thresholds on the **lowest** entry's numeric value
+5-band color thresholds on **each entry's** numeric value
 (`thresholds.balanceBands`, default `[5, 10, 20, 50]`) — see [MANUAL.md §2](./MANUAL.md#2-top-level-schema).
 
 ## Display mode
 
-Default mode is **`used`** — the line begins with `Usage:` and the percentage shown is the percentage of the window you've consumed. The colored bar segment represents the consumed portion.
+Default mode is **`remaining`** — the line begins with `Remain:` and the percentage shown is the percentage of the window you've left. The colored bar segment represents the remaining portion.
 
-Switch to `remaining` mode via the config file:
+Switch to `used` mode via the config file:
 
 ```json
-{ "display": "remaining" }
+{ "display": "used" }
 ```
 
 See [MANUAL.md §2](./MANUAL.md#2-top-level-schema) for the full schema.
 
-In remaining mode the line begins with `Remain:` and the percentage is what's left; the colored bar segment represents the remaining portion.
+In used mode the line begins with `Usage:` and the percentage is what's been consumed; the colored bar segment represents the consumed portion.
 
 `display` is MiniMax-only — DeepSeek's `Balance:` line doesn't have a percentage to flip. The window / context-window / mem-usage modules (`m_windowQuota|term:short|mid|long`, `m_windowContext`, `m_windowMemUsage`) also accept an inline `|display:used|remaining` override that takes precedence over the global `display` for that one module.
 
@@ -308,7 +304,7 @@ A reference with every field is at [config.example.json](./config.example.json).
 Opt-in JSONL log of plugin-internal events. Gated by two-level AND-gate:
 
 1. Set the env var: `export CREDITGAUGE_DIAGNOSTICS_ENABLE=1`
-2. Pick slices in `state/config.json`:
+2. Pick slices in `config.json`:
    ```json
    { "debug": { "stdin": true, "cache": true } }
    ```
@@ -337,7 +333,7 @@ The plugin reuses `process.env.ANTHROPIC_AUTH_TOKEN` to call the provider's plan
 
 The Claude Code statusline is updated in response to interaction events by default (every prompt, every tool result). Starting with **Claude Code 2.1.97**, the `statusLine.refreshInterval` field is honored, letting the statusline refresh on a fixed cadence instead. Two scopes of "refresh interval" are involved and they're independent:
 
-- **This plugin's 60 s TTL** — how long we cache a successful API response before re-fetching. MiniMax and DeepSeek have different rate-limit policies and refresh cadences; 60 s is a deliberate default that keeps the statusline responsive without hammering the API. Cache entries are shadowed to disk under `state/<projectHash>/cache.json` (sibling of `config.json`, wiped by `:uninstall`), so the TTL is honored **across per-tick child-process spawns** — the second tick within 60 s reuses the first tick's value instead of re-fetching. Per-project isolation: `render.ts` prefixes every cache key with `<projectHash>:` so different projects never collide on the same `cache.json`.
+- **This plugin's 60 s TTL** — how long we cache a successful API response before re-fetching. MiniMax and DeepSeek have different rate-limit policies and refresh cadences; 60 s is a deliberate default that keeps the statusline responsive without hammering the API. Cache entries are shadowed to disk under the top-level `state/cache.json` (sibling of `config.json`, wiped by `:uninstall`), so the TTL is honored **across per-tick child-process spawns** — the second tick within 60 s reuses the first tick's value instead of re-fetching. Rows are keyed by provider id (the data row under the provider id, the plugin-source kind under `<provider>:pluginSource`), so different providers never collide on the same file.
 - **Claude Code's `statusLine.refreshInterval`** — how often the harness invokes the statusline command. Set in `~/.claude/settings.json` independently of this plugin:
 
   ```json
@@ -417,7 +413,7 @@ The verified real shape (captured against `https://www.minimaxi.com/v1/token_pla
 }
 ```
 
-The plugin picks the entry with the **lowest interval remaining %** as the source of truth (the most-active model). If you capture a fresh response and the shape diverges, save it as `src/__fixtures__/remains.real.json` and tighten the parser in `src/api.plan.ts`.
+The plugin picks the entry with the **lowest interval remaining %** as the source of truth (the most-active model). If you capture a fresh response and the shape diverges, save it as `src/__fixtures__/remains.real.json` and tighten the parser in `src/plugins/minimax/index.js`.
 
 The DeepSeek response shape is simpler — `{ is_available: bool, balance_infos: [{ currency, total_balance, granted_balance, topped_up_balance }, ...] }` — and the parser iterates **all** entries so every currency the account holds is rendered.
 
@@ -458,8 +454,8 @@ src/
   index.ts            # entry — stdin drain, provider dispatch, cache, render, compose
   types.ts            # Provider = string | null; ProviderType / CompareMethod / ProviderEntry
   providers.ts        # URL matching, fetcher / template / fail-label dispatch
-  api.plan.ts         # Quota fetch + tolerant parser for /v1/token_plan/remains
-  api.balance.ts      # BALANCE fetch + parser for /user/balance
+  plugins/minimax/index.js    # Quota fetch + tolerant parser for /v1/token_plan/remains
+  plugins/deepseek/index.js   # BALANCE fetch + parser for /user/balance
   api.quote.ts        # m_quote remote fetch + dot-path scan
   quotes.ts           # bundled quotes.json (100+ bilingual entries) — m_quote local fallback
   render.ts           # read-only against tickState.pending; MODULES + INLINE_RENDERERS + INLINE_SCHEMAS dispatchers

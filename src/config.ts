@@ -1,17 +1,10 @@
-// User-tunable configuration for creditgauge (CreditGauge).
-//
+// User-tunable configuration for creditgauge.
 // Loaded once at startup from
-//   $CLAUDE_CONFIG_DIR/plugins/creditgauge/config.json
+// $CLAUDE_CONFIG_DIR/plugins/creditgauge/config.json
 // (fallback: ~/.claude/plugins/creditgauge/config.json).
-// When the file is absent the plugin runs with hardcoded defaults
-// (DEFAULT_CONFIG) — config.json is entirely optional.
-//
-// Missing file → DEFAULT_CONFIG silently. Malformed JSON or a single
+// Absent file → hardcoded DEFAULT_CONFIG. Malformed JSON or a single
 // bad field → one stderr line + DEFAULT_CONFIG. Never crashes.
-//
-// Precedence: config.json > hardcoded defaults. The earlier
-// CREDITGAUGE_DISPLAY env var is gone — anyone who used it must migrate
-// to config.json's `display` field (see README "Configuration").
+// Precedence: config.json > hardcoded defaults.
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -57,20 +50,15 @@ const DEFAULT_COLORS = {
   orange: "\x1b[38;5;208m",
   red: "\x1b[38;5;196m",
   stale: "\x1b[90m",
-  // v0.6.0+ — broken-chain color (used by formatStaleSuffix when
-  // the m_age "⛓️‍💥 X ago" annotation fires, i.e. the fetch failed
-  // and we're rendering the last successful cached value). Distinct
-  // from `colors.stale` (gray, used for the fresh 🔗 annotation) so
-  // the user can read the two states at a glance.
+  // Broken-chain color for the m_age "⛓️‍💥 X ago" annotation (fetch
+  // failed, rendering last cached value). Distinct from `colors.stale`
+  // (gray, fresh 🔗 annotation) so the two states read differently.
   broken: "\x1b[31m",
 };
 
-// v0.4.0+ — 3-band palette for the m_tokenHitRate module. Higher is
-// better: cache_read / (cache_read + cache_creation) ≥ 80% → green,
-// 50–80% → yellow, <50% → orange. Bands chosen to match the visual
-// vocabulary of the existing 5-band thresholds (green/yellow/orange)
-// so the cache-hit rate reads as "another health indicator" rather
-// than a separate dimension.
+// 3-band palette for the m_tokenHitRate module. Higher is better:
+// cache_read / (cache_read + cache_creation) ≥ 80% → green,
+// 50–80% → yellow, <50% → orange.
 const DEFAULT_CACHE_HIT_COLORS = {
   good: "\x1b[38;5;41m", // bright green, ≥ 80%
   warn: "\x1b[38;5;220m", // yellow, 50–80%
@@ -102,24 +90,11 @@ const DEFAULT_CURRENCY: {
 };
 
 const DEFAULT_STALE = {
-  // Emoji pair prepended to the "X ago" annotation when the fetch
-  // failed. The broken glyph is what the user actually sees (no
-  // leading separator) — it's the indicator of network failure.
-  // v0.2.17: removed the legacy `separator` field. The stale
-  // annotation is now appended directly after the template output
-  // (no leading separator). If a custom separator is needed, place
-  // it in the lineTemplate explicitly.
+  // Emoji pair for the "X ago" annotation. `broken` marks a failed
+  // fetch (rendering last cached value); `healthy` marks a fresh
+  // chain. Appended directly after template output (no leading
+  // separator — place one in lineTemplate if needed).
   ageEmoji: { healthy: "🔗", broken: "⛓️‍💥" },
-  // Glyphs appended to the reset countdown (e.g. "2h3m🕛"). The picker
-  // indexes into this array by `remainingMs / resetDurationMs`, so the
-  // array reads left-to-right as "few remaining → many remaining":
-  //   index 0        : remainingMs ≈ 0 (just reset / about to reset)
-  //   last index     : remainingMs ≈ resetDurationMs (fresh)
-  // `min(…, length-1)` clamps ratio=1.0 to the last entry instead of
-  // running off the end. Twelve clock-face emoji give a smooth visual
-  // ramp from 12 o'clock (🕛, least remaining) around to 1 o'clock
-  // (🕐, most remaining); two glyphs give a binary "hourglass" pair
-  // (full/empty); one glyph is a static indicator. Providers without
 };
 
 const DEFAULT_BAR = {
@@ -128,33 +103,18 @@ const DEFAULT_BAR = {
   empty: "░",
 };
 
-// v0.4.0+ — number-format knobs for the m_token* modules. Two layers:
-//   `thresholds` drives the human-compact notation (matches formatRemainingMs:
-//   below the smallest threshold → raw integer; otherwise k / M suffix).
-//   `precision` controls decimal places per tier (currently 1; tests can
-//   bump to 2 if a user wants more granularity).
-//   `speedPrecision` / `cachePctPrecision` independently tune t/s and %.
-//   `cacheHitThresholds` mirrors DEFAULT_CACHE_HIT_THRESHOLDS — exposed
-//   as a config field so a user who wants different bands can override
-//   without touching the colors block.
-// v0.4.0+ — 5-band scale thresholds for the m_tokenInSpeed /
-// m_tokenOutSpeed modules (`:color:scale` / bare default). The
-// bands are picked at the FAST end: tps >= bands[3] → fastest
-// band (bright green); tps < bands[0] → slowest band (red).
-// `in` uses 5× the `out` thresholds because input streams
-// naturally run hotter than output — without the 5× factor the
-// `in` module would always read as "fastest green", which
-// would defeat the purpose of a gradient. Users can override
-// both bands in config.json's `tokenFormat.speedScaleBands`.
+// m_token* number-format knobs: thresholds (k/M compact notation),
+// per-axis precisions, cacheHitThresholds override, and the 5-band
+// speedScaleBands for m_tokenInSpeed / m_tokenOutSpeed (tps ≥ bands[3]
+// → brightest; < bands[0] → red; `in` bands are 5× `out` because input
+// streams run hotter).
 const DEFAULT_SPEED_SCALE_BANDS = {
   in: [50, 100, 200, 400] as [number, number, number, number],
   out: [10, 20, 40, 80] as [number, number, number, number],
 };
 
 const DEFAULT_TOKEN_FORMAT = {
-  // [<1k] → "342", [<1M] → "12.3k", [≥1M] → "1.2M". Aligns with the
-  // readable upper bound of typical session totals (rare to see > 1M
-  // tokens in a single Claude Code session, but possible over a 7d window).
+  // [<1k] → "342", [<1M] → "12.3k", [≥1M] → "1.2M".
   thresholds: [1_000, 1_000_000] as [number, number],
   precision: 1,
   speedPrecision: 1,
@@ -165,30 +125,15 @@ const DEFAULT_TOKEN_FORMAT = {
 
 type DisplayMode = "used" | "remaining";
 
-// Top-level time-format knobs. They govern ALL time rendering in the
-// plugin — reset countdown AND stale-age suffix AND any future caller
-// (e.g. an "elapsed since session start" line). Keeping them at top
-// level (rather than buried under `stale`) means a user who wants
-// second-level granularity anywhere gets it everywhere consistently.
+// Top-level time-format knobs governing ALL time rendering (reset
+// countdown, stale suffix, etc.). minUnit = smallest unit rendered;
+// units below it collapse to "<1<minUnit>" (or "0<minUnit>" past-due):
+// "m" → sub-minute shows "<1m"; "s" (default) → real seconds ("47s");
+// "h" → sub-hour shows "<1h". maxUnitCount (clamped [1,4]) takes up to
+// N non-zero units after dropping below-minUnit + leading zeros, while
+// preserving internal/trailing zeros: 2h3m4s → "2h3m", 2h0m → "2h0m".
 type TimeFormat = {
-  // Smallest unit shown on time countdowns. Units BELOW this granularity
-  // are never rendered directly — when all remaining units collapse to
-  // zero (or get truncated), the formatter falls back to "<1<minUnit>"
-  // (positive remaining) or "0<minUnit>" (past-due).
-  //   "m":           sub-minute shows as "<1m".
-  //   "s" (default): sub-minute shows as actual seconds (e.g. "47s").
-  //   "h":           sub-hour shows as "<1h" (useful for windows where
-  //                  minute-precision is noise — e.g. the weekly reset).
   minUnit: "m" | "s" | "h";
-  // How many non-zero units to display. After dropping units below
-  // minUnit AND dropping leading zero units, takes up to maxUnitCount
-  // from the start — including any internal/trailing zero units.
-  // Clamped to [1, 4]. Examples (minUnit="m"):
-  //   1d2h3m4s → "1d2h"
-  //   2h3m4s   → "2h3m"
-  //   2h0m     → "2h0m"   (NOT "2h" — internal zeros preserved)
-  //   0d0h5m   → "5m"     (leading zeros dropped)
-  //   0d0h30s  → "<1m"    (all extracted units zero under minUnit)
   maxUnitCount: number;
 };
 
@@ -197,19 +142,11 @@ const DEFAULT_TIME_FORMAT: TimeFormat = {
   maxUnitCount: 2,
 };
 
-// Reset-countdown visualization. Belongs with the countdown, NOT with
-// the stale-on-error annotation (which is a separate concern).
+// Reset-countdown glyphs (e.g. "2h3m🕛"). Indexed by
+// remainingMs / resetDurationMs (ascending remaining-time ratio);
+// min(…, length-1) clamps ratio=1.0. Providers without start_time
+// (DeepSeek, legacy) fall back to index 0.
 type Countdown = {
-  // Glyphs appended to the reset countdown (e.g. "2h3m🕛"). The picker
-  // indexes into this array by remainingMs / resetDurationMs, so the array
-  // reads left-to-right as "few remaining → many remaining":
-  //   index 0  : remainingMs ≈ 0 (just reset / about to reset)
-  //   last     : remainingMs ≈ resetDurationMs (fresh)
-  // min(..., length-1) clamps ratio=1.0 to the last entry. Twelve clock-face
-  // emoji give a smooth visual ramp from 12 o'clock (🕛, least remaining)
-  // around to 1 o'clock (🕐, most remaining); two glyphs give a binary
-  // hourglass pair; one glyph is static. Providers without start_time
-  // (DeepSeek, legacy) fall back to index 0.
   resetArrows: string[];
 };
 
@@ -231,11 +168,10 @@ const DEFAULT_COUNTDOWN: Countdown = {
 };
 
 
-// v0.10.x — fine-grained diagnostics opt-in. AND-gated with the
-// CREDITGAUGE_DIAGNOSTICS_ENABLE env var (see diagnostics.ts:
-// isSubkeyEnabled). Missing or `false` is equivalent at the gate;
-// truthy strings ("1"/"true"/"yes", case-insensitive) and boolean
-// `true` are accepted. Unknown keys are silently dropped.
+// Per-subkey diagnostics opt-in, AND-gated with
+// CREDITGAUGE_DIAGNOSTICS_ENABLE (see diagnostics.ts:isSubkeyEnabled).
+// Truthy strings ("1"/"true"/"yes") and boolean true accepted;
+// unknown keys silently dropped.
 function parseDebugFlags(
   raw: unknown,
 ): Partial<Record<import("./diagnostics.ts").Subkey, boolean>> {
@@ -276,27 +212,13 @@ const DEFAULT_CONFIG: {
   fetchTimeoutMs: number;
   display: DisplayMode;
   modeLabels: { used: string; remaining: string; balance: string };
-  // v0.8.0+ — top-level prefix labels for the per-turn / acc /
-  // sum-avg token-stat axes. Every value already includes its
-  // trailing colon (e.g. "in:") so the renderer can just concat.
-  //
-  // v0.8.22+ — names renamed to 1:1 mirror the `m_*` module names
-  // they back, so a reader looking at `m_tokenIn` immediately knows
-  // to look at `labels.labelTokenIn`. Each label name is shared
-  // across the per-turn / acc / sum-avg module of the same family
-  // (e.g. `labelTokenIn` covers m_tokenIn / m_accTokenIn /
-  // m_sumTokenIn); per-family override was deliberately NOT
-  // exposed — the three family variants render the same axis
-  // (in-flow / out-flow / cache-read / …) and per-family split
-  // would be confusing rather than useful.
-  //
-  // Defaults reproduce the v0.8.x hardcoded literal strings so
-  // existing renders stay byte-identical until the user overrides
-  // labels.* in config.json. Old v0.8.13–v0.8.21 names
-  // (labelIn / labelOut / labelCacheIn / labelTotalIn /
-  // labelApi / labelApiCalls / labelInSpeed / labelOutSpeed /
-  // labelMemUsage) are accepted as deprecated aliases — see
-  // `applyOverrides` for the migration warning + value mirror.
+  // Top-level prefix labels for the token-stat axes. Names mirror the
+  // m_* modules they back (labelTokenIn ← m_tokenIn); each value
+  // already includes its trailing colon ("in:"). Shared across the
+  // per-turn / acc / sum-avg families of the same axis. Defaults
+  // reproduce the hardcoded literals so existing renders stay
+  // byte-identical; old v0.8.13–v0.8.21 names (labelIn, labelOut, …)
+  // are accepted as deprecated aliases (see applyOverrides).
   labels: {
     // per-turn / acc / sum-avg of token-IN flow
     labelTokenIn: string;
@@ -310,92 +232,45 @@ const DEFAULT_CONFIG: {
     labelApiMs: string;
     // per-turn / acc / sum-avg of API call count (integer body)
     labelApiCalls: string;
-    // v0.8.13+ — per-turn / acc / sum-avg of token-IN throughput
-    // (t/s). Shares `labelTokenIn` semantics across families.
+    // per-turn / acc / sum-avg of token-IN throughput (t/s); shares
+    // `labelTokenIn` default across families.
     labelTokenInSpeed: string;
     // per-turn / acc / sum-avg of token-OUT throughput (t/s).
     labelTokenOutSpeed: string;
-    // v0.8.17+ — system RAM usage label exposed via m_memUsage.
+    // system RAM usage label (m_memUsage).
     labelMemUsage: string;
-    // vX.X.X+ — system RAM used-bytes label exposed via m_memUsed.
+    // system RAM used/total-bytes labels (m_memUsed / m_memTotal).
     labelMemUsed: string;
-    // vX.X.X+ — system RAM total-bytes label exposed via m_memTotal.
     labelMemTotal: string;
-    // v0.8.22+ — cache hit-rate ratio (lifted out of the v0.8.x
-    // R8 hardcoded "hit:" prefix into the labels namespace).
+    // cache hit-rate ratio (m_tokenHitRate).
     labelTokenHitRate: string;
-    // v0.8.23+ — context-window occupancy / capacity / pct
-    // prefixes (were hardcoded "size:" / "size:" / "used:" /
-    // "remain:" in v0.8.22). Defaults preserve the literals so
-    // existing renders stay byte-identical.
+    // context-window occupancy / capacity / pct prefixes (m_context*).
     labelContextSize: string;
     labelContextWindowSize: string;
     labelContextUsedPercent: string;
     labelContextRemainingPercent: string;
-    // vX.X.X+ — m_contextUsage two-tone x/y prefix (used/capacity).
-    // Default "ctx:" (lowercase, matching the context-module family
-    // style). Override via labels.labelContextUsage.
+    // m_contextUsage two-tone x/y prefix (used/capacity); default "ctx:".
     labelContextUsage: string;
-    // v0.8.24+ — start of the tick statistics window. Read by
-    // m_accStartTime and m_sumStartTime (the cross-project min
-    // of per-row startAt). Default "start:" preserves a clean
-    // axis to override via config.json.
+    // tick-window start/end prefixes (m_accStartTime / m_sumStartTime /
+    // m_sumEndTime; cross-project min of startAt / max of lastAt).
     labelStartTime: string;
-    // v0.8.24+ — end of the tick statistics window. Read by
-    // m_sumEndTime (the cross-project max of per-row lastAt).
-    // Default "end:" mirrors the startTime default.
     labelEndTime: string;
-    // v0.9.0+ — quota module prefix. Read by `m_quota` (per-term
-    // via the `|term|short|mid|long` inline arg). Default
-    // `"quota: "` (trailing space) renders as e.g. `quota: 123/500`
-    // (the `(label)` tail is gone in vX.X.X+). valueOnly drops the
-    // prefix entirely. Override via config.json.
+    // m_quota prefix; default "quota: " (trailing space) renders
+    // "quota: 123/500"; valueOnly drops it.
     labelQuota: string;
-    // vX.X.X+ — token cost module prefix. Read by m_tokenCost /
-    // m_accTokenCost / m_sumTokenCost. Default "cost:" preserves
-    // a clean axis to override via config.json.
+    // m_tokenCost / m_accTokenCost / m_sumTokenCost prefix; default "cost:".
     labelTokenCost: string;
-    // vX.X.X+ — m_sumEstQuota module prefix. Reads the plan
-    // window's aligned used% (captured on the StatAggregate at
-    // getStatAggregate time) to estimate the periodic quota.
-    // Renders as "est:$30.20" (fixed 2dp + per-model currency).
-    // Default "est:" preserves a clean axis to override via
-    // config.json.
+    // m_sumEstQuota prefix (estimates periodic quota from the plan
+    // window's aligned used%); renders "est:$30.20".
     labelEstQuota: string;
-    // vX.X.X+ — glyph shown by `m_pluginSource` when the active
-    // provider's plugin resolved to the bundled built-in tree
-    // (`dist|src/plugins/<id>/index.js`). Default "📌" preserves
-    // the v0.9.x ship literal so existing renders stay byte-
-    // identical; user-overridable to any string (e.g. "B:", "🔧",
-    // "[built-in]"). The user-side counterpart is
-    // `labelPluginUserDefined`.
+    // m_pluginSource glyphs: 📌 built-in, 🎨 user override at
+    // query_plugins/<id>/, 🔖 reserved future "claude 官方" branch,
+    // ❗ matched provider has no plugin (neither user nor built-in).
     labelPluginSystem: string;
-    // vX.X.X+ — glyph shown by `m_pluginSource` when the active
-    // provider's plugin resolved to a user override at
-    // `~/.claude/plugins/creditgauge/query_plugins/<id>/`. Default
-    // "🎨" preserves the v0.9.x ship literal; user-overridable
-    // independently of `labelPluginSystem`.
     labelPluginUserDefined: string;
-    // vX.X.X+ — glyph shown by `m_pluginSource` for the
-    // future "claude 官方" branch (data sourced from stdin).
-    // Default "🔖" — reserved as a type-level axis only; not
-    // yet wired into the renderer's dispatch table (per the
-    // user's "CC 分支暂不做实现" decision 2026-07-12). The
-    // label is exposed so a follow-up branch can read it
-    // without a type change, and so users can override the
-    // literal in advance if they want.
     labelPluginCC: string;
-    // vX.X.X+ — glyph shown by `m_pluginSource` when the
-    // matched provider id has no plugin (neither user override
-    // nor built-in). Default "❗" makes the failure mode loud
-    // instead of silent — `peekPluginSource` no longer folds
-    // `kind="missing"` to null.
     labelPluginMissing: string;
-    // vX.X.X+ — glyphs appended by `m_branch|withStatus:true` to
-    // the branch body for the clean / dirty working-tree state.
-    // Defaults "✅" (clean) / "🟠" (dirty) are the vX.X.X ship
-    // literals; override via labels.labelGitClean /
-    // labels.labelGitDirty.
+    // m_branch|withStatus:true clean/dirty suffix glyphs; default "✅" / "🟠".
     labelGitClean: string;
     labelGitDirty: string;
   };
@@ -407,94 +282,52 @@ const DEFAULT_CONFIG: {
   bar: typeof DEFAULT_BAR;
   countdown: Countdown;
   timeFormat: TimeFormat;
-  // vX.X.X+ — m_* auto-space affix toggles. prefixSpace (default
-  // true) auto-prepends a space before each module per R1/R2/R3;
-  // suffixSpace (default false) auto-appends a space before a
-  // following module. Explicit |prefix:| / |suffix:| overrides the
-  // global default per module.
+  // m_* auto-space affixes. prefixSpace (default true) prepends a
+  // space before each module; suffixSpace (default false) appends one
+  // before a following module. Explicit |prefix:| / |suffix:| wins.
   prefixSpace: boolean;
   suffixSpace: boolean;
-  // v0.4.0+ — registry of reusable template fragments consumed by
-  // the m_template module's first argument.
+  // Reusable template fragments consumed by m_template's first argument.
   lineTemplates: typeof DEFAULT_LINE_TEMPLATES;
-  // v0.8.14+ — array-only. The template actually rendered is
-  // always a `string[]` of tokens (may include `m_template|_X`
-  // references that pull chunks from `lineTemplates`). Legacy
-  // string-form values from v0.4.0–v0.8.13 configs are
-  // auto-migrated by `applyOverrides` to the equivalent
-  // `["m_template|_X"]` form with a one-shot warn.
+  // The template actually rendered: a string[] of tokens (may include
+  // `m_template|_X` refs pulling chunks from `lineTemplates`).
   statuslineTemplate: string[];
   tokenFormat: typeof DEFAULT_TOKEN_FORMAT;
-  // vX.X.X+ — per-model token pricing for the m_tokenCost family.
-  // Loaded from config.tokenPrices.json at startup. Nested
-  // provider→model dict with `default` fallback at each level:
-  //   default          → global fallback (any provider, any model)
-  //   <provider>.default → provider-level fallback
-  //   <provider>.<model> → specific model price
-  // The active provider's config.json override (providers.<p>.config.
-  // tokenPrices) sits in tokenPricesOverride and wins at priority 1/3.
-  // See resolveTokenPrice() for the full 5-layer cascade.
-  // Default `{}` means every lookup is a miss → cost:n/a placeholder.
+  // Per-model token pricing for the m_tokenCost family, loaded from
+  // config.tokenPrices.json at startup. Nested provider→model dict
+  // with `default` fallback at each level; the active provider's
+  // config.json override lives in tokenPricesOverride (priorities
+  // 1/3 of resolveTokenPrice's 5-layer cascade). {} → cost:n/a.
   tokenPrices: TokenPricesFile;
-  // vX.X.X+ — provider-scoped token price override. Set by
-  // applyProviderOverrides from the active provider's config block.
-  // Flat model→price dict (no provider key — already scoped).
-  // `default` = provider-level fallback. Null when no provider
-  // matches or no override exists. Priority 1 (specific) and 3
-  // (default) in the resolution cascade.
+  // Provider-scoped token-price override set by applyProviderOverrides
+  // from the active provider's config block. Flat model→price dict
+  // (already scoped); `default` = provider fallback. Null when none.
+  // Priorities 1/3 of the resolution cascade.
   tokenPricesOverride: TokenPricesOverride;
-  // vX.X.X+ — exchange rates from config.tokenPrices.json default block.
-  // Maps currency code → rate (1 baseCurrency = rate targetCurrency).
-  // Empty when no exchange rates are configured.
+  // Exchange rates from config.tokenPrices.json default block
+  // (1 baseCurrency = rate targetCurrency). Empty when unconfigured.
   exchangeRates: Record<string, number>;
-  // Plugin version, populated at startup by index.ts from
-  // .claude-plugin/plugin.json. The m_version display module reads
-  // this field; tests inject values via __resetForTest.
+  // Plugin version from .claude-plugin/plugin.json, set at startup by
+  // index.ts; read by m_version. Tests inject via __resetForTest.
   version: string;
-  // v0.2.21: declarative provider registry. See DEFAULT_PROVIDERS
-  // above and src/providers.ts for the matcher / dispatcher.
+  // Declarative provider registry; see DEFAULT_PROVIDERS.
   providers: Record<string, ProviderEntry>;
-  // v0.9.x — the top-level `intervals` config block was REMOVED.
-  // Plugin authors do their own parsing in `fillQuota`/`fillBalance`
-  // (returning canonical Quota/Balance objects directly), so the
-  // host no longer ships a path-expression resolver to configure.
-  // If you need path-driven parsing in a custom plugin, write it
-  // inline in the plugin — the host has no surface for it.
-  // (legacy field retained in JSON for now would warn-and-drop;
-  // see applyOverrides below)
-  // v0.8.21+ — `m_quote|address|…` fetcher passes `--insecure` /
-  // `-k` to curl so self-signed / expired / untrusted-CA HTTPS
-  // endpoints work without patching the system CA bundle. Always
-  // opt-in (default `false`) so a misconfigured upstream still
-  // surfaces TLS errors loudly. Two ways to flip it on:
-  //   1. `"quoteInsecureTls": true` in config.json (global default)
-  //   2. `|insecureTls|<true|false>` inline arg on a specific
-  //      `m_quote` token (per-token override; beats the config
-  //      value when the arg is present)
-  // There is intentionally NO env-var seed for this flag — the
-  // URL you're willing to skip TLS validation for is a config-
-  // level decision, not a shell-environment one.
+  // top-level `intervals` was REMOVED — plugins parse their own responses.
+  // `m_quote` fetcher passes `--insecure` to curl so self-signed /
+  // expired / untrusted-CA HTTPS endpoints work. Opt-in (default
+  // false); enabled via config `quoteInsecureTls` or a per-token
+  // `|insecureTls|<true|false>` arg. No env-var seed — it's a
+  // config-level decision.
   quoteInsecureTls: boolean;
-  // v0.10.x — fine-grained diagnostics opt-in. AND-gated with the
-  // CREDITGAUGE_DIAGNOSTICS_ENABLE env var. Missing or `false` is
-  // equivalent at the gate; truthy strings ("1"/"true"/"yes",
-  // case-insensitive) and boolean `true` are accepted. Unknown keys
-  // are silently dropped.
+  // Per-subkey diagnostics opt-in (AND-gated with the env var; see parseDebugFlags).
   debug: Partial<Record<import("./diagnostics.ts").Subkey, boolean>>;
 } = {
   cacheTtlMs: 60_000,
   fetchTimeoutMs: 5_000,
   display: "remaining",
-  // "balance" was added in v0.2.17 alongside the lineTemplate refactor
-  // so the m_modeLabel module for the DeepSeek path can pick it up. Defaults
-  // to "Balance:" to preserve the v0.2.16 hardcoded literal.
+  // Mode label prefixes (m_modeLabel); defaults preserve hardcoded literals.
   modeLabels: { used: "Usage:", remaining: "Remain:", balance: "Balance:" },
-  // v0.8.22+ — values mirror the v0.8.x hardcoded literals
-  // exactly: "in:" for both labelTokenIn and labelTokenInSpeed
-  // (the per-turn / acc / sum-avg form was always the same prefix
-  // before the v0.8.13 split), "out:" likewise for the matching
-  // out-axis. Existing renders stay byte-identical without any
-  // user intervention.
+  // Defaults mirror the hardcoded literals so existing renders stay byte-identical.
   labels: {
     labelTokenIn: "in:",
     labelTokenOut: "out:",
@@ -508,47 +341,30 @@ const DEFAULT_CONFIG: {
     labelMemUsed: "used:",
     labelMemTotal: "total:",
     labelTokenHitRate: "hit:",
-    // v0.8.23+ — context-window prefixes (defaults preserve the
-    // v0.8.22 hardcoded literals so existing renders stay
-    // byte-identical).
+    // Context-window prefixes (defaults preserve hardcoded literals).
     labelContextSize: "size:",
     labelContextWindowSize: "size:",
     labelContextUsedPercent: "used:",
     labelContextRemainingPercent: "remain:",
-    // vX.X.X+ — m_contextUsage two-tone x/y prefix.
+    // m_contextUsage two-tone x/y prefix.
     labelContextUsage: "ctx:",
-    // v0.8.24+ — start/end of the tick statistics window. Net-new
-    // axes (no v0.8.23 default to preserve), so the literals are
-    // pure v0.8.24 conventions.
+    // Tick-window start/end prefixes.
     labelStartTime: "start:",
     labelEndTime: "end:",
-    // v0.9.0+ — quota module prefix default. vX.X.X+ — "quota: "
-    // (trailing space) so the concat reads "quota: 123/500".
+    // "quota: " (trailing space) so the concat reads "quota: 123/500".
     labelQuota: "quota: ",
-    // vX.X.X+ — token cost module prefix default. Matches the
-    // existing "labelFoo:" convention (trailing colon included
-    // so the renderer can concat without a separator).
+    // "cost:" — trailing colon so the renderer can concat.
     labelTokenCost: "cost:",
-    // vX.X.X+ — m_sumEstQuota module prefix default. Matches the
-    // existing "labelFoo:" convention (trailing colon included
-    // so the renderer can concat without a separator).
+    // "est:" — trailing colon so the renderer can concat.
     labelEstQuota: "est:",
-    // vX.X.X+ — m_pluginSource glyph defaults. These ARE the
-    // v0.9.x ship literals (📌 / 🎨) — unlike the other label*
-    // defaults which preserve v0.8.x hardcoded prefixes, these
-    // are net-new axes and have no historical default to match.
-    // The renderer drops the module entirely when ctx.pluginSource
-    // is null (per the "Drop 整个 module" decision 2026-07-11), so
-    // these defaults only surface on actual built-in / user hits.
-    // labelPluginCC + labelPluginMissing are net-new in this
-    // round (2026-07-12); "❗" makes the missing-plugin case
-    // loud (was previously silent-drop), "🔖" is reserved for
-    // a future CC branch (CC 分支暂不做实现).
+    // m_pluginSource glyphs: 📌 built-in, 🎨 user override, 🔖 reserved
+    // CC branch, ❗ missing plugin (renderer drops the module when
+    // pluginSource is null).
     labelPluginSystem: "📌",
     labelPluginUserDefined: "🎨",
     labelPluginCC: "🔖",
     labelPluginMissing: "❗",
-    // vX.X.X+ — m_branch|withStatus:true clean/dirty suffix glyphs.
+    // m_branch|withStatus:true clean/dirty suffix glyphs.
     labelGitClean: "✅",
     labelGitDirty: "🟠",
   },
@@ -565,32 +381,20 @@ const DEFAULT_CONFIG: {
   lineTemplates: DEFAULT_LINE_TEMPLATES,
   statuslineTemplate: DEFAULT_STATUSLINE_TEMPLATE,
   tokenFormat: DEFAULT_TOKEN_FORMAT,
-  // vX.X.X+ — tokenPrices defaults (empty file — opt-in per model).
-  // Every model id is a lookup miss by default, so the cost
-  // modules render cost:n/a until the user adds entries to
-  // config.tokenPrices.json. An install.sh-seeded default entry
-  // provides a global fallback; the user can add provider/model
-  // entries on top.
+  // {} — every model is a lookup miss → cost:n/a until the user adds
+  // entries to config.tokenPrices.json.
   tokenPrices: {},
-  // vX.X.X+ — no provider override by default. Set by
-  // applyProviderOverrides when the active provider's config has
-  // a `tokenPrices` block.
+  // null — set by applyProviderOverrides when the provider config has tokenPrices.
   tokenPricesOverride: null,
-  // vX.X.X+ — exchange rates read from config.tokenPrices.json default
-  // block. Extra fields (not in/out/cachedIn/currency) on the `default`
-  // entry are interpreted as currency exchange rates from the base
-  // currency (default.currency) to the named currency.
-  // E.g. default.USD = 0.15 means 1 CNY = 0.15 USD when
-  // default.currency = "CNY". Empty when no rates are configured.
+  // Extra fields on config.tokenPrices.json's `default` entry are
+  // exchange rates from the base currency to the named currency
+  // (e.g. default.USD = 0.15 → 1 CNY = 0.15 USD when default.currency
+  // = "CNY"). Empty when unconfigured.
   exchangeRates: {} as Record<string, number>,
   version: "",
   providers: DEFAULT_PROVIDERS,
   quoteInsecureTls: false,
-  // v0.10.x — fine-grained diagnostics opt-in. AND-gated with the
-  // CREDITGAUGE_DIAGNOSTICS_ENABLE env var. Missing or `false` is
-  // equivalent at the gate; truthy strings ("1"/"true"/"yes",
-  // case-insensitive) and boolean `true` are accepted. Unknown keys
-  // are silently dropped.
+  // {} — all subkeys off until configured.
   debug: {} as Partial<Record<import("./diagnostics.ts").Subkey, boolean>>,
 };
 
@@ -608,31 +412,23 @@ export const configStore = {
   get(): Config {
     return _current;
   },
-  // Inject the plugin version loaded from .claude-plugin/plugin.json
-  // at startup. Mutates the current Config's `version` field in place
-  // — the test reset path also resets it (see __resetForTest). Tests
-  // can call this directly to simulate the startup injection without
-  // touching the filesystem.
+  // Inject the plugin version at startup (mutates _current in place).
   setVersion(v: string): void {
     _current.version = v;
   },
 };
 
-// vX.X.X+ — resolve the effective token price for a given provider+model
-// pair via the 5-layer cascade:
-//   1. config.json providers.<p>.config.tokenPrices.<model>   (highest)
+// Resolve the effective token price for provider+model via the
+// 5-layer cascade (highest first):
+//   1. config.json providers.<p>.config.tokenPrices.<model>
 //   2. config.tokenPrices.json <provider>.<model>
 //   3. config.json providers.<p>.config.tokenPrices.default
 //   4. config.tokenPrices.json <provider>.default
-//   5. config.tokenPrices.json default                         (lowest)
-// No match → null. Callers render cost:n/a placeholder.
-// Accepts a Config object (from configStore.get() or cfg()) so the
-// caller controls which snapshot is used, and a providerId (from
-// matchProvider or ctx.currentProvider) + modelId (from stdin.model.id).
-// vX.X.X+ — bracket-suffix fallback: when the model name ends with
-// `[...]` (e.g. `deepseek-v4-flash[1m]`) and no price entry matches,
-// retry with the bracket suffix stripped. Some CLI environments
-// append ANSI-style bracket artifacts to model identifiers.
+//   5. config.tokenPrices.json default
+// No match → null (callers render cost:n/a). Accepts a Config snapshot
+// + providerId + modelId. When the model name ends with `[...]`
+// (e.g. `deepseek-v4-flash[1m]`) and nothing matches, retry with the
+// bracket suffix stripped.
 export function resolveTokenPrice(
   config: Config,
   providerId: string | null,
@@ -643,11 +439,9 @@ export function resolveTokenPrice(
   const override = config.tokenPricesOverride;
   const file = config.tokenPrices;
 
-  // vX.X.X+ — CURRENCY filter from the provider entry. When set,
-  // only price entries whose currency is in this array are accepted
-  // (otherwise a fallback to a different-currency global default
-  // would silently produce wrong cost numbers). Absent/unset means
-  // no filter — accept any currency.
+  // Provider CURRENCY filter: only price entries whose currency is in
+  // this array are accepted (avoids silently wrong costs from a
+  // different-currency fallback). Absent = no filter.
   const currencyFilter: string[] | undefined =
     providerId
       ? (config.providers[providerId] as Record<string, unknown> | undefined)
@@ -706,10 +500,8 @@ export function resolveTokenPrice(
     if (!currencyFilter || currencyFilter.includes(c.currency)) return c;
   }
 
-  // vX.X.X+ — bracket-suffix fallback: strip trailing `[...]` (e.g.
-  // `deepseek-v4-flash[1m]`) and retry. Some CLI environments append
-  // ANSI-style bracket artifacts to model identifiers. The recursive
-  // call handles multiple trailing bracket groups (e.g. `foo[1m][2m]`).
+  // Bracket-suffix fallback: strip trailing `[...]` and retry
+  // (recursion handles multiple groups, e.g. `foo[1m][2m]`).
   const bracketMatch = modelId.match(/^(.+)\[[^\]]*\]$/);
   if (bracketMatch) {
     return resolveTokenPrice(config, providerId, bracketMatch[1]);
@@ -735,9 +527,7 @@ function defaultConfigPath(): string {
 // file without monkey-patching node:os. Production code never sets it.
 let _pathResolver: () => string = defaultConfigPath;
 
-// vX.X.X+ — standalone path for config.tokenPrices.json (independent of
-// config.json's location). Uses the same CLAUDE_CONFIG_DIR fallback as
-// defaultConfigPath / cache.ts / diagnostics.ts.
+// config.tokenPrices.json path — independent of config.json's location.
 function defaultTokenPricesPath(): string {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? homedir();
   const claudeRoot = process.env.CLAUDE_CONFIG_DIR ?? join(home, ".claude");
@@ -753,23 +543,13 @@ export async function loadConfig(): Promise<Config> {
   // to even open the file descriptor.
   diagnostics.logFsRead(path, "config.loadConfig", undefined, undefined, "config");
   if (!existsSync(path)) {
-    // vX.X.X+ — use standard-slim as the default template, so even
-    // without a matching provider the user sees provider-agnostic
-    // modules (token, context, memory, version, …). The minimal
-    // DEFAULT_STATUSLINE_TEMPLATE (quota/balance only) is retained for
-    // error fallback paths (bad JSON, read error).
+    // No config file — minimal DEFAULT_STATUSLINE_TEMPLATE; other
+    // modules only render when the user opts in via config.json.
     _current = {
       ...DEFAULT_CONFIG,
-      // Use DEFAULT_STATUSLINE_PRESETS instead of DEFAULT_LINE_TEMPLATES:
-      // esbuild tree-shakes unused properties from DEFAULT_LINE_TEMPLATES
-      // because computed string access (`obj["key"]`) is not tracked, but
-      // DEFAULT_STATUSLINE_PRESETS is safe because mergeConfig accesses it
-      // via Object.keys() + runtime computed key, which preserves ALL keys.
-      statuslineTemplate: DEFAULT_STATUSLINE_PRESETS["standard-slim"] ?? DEFAULT_STATUSLINE_TEMPLATE,
+      statuslineTemplate: DEFAULT_STATUSLINE_TEMPLATE,
     };
-    // vX.X.X+ — always load token prices even without config.json.
-    // loadTokenPricesFile resolves via its own independent path
-    // (defaultTokenPricesPath), not from config.json's directory.
+    // Always load token prices even without config.json (independent path).
     _current.tokenPrices = loadTokenPricesFile();
   _current.exchangeRates = loadExchangeRates();
     return _current;
@@ -810,20 +590,15 @@ export async function loadConfig(): Promise<Config> {
   _current = mergeConfig(parsed as Record<string, unknown>);
   _current.debug = parseDebugFlags((parsed as Record<string, unknown>).debug);
 
-  // vX.X.X+ — load config.tokenPrices.json (independent path).
-  // On missing file / parse failure, keep the default {} (cost:n/a).
+  // Load config.tokenPrices.json; on failure keep {} (cost:n/a).
   _current.tokenPrices = loadTokenPricesFile();
   _current.exchangeRates = loadExchangeRates();
 
   return _current;
 }
 
-// vX.X.X+ — read and parse config.tokenPrices.json from the standard
-// creditgauge state directory (CLAUDE_CONFIG_DIR / homedir()/.claude),
-// NOT from config.json's sibling — the two files are independently
-// resolved so token prices work even when config.json is absent.
-// Returns the parsed TokenPricesFile on success, or {} on any failure
-// (missing, bad JSON, wrong shape).
+// Parse config.tokenPrices.json (independent of config.json's location).
+// Returns the parsed file, or {} on any failure (missing/bad JSON/wrong shape).
 function loadTokenPricesFile(): TokenPricesFile {
   const path = _tokenPricesPathResolver();
 
@@ -889,11 +664,9 @@ function loadTokenPricesFile(): TokenPricesFile {
   return out;
 }
 
-// vX.X.X+ — read exchange rates from config.tokenPrices.json default block.
-// Extra fields (not in/out/cachedIn/currency) on the `default` entry are
-// interpreted as exchange rates from the base currency to the named
-// currency. E.g. default.USD = 0.15 means 1 baseCurrency = 0.15 USD when
-// default.currency = "CNY" is the base. Returns {} when no rates exist.
+// Extra fields on config.tokenPrices.json's `default` entry are
+// exchange rates from the base currency (e.g. default.USD = 0.15).
+// Returns {} when no rates exist.
 function loadExchangeRates(): Record<string, number> {
   const path = _tokenPricesPathResolver();
   if (!existsSync(path)) return {};
@@ -923,8 +696,7 @@ function loadExchangeRates(): Record<string, number> {
   return rates;
 }
 
-// vX.X.X+ — validate a single token price entry from config.tokenPrices.json.
-// Returns the validated TokenPriceEntry or null on failure.
+// Validate one tokenPrices entry; returns the entry or null on failure.
 function validateTokenPriceEntry(
   raw: unknown,
   path: string,
@@ -957,26 +729,16 @@ function validateTokenPriceEntry(
   return ok || Object.keys(em).length > 0 ? built : null;
 }
 
-// v0.4.0+ — apply a provider-specific Config override on top of the
-// active snapshot. Called from index.ts:main() after loadConfig() and
-// matchProvider() so the active Config seen by every consumer
-// (configStore.get()) is already the merged view:
+// Apply a provider-specific Config override on top of the active
+// snapshot (called from index.ts after loadConfig + matchProvider so
+// every consumer sees the merged view):
 //
 //   defaults  ⊕  config.json top-level  ⊕  providerEntry.config
 //             (lowest)                  (highest)
 //
-// Implementation: deep-clone the current snapshot, run the same
-// per-field validators on top of the provider.config object, replace
-// the active snapshot. Reusing the validators (rather than merging
-// provider.config as JSON and re-running mergeConfig) keeps the
-// precedence math explicit and avoids re-cloning defaults.
-//
-// Stale-on-error behavior: the active snapshot may have been built
-// from a malformed user config (some fields silently fell back to
-// defaults with a stderr warn). Re-validating provider.config on top
-// of that snapshot means the provider layer's overrides get the SAME
-// per-field validation as the top-level config — typos in
-// provider.config still produce stderr warns, never silent acceptance.
+// Deep-clones the current snapshot and re-runs the same per-field
+// validators on provider.config — a typo there still produces a stderr
+// warn, never silent acceptance, and user-config fixes are preserved.
 export function applyProviderOverrides(raw: Record<string, unknown>): void {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
   if ("providers" in raw) {
@@ -989,26 +751,19 @@ export function applyProviderOverrides(raw: Record<string, unknown>): void {
   _current = applyOverrides(base, raw, true);
 }
 
-// v0.4.0+ — exported so renderer modules (src/render.ts) can warn
-// about runtime issues like `m_template:missingkey` without
-// duplicating the stderr + diagnostics JSONL wiring. Config-side
-// callers (this file) keep using the bare name.
+// Exported so renderer modules (src/render.ts) can reuse the stderr +
+// diagnostics-JSONL wiring (e.g. m_template:missingkey).
 export function warn(msg: string): void {
   process.stderr.write(`creditgauge: config ${msg}\n`);
-  // v0.4.0+ — also append to the diagnostics JSONL log so the
-  // m_warning module can surface the latest signal and the user can
-  // postmortem the plugin's recent history. Stderr stays the
-  // primary surface for live debugging; the log is the persistent
-  // record. Disk errors are swallowed inside diagnostics.append.
+  // Also append to the diagnostics JSONL so m_warning can surface it.
+  // Disk errors are swallowed inside diagnostics.append.
   diagnostics.append("warning", "config", msg);
 }
 
 // ----- Per-field validation + merge -----
-//
-// Each validator returns the validated value, or DEFAULT_CONFIG's
-// value on failure (with a stderr warning). Per-section isolation:
-// a bad `colors` block does NOT poison `cacheTtlMs` — independent
-// try/catches around each validator keep partial configs working.
+// Each validator returns the validated value or DEFAULT_CONFIG's value
+// with a stderr warning. Sections are isolated: a bad `colors` block
+// does NOT poison `cacheTtlMs`.
 
 function isFinitePositiveNumber(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v) && v > 0;
@@ -1040,31 +795,20 @@ const COLOR_SHORTCUTS: Record<string, string> = {
 function normalizeColor(v: unknown): string | null {
   if (typeof v !== "string") return null;
   if (COLOR_SHORTCUTS[v]) return COLOR_SHORTCUTS[v];
-  // Accept any SGR sequence (\x1b[...m) — we don't try to validate the
-  // exact byte sequence, just that it looks like an SGR. Reject strings
-  // that contain newlines so a JSON mistake can't inject multi-line
-  // escape codes into the rendered statusline.
+  // Accept any SGR sequence (\x1b[...m); reject newlines so a JSON
+  // mistake can't inject multi-line escape codes into the statusline.
   if (/^\x1b\[[0-9;]*m$/.test(v)) return v;
   return null;
 }
 
-// v0.4.0+ — internal helper that applies a raw override object on
-// top of an existing Config snapshot. Used by both mergeConfig (the
-// config.json loader) and applyProviderOverrides (the provider-level
-// config overlay). Per-field validators are identical between the
-// two callers, so the precedence is:
+// Apply a raw override object on top of an existing Config snapshot.
+// Used by both mergeConfig and applyProviderOverrides — each step runs
+// the same validators in sequence, so precedence is:
 //
 //   defaults  ⊕  config.json  ⊕  providerEntry.config
 //
-// where each step runs the same validators in sequence.
-//
-// Why a separate helper: extracting this from mergeConfig keeps the
-// validation logic in ONE place. If we re-ran mergeConfig from scratch
-// for the provider layer, we'd lose the user-config fixes (e.g. a
-// top-level `cacheTtlMs` that was repaired with a stderr warn would
-// get re-clobbered by an unrelated bad value in provider.config).
-// Re-validating on top of the merged snapshot keeps each layer's
-// effect independent.
+// Re-validating on top of the merged snapshot (instead of re-running
+// mergeConfig) keeps each layer's effect independent.
 function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOverride = false): Config {
   // Deep-clone the input Config — we mutate freely and don't want to
   // touch the caller's object. JSON round-trip is fine here: Config
@@ -1120,11 +864,7 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
         out.modeLabels.remaining = m.remaining;
       else if ("remaining" in m)
         warn("modeLabels.remaining must be a string; using default");
-      // v0.2.17: added alongside the lineTemplate refactor so m_modeLabel
-      // can pick it up for the DeepSeek (balance) path. Replaces the
-      // hardcoded "Balance: " literal in the legacy `formatBalanceLine`
-      // shim (dropped in the v0.9.x dead-export cleanup; the "Balance:"
-      // prefix now flows through m_modeLabel).
+      // DeepSeek (balance) path prefix — flows through m_modeLabel.
       if (typeof m.balance === "string") out.modeLabels.balance = m.balance;
       else if ("balance" in m)
         warn("modeLabels.balance must be a string; using default");
@@ -1133,12 +873,9 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     }
   }
 
-  // v0.8.0+ — top-level token-label overrides. Same partial-merge
-  // shape as modeLabels: each field is optional, invalid types are
-  // dropped with a one-line warn, valid strings overwrite the
-  // default verbatim (no further coercion — callers append the
-  // value to a number, so the configured string must not contain
-  // a trailing space).
+  // Top-level label overrides. Same partial-merge shape as modeLabels:
+  // fields optional, invalid types dropped with a one-line warn. Values
+  // are used verbatim (no trailing space — callers append to a number).
   if ("labels" in raw) {
     const l = raw.labels;
     if (l && typeof l === "object" && !Array.isArray(l)) {
@@ -1160,32 +897,16 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
         "labelContextWindowSize",
         "labelContextUsedPercent",
         "labelContextRemainingPercent",
-        // vX.X.X+ — m_contextUsage two-tone x/y prefix axis.
         "labelContextUsage",
-        // v0.8.24+ — start/end of the tick statistics window.
-        // Net-new axes (no v0.8.23 default to preserve).
         "labelStartTime",
         "labelEndTime",
-        // v0.9.0+ — quota module prefix. Net-new axis; default
-        // "quota: " (trailing space; see DEFAULT_CONFIG.labels above).
         "labelQuota",
-        // vX.X.X+ — token cost module prefix.
         "labelTokenCost",
-        // vX.X.X+ — m_sumEstQuota module prefix.
         "labelEstQuota",
-        // vX.X.X+ — m_pluginSource glyph axis (system / user / cc / missing).
-        // The renderer reads these via `labelFor("pluginSystem")` /
-        // `labelFor("pluginUserDefined")` /
-        // `labelFor("pluginCC")` (reserved, not yet dispatched) /
-        // `labelFor("pluginMissing")` so users can replace the
-        // ship defaults (📌 / 🎨 / 🔖 / ❗) with any string via
-        // labels.labelPluginSystem / .labelPluginUserDefined /
-        // .labelPluginCC / .labelPluginMissing.
         "labelPluginSystem",
         "labelPluginUserDefined",
         "labelPluginCC",
         "labelPluginMissing",
-        // vX.X.X+ — m_branch|withStatus:true clean/dirty suffix glyphs.
         "labelGitClean",
         "labelGitDirty",
       ];
@@ -1196,17 +917,10 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
           warn(`labels.${f} must be a string; using default`);
         }
       }
-      // v0.8.22+ — old v0.8.13–v0.8.21 names (labelIn / labelOut /
-      // labelCacheIn / labelTotalIn / labelApi / labelInSpeed /
-      // labelOutSpeed) are NOT accepted. Users must rename in
-      // their config.json. We intentionally don't mirror values
-      // silently: a stray old name silently adopting a new prefix
-      // would mask config bugs and a noisy warn + drop is the
-      // right failure mode. Also catches the transient v0.8.22
-      // labelTokenTotalOut (reverted before release).
-      // Note: `labelApiCalls` and `labelMemUsage` were not renamed
-      // — they're the SAME identifier in v0.8.13+ and v0.8.22+, so
-      // they remain in `fields` above. We don't list them here.
+      // Old v0.8.13–v0.8.21 names (labelIn / labelOut / …) are hard-
+      // rejected with a warn — never silently mirrored, which would
+      // mask config bugs. (`labelApiCalls` / `labelMemUsage` were not
+      // renamed, so they stay in `fields` above.)
       const knownOldNames = [
         "labelIn",
         "labelOut",
@@ -1230,13 +944,8 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     }
   }
 
-  // v0.9.x — top-level `intervals` config block REMOVED. The
-  // `intervals` key is silently dropped if present in the user's
-  // config.json (no warn, no migration path). Plugin authors do
-  // their own parsing in `fillQuota`/`fillBalance` — the host
-  // doesn't expose a path-expression surface anymore. Custom
-  // plugins that need it inline a tiny local walker (see
-  // src/plugins/deepseek/index.js:readPath for the shape).
+  // top-level `intervals` was REMOVED — silently dropped if present.
+  // Plugins parse their own responses in fillQuota/fillBalance.
 
   // colors — per-field validation, partial acceptance
   if ("colors" in raw) {
@@ -1268,8 +977,7 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     }
   }
 
-  // v0.4.0+ — cacheHitColors. Same per-field validator as `colors`
-  // (ANSI SGR or a known shortcut). Three bands: good / warn / bad.
+  // Same per-field validator as `colors`; three bands good / warn / bad.
   if ("cacheHitColors" in raw) {
     const c = raw.cacheHitColors;
     if (c && typeof c === "object" && !Array.isArray(c)) {
@@ -1357,11 +1065,8 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     }
   }
 
-  // stale — v0.2.17 dropped the legacy `separator` field. The stale
-  // annotation is now appended directly after the template output
-  // (no leading separator). The `stale` block is still accepted for
-  // forward-compat (e.g. ageEmoji overrides), but only `ageEmoji` is
-  // recognized; unknown sub-keys are silently ignored.
+  // `stale` block accepted (e.g. ageEmoji), but only ageEmoji is
+  // recognized; unknown sub-keys silently ignored.
   if ("stale" in raw) {
     const s = raw.stale;
     if (!s || typeof s !== "object" || Array.isArray(s)) {
@@ -1426,8 +1131,7 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     else warn("suffixSpace must be a boolean; using default");
   }
 
-  // v0.4.0+ — tokenFormat (compact number formatting for m_token* modules).
-  // All sub-keys are optional; missing → keep default.
+  // tokenFormat (compact numbers for m_token*); all sub-keys optional.
   if ("tokenFormat" in raw) {
     const tf = raw.tokenFormat;
     if (tf && typeof tf === "object" && !Array.isArray(tf)) {
@@ -1480,11 +1184,8 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
           );
         }
       }
-      // v0.4.0+ — speed scale band overrides. Each direction is
-      // an ascending 4-tuple. We validate strictly: a 3-tuple
-      // silently falls back to the default; a 5-tuple is also
-      // rejected (only 5 bands = 4 thresholds; 4 cutoffs define
-      // them).
+      // Speed scale band overrides — strictly an ascending 4-tuple
+      // (3- or 5-tuples are rejected).
       if ("speedScaleBands" in t) {
         const sb = t.speedScaleBands;
         if (sb && typeof sb === "object" && !Array.isArray(sb)) {
@@ -1527,9 +1228,7 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     if (b && typeof b === "object" && !Array.isArray(b)) {
       const bm = b as Record<string, unknown>;
       if ("width" in bm) {
-        // Accept any finite number in [3, 64] — narrower than the [3,32]
-        // range first sketched, because wider bars look bad in any
-        // statusline context the user might compose this with.
+        // Any finite number in [3, 64].
         if (
           isFiniteNumber(bm.width) &&
           (bm.width as number) >= 3 &&
@@ -1555,20 +1254,12 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     }
   }
 
-  // vX.X.X+ — the `separators` config field is REMOVED. Legacy
-  // configs that still carry one are silently ignored (no warn, no
-  // migration path). Use one of the six built-in s_<name> tokens or
-  // `m_label|<text>` for custom separators.
+  // The `separators` config field is REMOVED — silently ignored if
+  // present. Use the six s_<name> tokens or m_label|<text>.
 
-  // v0.4.0+ — legacy `lineTemplate` is REMOVED. The loader still
-  // detects the key (so a v0.3.x user gets a clear, actionable
-  // warning) but does not migrate or honor the field. Users must
-  // move to `statuslineTemplate` (top-level rendered template) +
-  // `lineTemplates` (reusable template fragments consumed by
-  // `m_template`). The fields are intentionally NOT auto-promoted
-  // because the mapping (which preset name to pick) is
-  // best-effort and would surprise users with non-default
-  // templates — better to make them explicitly migrate.
+  // Legacy `lineTemplate` is REMOVED — detected so a v0.3.x user gets
+  // a clear warning, but not migrated (the preset mapping would be
+  // best-effort). Use statuslineTemplate + lineTemplates.
   if ("lineTemplate" in raw) {
     warn(
       "lineTemplate is removed in v0.4.0; use lineTemplates + " +
@@ -1577,12 +1268,9 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     );
   }
 
-  // v0.4.0+ — `lineTemplates` is a Record<string, string[]> of
-  // reusable template fragments. The m_template module's first
-  // argument is a key into this record. Nesting protection: any
-  // entry containing `m_template` (bare or with colon args) is
-  // stripped with a warning — recursion would be invisible to the
-  // loader and infinite at render time.
+  // Reusable template fragments keyed for m_template's first arg.
+  // Entries containing `m_template` are stripped with a warning
+  // (recursion would be infinite at render time).
   if ("lineTemplates" in raw) {
     const lt = raw.lineTemplates;
     if (!lt || typeof lt !== "object" || Array.isArray(lt)) {
@@ -1591,14 +1279,9 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
       const ltm = lt as Record<string, unknown>;
       const merged: LineTemplates = { ...out.lineTemplates };
       for (const [name, value] of Object.entries(ltm)) {
-        // v0.8.14+ — `_`-prefix is reserved for built-in presets.
-        // Loader rejects user `lineTemplates._*` entries whose name
-        // collides with a key in DEFAULT_LINE_TEMPLATES (the built-in
-        // wins, user's entry is dropped with a warn). User-defined
-        // `_custom` entries that don't collide with a built-in key
-        // are preserved (the `_` is just a naming convention, not
-        // ownership). The built-in `_balance_simple`,
-        // `_balance_simple-alone`, `_1line`, etc. are protected.
+        // `_`-prefix colliding with a built-in preset is rejected (the
+        // built-in wins, user entry dropped with a warn); non-colliding
+        // `_custom` entries are preserved.
         if (
           name.startsWith("_") &&
           Object.prototype.hasOwnProperty.call(DEFAULT_LINE_TEMPLATES, name)
@@ -1636,12 +1319,9 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     }
   }
 
-  // vX.X.X+ — `statuslineTemplate` accepts both array-form (raw
-  // token list) and string-form (a preset name resolved against
-  // DEFAULT_STATUSLINE_PRESETS). String-form lets users reference a
-  // whole preset without inlining the body in config.json. A bare
-  // fragment name (DEFAULT_LINE_TEMPLATES key) is NOT valid here —
-  // presets and fragments live in distinct registries, on purpose.
+  // Accepts array-form (raw token list) or string-form (a preset name
+  // from DEFAULT_STATUSLINE_PRESETS). A bare lineTemplates fragment
+  // name is NOT valid here — presets and fragments are distinct.
   if ("statuslineTemplate" in raw) {
     const st = raw.statuslineTemplate;
     if (Array.isArray(st)) {
@@ -1673,13 +1353,8 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     }
   }
 
-  // v0.8.21+ — opt-in curl --insecure gate. Default false (TLS
-  // errors surface normally); user opts in via
-  // `"quoteInsecureTls": true` in config.json. No env-var seed —
-  // this is a config-file decision. Any non-boolean value
-  // (string/number/...) is treated as a typo and silently falls
-  // back to the safe default with a stderr warn — the same lenient
-  // pattern as fetchTimeoutMs / cacheTtlMs validation.
+  // Opt-in curl --insecure gate (default false). Non-boolean values
+  // fall back to the safe default with a stderr warn.
   if ("quoteInsecureTls" in raw) {
     const v = raw.quoteInsecureTls;
     if (typeof v === "boolean") {
@@ -1689,32 +1364,24 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     }
   }
 
-  // v0.9.x — tokenPrice (singular, scalar) was REMOVED. Emit a
-  // stderr warn and ignore it. No compat shim.
+  // tokenPrice (singular) REMOVED — warn and ignore.
   if ("tokenPrice" in raw) {
     warn("tokenPrice is removed; use tokenPrices (per-model dict keyed by model.id) instead — ignoring");
   }
-  // vX.X.X+ — tokenPrices handling depends on context:
-  //   - Top-level config.json: warn + ignore (pricing moved to
-  //     config.tokenPrices.json; the old flat dict is no longer read).
-  //   - Provider-level config (providers.<p>.config.tokenPrices):
-  //     validate and store in out.tokenPricesOverride (flat model→price,
-  //     no provider key — already scoped). This is the highest-priority
-  //     layer (priorities 1 and 3 in the 5-layer cascade).
+  // tokenPrices: top-level config.json → warn + ignore (moved to
+  // config.tokenPrices.json); provider-level → validated into
+  // out.tokenPricesOverride (priorities 1/3 of the cascade).
   if ("tokenPrices" in raw) {
     const tp = raw.tokenPrices;
     if (!isProviderOverride) {
-      // Top-level config.json: pricing has moved to config.tokenPrices.json.
-      // The old top-level tokenPrices dict is silently ignored — no
-      // migration shim (per [[new-feature-convention]]). The user can
-      // copy their entries into config.tokenPrices.json manually.
+      // Top-level pricing moved to config.tokenPrices.json; silently
+      // ignored here (no migration shim).
       if (tp && typeof tp === "object" && !Array.isArray(tp) && Object.keys(tp as Record<string, unknown>).length > 0) {
         warn("tokenPrices in config.json is ignored; pricing moved to config.tokenPrices.json — copy your entries there");
       }
     } else {
-      // Provider-level override: validate and store as the active
-      // provider's override. Flat model→price dict (default key =
-      // provider-level fallback). No provider nesting needed.
+      // Provider-level: validate into the active provider's override
+      // (flat model→price dict).
       if (tp && typeof tp === "object" && !Array.isArray(tp)) {
         const override: NonNullable<TokenPricesOverride> = {};
         for (const [modelId, entry] of Object.entries(tp as Record<string, unknown>)) {
@@ -1749,33 +1416,24 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
     }
   }
 
-  // Note: the `providers` block is handled separately by mergeConfig
-  // (the only caller that processes user-provided provider entries).
-  // applyProviderOverrides rejects `providers` at the top of the
-  // function, so this helper intentionally doesn't touch it.
+  // Note: `providers` is handled by mergeConfig only — this helper
+  // intentionally doesn't touch it (applyProviderOverrides rejects it).
 
   return out;
 }
 
-// v0.4.0+ — top-level config.json loader. Wraps applyOverrides with
-// the `providers` block handling that lives only at the top layer.
+// Top-level config.json loader — wraps applyOverrides plus the
+// `providers` block handling that lives only at this layer.
 function mergeConfig(raw: Record<string, unknown>): Config {
   const out = applyOverrides(
     JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Config,
     raw,
   );
 
-  // providers — Record<string, ProviderEntry>. User config is
-  // deep-merged on top of DEFAULT_PROVIDERS: existing keys have
-  // their fields overridden; new keys are appended. Per-entry
-  // validation drops malformed entries with a stderr warn rather
-  // than auto-filling (so a typo can't silently produce a half-
-  // configured provider with the wrong rendering or authentication settings).
-  //
-  // The "missing `providers` key in user config" case falls back
-  // to DEFAULT_PROVIDERS via the deep-clone at the top of
-  // mergeConfig — so existing users without a `providers` block
-  // keep working unchanged.
+  // providers — deep-merged on top of DEFAULT_PROVIDERS (existing keys
+  // override fields; new keys appended). Malformed entries are dropped
+  // with a stderr warn, never auto-filled. A missing `providers` key
+  // falls back to DEFAULT_PROVIDERS via the deep-clone above.
   if ("providers" in raw) {
     const p = raw.providers;
     if (!p || typeof p !== "object" || Array.isArray(p)) {
@@ -1784,12 +1442,8 @@ function mergeConfig(raw: Record<string, unknown>): Config {
       const pm = p as Record<string, unknown>;
       const merged: Record<string, ProviderEntry> = {};
       for (const [name, defaultEntry] of Object.entries(DEFAULT_PROVIDERS)) {
-        // Start with the default for known keys; user overrides
-        // fields on top below. A partial user entry inherits the
-        // remaining matcher, rendering, and authentication fields from
-        // the default — so the user can change just one knob without
-        // restating the whole entry. A non-object user value (string,
-        // array, null) is a user error — drop the entry and warn.
+        // Partial user entries inherit remaining fields from the
+        // default; a non-object value drops the entry with a warn.
         let seed: Record<string, unknown> | null = null;
         if (name in pm) {
           if (pm[name] && typeof pm[name] === "object" && !Array.isArray(pm[name])) {
@@ -1822,13 +1476,9 @@ function mergeConfig(raw: Record<string, unknown>): Config {
   return out;
 }
 
-// Validate one ProviderEntry. Returns the validated entry or null if
-// the entry is fatally malformed. The caller (`mergeConfig`) is
-// responsible for filling missing fields from the default entry
-// before calling this — we validate the merged result, not the raw
-// user input. A partial user entry thus preserves the remaining
-// matcher, rendering, and authentication fields from the default;
-// an invalid `TYPE` on an otherwise-OK entry drops the whole thing.
+// Validate one ProviderEntry (merged result, not raw input — the caller
+// fills missing fields from the default first). Returns null on fatal
+// malformation (e.g. invalid TYPE drops the whole entry).
 function validateProviderEntry(_name: string, v: unknown): ProviderEntry | null {
   if (!v || typeof v !== "object" || Array.isArray(v)) {
     warn("provider entry must be an object; dropping");
@@ -1861,12 +1511,10 @@ function validateProviderEntry(_name: string, v: unknown): ProviderEntry | null 
       warn("provider AUTHENTICATION_KEY must be a non-empty string; dropping the field");
     }
   }
-  // v0.4.0+ — optional provider-specific Config overrides. Validated
-  // here only for shape (must be a plain object, no nested `providers`
-  // key to avoid recursion). The fields inside `config` are merged
-  // into the active Config snapshot at startup via
-  // configStore.applyProviderOverrides(provider); per-field validators
-  // are applied at THAT time so a typo still produces a stderr warn.
+  // Provider-specific Config overrides, validated here only for shape
+  // (plain object, no nested `providers` key). Merged into the active
+  // snapshot at startup by applyProviderOverrides (per-field validators
+  // run then, so a typo still warns).
   if ("config" in e && e.config !== undefined) {
     const c = e.config;
     if (!c || typeof c !== "object" || Array.isArray(c)) {
@@ -1881,9 +1529,7 @@ function validateProviderEntry(_name: string, v: unknown): ProviderEntry | null 
       return null;
     }
   }
-  // Forward the validated `config` block (or omit it entirely if
-  // the user didn't supply one) so downstream readers see a
-  // consistent shape.
+  // Forward the validated config block, or omit it when absent.
   const validatedConfig =
     "config" in e &&
     e.config &&
@@ -1891,21 +1537,10 @@ function validateProviderEntry(_name: string, v: unknown): ProviderEntry | null 
     !Array.isArray(e.config)
       ? (e.config as Record<string, unknown>)
       : undefined;
-  // v0.9.x — per-provider `intervals` block REMOVED. Plugins
-  // own their own parsing, so the host doesn't expose this field
-  // anymore. (User config.json that still carries
-  // `providers.<id>.intervals` is silently ignored at the type
-  // level — the field isn't part of ProviderEntry, so the JSON
-  // loader drops it via the validateProviderEntry shallow
-  // assign. No warn, no migration path.)
-  //
-  // Same treatment for `providers.<id>.currencies` — plugins
-  // parse their own BALANCE responses directly. The legacy
-  // host-side merge layer is gone.
-  // v0.9.x+ — unknown user-defined fields (e.g. WORKSPACE_URL
-  // for user plugins) are forwarded through providerEntry so
-  // plugins can read custom parameters from config.json without
-  // hardcoding them.
+  // per-provider `intervals` and `currencies` blocks REMOVED — plugins
+  // own their parsing, so these fields are dropped at the type level
+  // (not part of ProviderEntry). Unknown user-defined fields (e.g.
+  // WORKSPACE_URL) are forwarded so plugins can read custom parameters.
   const knownKeys = new Set([
     "TYPE",
     "BASE_URL_COMPARED_TO",
@@ -1933,17 +1568,13 @@ function validateProviderEntry(_name: string, v: unknown): ProviderEntry | null 
 
 export function __resetForTest(overrides?: Partial<Config>): void {
   if (overrides === undefined) {
-    // v0.2.17: deep-clone DEFAULT_CONFIG before assigning. setVersion()
-    // mutates _current.version in place; if _current WERE DEFAULT_CONFIG
-    // itself, that mutation would leak across reset calls. Cloning
-    // makes the reset path symmetric with the overrides branch.
+    // Deep-clone DEFAULT_CONFIG so setVersion()'s in-place mutation
+    // can't leak across reset calls.
     _current = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Config;
     return;
   }
-  // Deep-merge so tests can override `stale: { separator: " · " }`
-  // without erasing colors / bar / etc. Plain `...DEFAULT_CONFIG,
-  // ...overrides` would replace the whole `stale` object with a partial
-  // one missing separator / ageEmoji.
+  // Deep-merge so a partial override (e.g. stale.ageEmoji) doesn't
+  // erase sibling fields.
   const base = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as Config;
   const merged = deepMerge(
     base,
@@ -1974,7 +1605,7 @@ export const __testing = {
   resetPathResolver(): void {
     _pathResolver = defaultConfigPath;
   },
-  // vX.X.X+ — independent tokenPrices path hooks for no-config testing.
+  // Independent tokenPrices path hooks for no-config testing.
   setTokenPricesPathResolver(fn: () => string): void {
     _tokenPricesPathResolver = fn;
   },
