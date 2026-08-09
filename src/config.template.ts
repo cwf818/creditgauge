@@ -29,10 +29,10 @@ const DEFAULT_LINE_TEMPLATE: {
   quota: [
     "m_modeLabel|color:yellow",
     "m_windowQuota|term:short",
-    "m_countdown|term:short|valueOnly:true",
+    "m_countdown|term:short|valueOnly:true|nulldrop:true",
     "s_dot|wrap:true",
     "m_windowQuota|term:mid",
-    "m_countdown|term:mid|valueOnly:true",
+    "m_countdown|term:mid|valueOnly:true|nulldrop:true",
     "s_dot|wrap:true",
     "m_windowQuota|term:long",
     "m_countdown|term:long|valueOnly:true",
