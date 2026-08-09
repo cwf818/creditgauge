@@ -2136,22 +2136,22 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
       const clean = renderTemplate(["m_branch"], ctxFor(fakeSnapshot({ cwd: repoDir }))).join("\n");
       assert.equal(strip(clean), "main");
       assert.ok(clean.includes("\x1b[38;5;80m"), `branch body should be teal: ${JSON.stringify(clean)}`);
-      assert.ok(!clean.includes("✓"), `no clean checkmark by default: ${JSON.stringify(clean)}`);
-      assert.ok(!clean.includes("*"), `no dirty star by default: ${JSON.stringify(clean)}`);
+      assert.ok(!clean.includes("✅"), `no clean check by default: ${JSON.stringify(clean)}`);
+      assert.ok(!clean.includes("🟠"), `no dirty dot by default: ${JSON.stringify(clean)}`);
 
       writeFileSync(join(repoDir, "new"), "y");
       __resetGitInfoCacheForTest();
       const dirty = renderTemplate(["m_branch"], ctxFor(fakeSnapshot({ cwd: repoDir }))).join("\n");
       assert.equal(strip(dirty), "main");
       assert.ok(dirty.includes("\x1b[38;5;80m"), `branch body should be teal: ${JSON.stringify(dirty)}`);
-      assert.ok(!dirty.includes("*"), `no dirty star by default: ${JSON.stringify(dirty)}`);
-      assert.ok(!dirty.includes("✓"), `no clean checkmark by default: ${JSON.stringify(dirty)}`);
+      assert.ok(!dirty.includes("🟠"), `no dirty dot by default: ${JSON.stringify(dirty)}`);
+      assert.ok(!dirty.includes("✅"), `no clean check by default: ${JSON.stringify(dirty)}`);
     } finally {
       if (repoDir) rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
-  it("m_branch|withStatus:true → teal 'main' + green '✓' clean, teal 'main' + brown '*' dirty", () => {
+  it("m_branch|withStatus:true → teal 'main' + green '✅' clean, teal 'main' + brown '🟠' dirty", () => {
     let repoDir: string | undefined;
     try {
       execFileSync("git", ["--version"], { stdio: "ignore", timeout: 1000 });
@@ -2169,16 +2169,16 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     try {
       __resetGitInfoCacheForTest();
       const clean = renderTemplate(["m_branch|withStatus:true"], ctxFor(fakeSnapshot({ cwd: repoDir }))).join("\n");
-      assert.equal(strip(clean), "main✓");
+      assert.equal(strip(clean), "main✅");
       assert.ok(clean.includes("\x1b[38;5;80m"), `branch body should be teal: ${JSON.stringify(clean)}`);
       assert.ok(clean.includes("\x1b[38;5;41m"), `clean suffix should be brightGreen: ${JSON.stringify(clean)}`);
-      assert.ok(clean.includes("✓"), `clean branch has checkmark: ${JSON.stringify(clean)}`);
-      assert.ok(!clean.includes("*"), `clean branch has no star: ${JSON.stringify(clean)}`);
+      assert.ok(clean.includes("✅"), `clean branch has check glyph: ${JSON.stringify(clean)}`);
+      assert.ok(!clean.includes("🟠"), `clean branch has no dirty dot: ${JSON.stringify(clean)}`);
 
       writeFileSync(join(repoDir, "new"), "y");
       __resetGitInfoCacheForTest();
       const dirty = renderTemplate(["m_branch|withStatus:true"], ctxFor(fakeSnapshot({ cwd: repoDir }))).join("\n");
-      assert.equal(strip(dirty), "main*");
+      assert.equal(strip(dirty), "main🟠");
       assert.ok(dirty.includes("\x1b[38;5;80m"), `branch body should be teal: ${JSON.stringify(dirty)}`);
       assert.ok(dirty.includes("\x1b[38;5;130m"), `dirty suffix should be brown: ${JSON.stringify(dirty)}`);
     } finally {
@@ -2217,7 +2217,7 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
         ctxFor(fakeSnapshot({ cwd: repoDir })),
       ).join("\n");
       assert.equal(strip(dirty), "main");
-      assert.ok(!dirty.includes("*"), `withStatus:false dirty has no star: ${JSON.stringify(dirty)}`);
+      assert.ok(!dirty.includes("🟠"), `withStatus:false dirty has no dirty dot: ${JSON.stringify(dirty)}`);
       assert.ok(dirty.includes("\x1b[38;5;80m"), `withStatus:false dirty keeps teal: ${JSON.stringify(dirty)}`);
     } finally {
       if (repoDir) rmSync(repoDir, { recursive: true, force: true });
@@ -2237,24 +2237,61 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
   it("m_branch|color:red|withStatus:true colors the body; suffix keeps its clean/dirty color", () => {
     // process.cwd() is a real git repo during tests; |color|red colors
     // the branch BODY, while the withStatus suffix keeps its status
-    // color (✓ brightGreen when clean, * brown when dirty).
+    // color (✅ brightGreen when clean, 🟠 brown when dirty).
     const out = renderTemplate(
       ["m_branch|color:red|withStatus:true"],
       ctxFor(fakeSnapshot({ cwd: process.cwd() })),
     ).join("\n");
     assert.ok(out.includes("\x1b[38;5;196m"), `got: ${JSON.stringify(out)}`);
     // Prove the real branch rendered (not the "branch:n/a" placeholder
-    // wrapped in red): strip equals branch name + ✓/* suffix.
+    // wrapped in red): strip equals branch name + ✅/🟠 suffix.
     const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: process.cwd() })
       .toString()
       .trim();
     const s = strip(out);
-    assert.ok(s === `${branch}✓` || s === `${branch}*`, `expected branch✓ or branch*, got: ${JSON.stringify(s)}`);
+    assert.ok(s === `${branch}✅` || s === `${branch}🟠`, `expected branch✅ or branch🟠, got: ${JSON.stringify(s)}`);
     // The suffix keeps the status color (not overridden by |color|).
     assert.ok(
       out.includes("\x1b[38;5;41m") || out.includes("\x1b[38;5;130m"),
-      `suffix should be status-colored (green ✓ / brown *): ${JSON.stringify(out)}`,
+      `suffix should be status-colored (green ✅ / brown 🟠): ${JSON.stringify(out)}`,
     );
+  });
+
+  it("m_branch|withStatus:true glyphs honor labels.labelGitClean / labelGitDirty", () => {
+    let repoDir: string | undefined;
+    try {
+      execFileSync("git", ["--version"], { stdio: "ignore", timeout: 1000 });
+    } catch {
+      return; // skip — no git on PATH
+    }
+    repoDir = mkdtempSync(join(tmpdir(), "creditgauge-render-branch-"));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repoDir });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: repoDir });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: repoDir });
+    writeFileSync(join(repoDir, "r"), "x");
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir });
+
+    try {
+      withLabels({ labelGitClean: "C", labelGitDirty: "D" }, () => {
+        __resetGitInfoCacheForTest();
+        const clean = renderTemplate(
+          ["m_branch|withStatus:true"],
+          ctxFor(fakeSnapshot({ cwd: repoDir })),
+        ).join("\n");
+        assert.equal(strip(clean), "mainC", `got: ${JSON.stringify(clean)}`);
+
+        writeFileSync(join(repoDir, "new"), "y");
+        __resetGitInfoCacheForTest();
+        const dirty = renderTemplate(
+          ["m_branch|withStatus:true"],
+          ctxFor(fakeSnapshot({ cwd: repoDir })),
+        ).join("\n");
+        assert.equal(strip(dirty), "mainD", `got: ${JSON.stringify(dirty)}`);
+      });
+    } finally {
+      if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it("m_repo| drops null components", () => {

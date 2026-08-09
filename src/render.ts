@@ -189,9 +189,14 @@ type LabelAxis =
                           // decision 2026-07-12) — the axis is here so the
                           // label is overridable via labels.labelPluginCC
                           // without a follow-up type change.
-  | "pluginMissing";      // vX.X.X+ — m_pluginSource glyph when the matched
+  | "pluginMissing"       // vX.X.X+ — m_pluginSource glyph when the matched
                           // provider id has no plugin (neither user override
                           // nor built-in). Default "❗".
+  // vX.X.X+ — m_branch|withStatus:true clean/dirty suffix glyphs
+  // (defaults "✅" / "🟠"; overridable via labels.labelGitClean /
+  // labels.labelGitDirty).
+  | "gitClean"
+  | "gitDirty";
 function labelFor(axis: LabelAxis): string {
   const labels = cfg().labels;
   switch (axis) {
@@ -243,6 +248,10 @@ function labelFor(axis: LabelAxis): string {
     case "pluginCC":           return labels.labelPluginCC;
     case "pluginMissing":      return labels.labelPluginMissing;
     case "pluginUserDefined":  return labels.labelPluginUserDefined;
+    // vX.X.X+ — m_branch|withStatus:true clean/dirty suffix glyphs.
+    // Defaults "✅" / "🟠" (config.ts:DEFAULT_CONFIG.labels).
+    case "gitClean": return labels.labelGitClean;
+    case "gitDirty": return labels.labelGitDirty;
   }
 }
 
@@ -2974,19 +2983,23 @@ m_quota: Object.assign(
   // Current git branch. v6.x: cwd missing / not a git repo /
   // detached HEAD now emit "branch:n/a" placeholder (was: drop).
   // vX.X.X+ — |withStatus|<true|false> (default false): withStatus
-  // controls ONLY the status suffix and its color — clean → "✓"
-  // brightGreen, dirty → "*" brown (same colors as m_gitStatus). The
+  // controls ONLY the status suffix and its color — clean → "✅"
+  // brightGreen, dirty → "🟠" brown (same colors as m_gitStatus). The
   // branch body itself keeps its original color (teal default). With
   // withStatus unset or "false" there is no suffix (pre-vX.X.X body).
   // readGitInfo is called once per render (the pre-vX.X.X form called
   // it twice).
+  // vX.X.X+ — the suffix glyphs read labels.labelGitClean /
+  // labels.labelGitDirty (defaults "✅" / "🟠") so the clean/dirty
+  // marker is user-overridable via config.json labels.*.
   m_branch: (c) => {
     const info = readGitInfo(c.tokens?.cwd);
     if (info?.branch == null) return placeholderBare("m_branch", c);
     const body = wrapPlainDefault("m_branch", info.branch, undefined);
     if (c.passThrough?.withStatus !== "true") return body;
     const suffixColor = info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN;
-    return `${body}${suffixColor}${info.dirty ? "*" : "✓"}${RESET}`;
+    const glyph = info.dirty ? labelFor("gitDirty") : labelFor("gitClean");
+    return `${body}${suffixColor}${glyph}${RESET}`;
   },
   // Git working-tree cleanliness indicator. v6.x: missing git
   // info → "git:n/a" placeholder (was: drop).
@@ -7036,7 +7049,8 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const body = wrapPlainDefault("m_branch", info.branch, params.color as string | undefined);
     if (params.withStatus !== "true") return body;
     const suffixColor = info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN;
-    return `${body}${suffixColor}${info.dirty ? "*" : "✓"}${RESET}`;
+    const glyph = info.dirty ? labelFor("gitDirty") : labelFor("gitClean");
+    return `${body}${suffixColor}${glyph}${RESET}`;
   },
   m_gitStatus: (params, ctx) => {
     const info = readGitInfo(ctx.tokens?.cwd);

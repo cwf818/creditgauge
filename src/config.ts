@@ -391,6 +391,13 @@ const DEFAULT_CONFIG: {
     // instead of silent — `peekPluginSource` no longer folds
     // `kind="missing"` to null.
     labelPluginMissing: string;
+    // vX.X.X+ — glyphs appended by `m_branch|withStatus:true` to
+    // the branch body for the clean / dirty working-tree state.
+    // Defaults "✅" (clean) / "🟠" (dirty) are the vX.X.X ship
+    // literals; override via labels.labelGitClean /
+    // labels.labelGitDirty.
+    labelGitClean: string;
+    labelGitDirty: string;
   };
   colors: typeof DEFAULT_COLORS;
   cacheHitColors: typeof DEFAULT_CACHE_HIT_COLORS;
@@ -541,6 +548,9 @@ const DEFAULT_CONFIG: {
     labelPluginUserDefined: "🎨",
     labelPluginCC: "🔖",
     labelPluginMissing: "❗",
+    // vX.X.X+ — m_branch|withStatus:true clean/dirty suffix glyphs.
+    labelGitClean: "✅",
+    labelGitDirty: "🟠",
   },
   colors: DEFAULT_COLORS,
   cacheHitColors: DEFAULT_CACHE_HIT_COLORS,
@@ -1175,6 +1185,9 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
         "labelPluginUserDefined",
         "labelPluginCC",
         "labelPluginMissing",
+        // vX.X.X+ — m_branch|withStatus:true clean/dirty suffix glyphs.
+        "labelGitClean",
+        "labelGitDirty",
       ];
       for (const f of fields) {
         if (typeof lm[f] === "string") {
