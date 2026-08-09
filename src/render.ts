@@ -2806,8 +2806,8 @@ const DEFAULT_COLORS: Record<string, string> = {
   m_provider: configStore.get().colors.yellow,
   m_effort: NAMED_PALETTE.magenta,
   m_repo: NAMED_PALETTE.blue,
-  m_gitName: NAMED_PALETTE.magenta,
-  m_dirName: NAMED_PALETTE.magenta,
+  m_gitName: NAMED_PALETTE.purple,
+  m_dirName: NAMED_PALETTE.purple,
   m_branch: NAMED_PALETTE.teal,
   // m_gitStatus is NOT in DEFAULT_COLORS — its color is value-dependent
   // (dirty → brown, clean → bright green) and set inline in the render

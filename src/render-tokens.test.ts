@@ -2239,9 +2239,9 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     assert.equal(strip(out), "creditgauge");
   });
 
-  it("m_gitName| default tint is magenta (玫红)", () => {
+  it("m_gitName| default tint is purple (紫)", () => {
     const out = renderTemplate(["m_gitName"], ctxFor(fakeSnapshot())).join("\n");
-    assert.ok(out.includes("\x1b[38;5;201m"), `got: ${JSON.stringify(out)}`);
+    assert.ok(out.includes("\x1b[38;5;141m"), `got: ${JSON.stringify(out)}`);
   });
 
   it("m_gitName| emits 'n/a' when repo is missing (v6.x placeholder)", () => {
@@ -2265,12 +2265,12 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     assert.equal(strip(out), "creditgauge");
   });
 
-  it("m_dirName| default tint is magenta (玫红)", () => {
+  it("m_dirName| default tint is purple (紫)", () => {
     const out = renderTemplate(
       ["m_dirName"],
       ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
     ).join("\n");
-    assert.ok(out.includes("\x1b[38;5;201m"), `got: ${JSON.stringify(out)}`);
+    assert.ok(out.includes("\x1b[38;5;141m"), `got: ${JSON.stringify(out)}`);
   });
 
   it("m_dirName| emits 'n/a' when cwd is missing (v6.x placeholder)", () => {
