@@ -590,12 +590,15 @@ export function writePrevTickStatus(
 
 // Declared for future opt-in; the read path no longer compares against it.
 export const LAST_ACTIVE_TTL_MS = 60_000;
-// Sanity ceiling on the per-tick apiMs sample: values at or above this
-// bound are rejected so a pathological stdin reading (clock skew,
-// provider bug, stale baseline) can't pollute the JSONL stream / the
-// accApiMs sum. NOT a fetch timeout (that's config-driven in index.ts
-// via AbortSignal.timeout). 5min — above any realistic per-tick call
-// (typically <60s), below the 10min "pathological" marker.
+// Sanity ceiling on the per-tick apiMs raw delta. A raw delta
+// (totalApiMs - prevTotalApiMs) above this bound means the prev
+// baseline is stale (long gap without invocations, or a single call
+// blew the ceiling) — normalizeTick back-derives apiMs and setPrevTick
+// re-anchors the baseline, so the pathological value never reaches the
+// JSONL stream / the accApiMs sum. NOT a fetch timeout (that's
+// config-driven in index.ts via AbortSignal.timeout). 5min — above any
+// realistic per-tick call (typically <60s), below the 10min
+// "pathological" marker.
 export const MAX_SAMPLE_API_MS = 300_000;
 
 export function readLastActive(
@@ -1283,9 +1286,23 @@ function normalizeTick(
   // apiMs is THE unique cross-tick delta. With no prev baseline (first
   // tick after install/cache wipe), back-derive from tokenOut via the
   // legacy v0.4.x formula: tokenOut * 1000 / 50 (50 t/s fall-back rate).
-  const apiMs = invalidRegression || prevTotalApiMs === null
-      ? (out_ * 1000) / 50
-      : totalApiMs - prevTotalApiMs;
+  // A raw delta above MAX_SAMPLE_API_MS means the prev baseline is stale
+  // (the statusline wasn't invoked for a long stretch while totalApiMs
+  // kept growing, or a single call blew the ceiling). Back-derive this
+  // tick so setPrevTick re-anchors the baseline to the current totalApiMs
+  // and the NEXT tick computes a normal delta. Without this re-anchor the
+  // stale baseline never advances and every tick stays invalid forever —
+  // a permanent lockout (state.json + samples + acc* scopes all freeze).
+  const rawDelta = prevTotalApiMs === null ? null : totalApiMs - prevTotalApiMs;
+  const staleBaseline = rawDelta !== null && rawDelta > MAX_SAMPLE_API_MS;
+  // if/else (not a ternary) so TS narrows rawDelta to non-null on the
+  // normal path.
+  let apiMs: number;
+  if (invalidRegression || rawDelta === null || staleBaseline) {
+    apiMs = (out_ * 1000) / 50;
+  } else {
+    apiMs = rawDelta;
+  }
   const cachedIn = tokens.current.tokenCachedIn ?? 0;
   const hasCachedIn = tokens.current.tokenCachedIn != null;
   // Validation gate (user contract): totalOut > 0 && apiMs > 0. totalIn
@@ -1366,8 +1383,10 @@ function normalizeTick(
 function validateNormalizedTick(tick: CurrentTick | null): boolean {
   if (!tick) return false;
   // Validation gate (per user contract): totalOut > 0 && apiMs > 0,
-  // plus the MAX_SAMPLE_API_MS sanity ceiling (apiMs <= 5min; rejects
-  // clock-skew / provider-bug readings that would pollute the JSONL).
+  // plus the MAX_SAMPLE_API_MS sanity ceiling as a final net. Stale
+  // baselines self-heal in normalizeTick (back-derive + re-anchor), so
+  // this only fires for a back-derived apiMs that is itself pathological
+  // (e.g. a stale-baseline tick with an enormous tokenOut).
   return (tick.totalOut ?? 0) > 0 && tick.apiMs > 0 && tick.apiMs <= MAX_SAMPLE_API_MS;
 }
 

@@ -403,13 +403,17 @@ describe("data-processor — contextUsedPercent=0 carry-over (v0.8.15-alpha)", (
   });
 });
 
-// v0.8.24 — sanity ceiling on the per-tick apiMs sample: the gate
-// rejects apiMs >= MAX_SAMPLE_API_MS so a pathological stdin reading
-// can't pollute the sample stream / accApiMs accumulator. IMPORTANT:
-// on the FIRST tick normalizeTick back-derives apiMs from tokenOut
-// via `(out * 1000) / 50`, so each test seeds a prev tick with
+// v0.8.24 — sanity ceiling on the per-tick apiMs sample. A raw delta
+// (totalApiMs - prevTotalApiMs) above MAX_SAMPLE_API_MS means the prev
+// baseline is stale, NOT that the tick must be dropped forever: the
+// ceiling is self-healing — normalizeTick back-derives apiMs from
+// tokenOut and setPrevTick re-anchors the baseline (see
+// status-store.ts:normalizeTick). The pathological raw value never
+// reaches the sample stream / accApiMs accumulator. IMPORTANT: on the
+// FIRST tick normalizeTick back-derives apiMs from tokenOut via
+// `(out * 1000) / 50`, so each test seeds a prev tick with
 // totalApiMs=0 first (next beginTick computes apiMs = totalApiMs).
-describe("data-processor — MAX_SAMPLE_API_MS sanity ceiling (v0.8.24)", () => {
+describe("data-processor — MAX_SAMPLE_API_MS sanity ceiling + stale-baseline self-heal", () => {
   // Lock the constant value via an explicit import. If someone
   // bumps the constant, the test that asserts equality below
   // goes red so the intent is preserved (vs. silently testing a
@@ -435,38 +439,121 @@ describe("data-processor — MAX_SAMPLE_API_MS sanity ceiling (v0.8.24)", () => 
   };
 
   it("apiMs = MAX_SAMPLE_API_MS → valid (boundary, inclusive upper bound)", () => {
-    // The gate is `tick.apiMs <= MAX_SAMPLE_API_MS` (inclusive),
-    // so the boundary value itself is still accepted. The gate
-    // fires on the next ms above. This matches the contract
-    // documented at src/status-store.ts:MAX_SAMPLE_API_MS.
+    // The ceiling is `tick.apiMs <= MAX_SAMPLE_API_MS` (inclusive): the
+    // boundary value is a normal delta (rawDelta === MAX is not yet
+    // stale), so it passes through as-is and stays valid.
     seedPrevBaseline();
     statusStore.beginTick("D:\\test", validTokens({
       cost: { totalDurationMs: 500_000, totalApiDurationMs: MAX_SAMPLE_API_MS, totalLinesAdded: 0, totalLinesRemoved: 0 },
     }));
     assert.equal(statusStore.getState().valid, true,
       "v0.8.24 — apiMs at the ceiling is accepted by the sanity gate");
+    assert.equal(statusStore.getState().snapshot!.apiMs, MAX_SAMPLE_API_MS,
+      "boundary delta passes through unchanged (not yet stale)");
   });
 
-  it("apiMs = MAX_SAMPLE_API_MS + 1 → invalid (one above the ceiling)", () => {
+  it("apiMs = MAX_SAMPLE_API_MS + 1 → stale baseline: valid + back-derived (self-heal)", () => {
+    // One ms above the ceiling means the prev baseline is stale — the
+    // tick self-heals instead of being rejected forever (the raw delta
+    // is discarded; apiMs is back-derived from tokenOut).
     seedPrevBaseline();
     statusStore.beginTick("D:\\test", validTokens({
       cost: { totalDurationMs: 500_000, totalApiDurationMs: MAX_SAMPLE_API_MS + 1, totalLinesAdded: 0, totalLinesRemoved: 0 },
     }));
-    assert.equal(statusStore.getState().valid, false,
-      "v0.8.24 — apiMs one ms above the ceiling is rejected");
+    const s = statusStore.getState();
+    assert.equal(s.valid, true,
+      "v0.9.x — one ms above the ceiling self-heals (valid, not rejected)");
+    assert.equal(s.snapshot!.apiMs, 1000,
+      "apiMs back-derived from tokenOut (50 * 1000 / 50), not the 300001ms raw delta");
   });
 
-  it("apiMs = 10 * MAX_SAMPLE_API_MS → invalid (far above ceiling)", () => {
-    // A truly pathological reading (10× the 5min ceiling = 50min
-    // of "apiMs" — far beyond any reasonable per-tick duration).
-    // Must be rejected so it cannot contaminate the per-session
-    // accApiMs sum.
+  it("apiMs = 10 * MAX_SAMPLE_API_MS → stale baseline: valid, back-derived, no accApiMs pollution", () => {
+    // A truly pathological raw delta (10× the 5min ceiling = 50min).
+    // The raw value never contaminates the per-session accApiMs sum:
+    // apiMs is back-derived to a sane value and the tick stays valid so
+    // the baseline re-anchors (no permanent lockout).
     seedPrevBaseline();
     statusStore.beginTick("D:\\test", validTokens({
       cost: { totalDurationMs: 500_000, totalApiDurationMs: 10 * MAX_SAMPLE_API_MS, totalLinesAdded: 0, totalLinesRemoved: 0 },
     }));
-    assert.equal(statusStore.getState().valid, false,
-      "v0.8.24 — apiMs far above the ceiling is rejected");
+    const s = statusStore.getState();
+    assert.equal(s.valid, true,
+      "v0.9.x — far-above-ceiling raw delta self-heals (valid, not rejected)");
+    assert.equal(s.snapshot!.apiMs, 1000,
+      "apiMs back-derived — the 50min pathological value is discarded");
+  });
+
+  // Stale-baseline self-heal (v0.9.x): a raw delta above the ceiling is
+  // NOT a permanent rejection — it means the prev baseline is stale (the
+  // statusline wasn't invoked for a long stretch while totalApiMs kept
+  // growing, e.g. yunbisai 2026-08-09). Back-derive apiMs this tick so
+  // setPrevTick re-anchors the baseline; the next tick computes a normal
+  // delta. Without this, every tick repeats the bogus delta → invalid →
+  // baseline never advances → permanent lockout (state.json / samples /
+  // acc* scopes all freeze).
+  const seedPrevBaselineAt = (totalApiMs: number): void => {
+    statusStore.beginTick("D:\\test", validTokens());
+    statusStore.mark(statusStore.PREV_TICK_KEY, {
+      ...statusStore.emptyPrevTickStatus(),
+      totalApiMs,
+      totalDurationMs: 500_000,
+      sessionId: "sess-test",
+      cwd: "D:\\test",
+      model: null,
+    });
+    statusStore.commit();
+    statusStore.resetTickStateForTest();
+  };
+
+  it("stale baseline (delta > MAX_SAMPLE_API_MS) → valid, apiMs back-derived, baseline re-anchors", () => {
+    seedPrevBaselineAt(100_000);
+    const tokens = validTokens({
+      cost: {
+        totalDurationMs: 500_000,
+        totalApiDurationMs: 100_000 + MAX_SAMPLE_API_MS + 1,
+        totalLinesAdded: 0,
+        totalLinesRemoved: 0,
+      },
+    });
+    const r = statusStore.processAndSaveTick("D:\\test", tokens, null);
+    assert.equal(r.valid, true,
+      "stale baseline self-heals: the tick must be valid so setPrevTick can advance the baseline");
+    // Back-derived via (out * 1000) / 50 = 50 * 20 = 1000 — NOT the
+    // 300001ms bogus raw delta.
+    assert.equal(r.snapshot!.apiMs, 1000,
+      "apiMs is back-derived from tokenOut, not the bogus raw delta");
+    // Baseline re-anchored to the current totalApiMs.
+    const prev = statusStore.readPrevTickStatus("D:\\test");
+    assert.equal(prev!.totalApiMs, 100_000 + MAX_SAMPLE_API_MS + 1,
+      "baseline advanced to the current totalApiMs so the next tick computes a normal delta");
+    assert.equal(r.wroteSample, true,
+      "self-healed tick is a real measurement → sample appended");
+  });
+
+  it("next tick after a stale-baseline re-anchor computes a normal delta", () => {
+    seedPrevBaselineAt(100_000);
+    // First tick self-heals + re-anchors the baseline.
+    statusStore.processAndSaveTick("D:\\test", validTokens({
+      cost: {
+        totalDurationMs: 500_000,
+        totalApiDurationMs: 100_000 + MAX_SAMPLE_API_MS + 1,
+        totalLinesAdded: 0,
+        totalLinesRemoved: 0,
+      },
+    }), null);
+    statusStore.resetTickStateForTest();
+    // Second tick: totalApiMs advances by a normal 5000ms.
+    const r2 = statusStore.processAndSaveTick("D:\\test", validTokens({
+      cost: {
+        totalDurationMs: 500_000,
+        totalApiDurationMs: 100_000 + MAX_SAMPLE_API_MS + 1 + 5000,
+        totalLinesAdded: 0,
+        totalLinesRemoved: 0,
+      },
+    }), null);
+    assert.equal(r2.valid, true);
+    assert.equal(r2.snapshot!.apiMs, 5000,
+      "normal delta after re-anchor — no more stale baseline");
   });
 });
 
