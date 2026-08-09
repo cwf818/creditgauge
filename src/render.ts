@@ -2790,8 +2790,8 @@ const NAMED_PALETTE: Record<string, string> = {
 const DEFAULT_COLORS: Record<string, string> = {
   // String-class identifiers / metadata
   m_session: NAMED_PALETTE.purple,
-  m_model: NAMED_PALETTE.cyan,
-  m_provider: NAMED_PALETTE.blue,
+  m_model: configStore.get().colors.orange,
+  m_provider: configStore.get().colors.yellow,
   m_effort: NAMED_PALETTE.magenta,
   m_repo: NAMED_PALETTE.blue,
   m_branch: NAMED_PALETTE.teal,

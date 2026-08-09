@@ -1899,6 +1899,19 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     assert.ok(strip(out).includes("deepseek"), "expected deepseek text");
   });
 
+  it("m_provider default color is yellow (no |color| override)", () => {
+    const out = renderTemplate(
+      ["m_provider"],
+      { ...ctxFor(fakeSnapshot()), currentProvider: "minimax" },
+    ).join("\n");
+    assert.ok(out.includes(YELLOW), `expected yellow SGR in: ${JSON.stringify(out)}`);
+  });
+
+  it("m_model default color is orange (no |color| override)", () => {
+    const out = renderTemplate(["m_model"], ctxFor(fakeSnapshot())).join("\n");
+    assert.ok(out.includes(ORANGE), `expected orange SGR in: ${JSON.stringify(out)}`);
+  });
+
   it("m_effort| bare 'high'", () => {
     const out = renderTemplate(["m_effort"], ctxFor(fakeSnapshot())).join("\n");
     assert.equal(strip(out), "high");
