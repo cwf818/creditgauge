@@ -1237,9 +1237,9 @@ describe("m_countdown5h/7d — stale AND past-due renders '<arrow>n/a·5h' in ST
     }
   });
 
-  it("bare m_countdown5h keeps default teal when stale=true but resetAt is still in the future", () => {
-    // stale-only (no past-due): the cached countdown is still
-    // truthful within the fetch window; do not gray.
+  it("bare m_countdown5h forces STALE_COLOR when resetAt is still in the future", () => {
+    // Stale data keeps its useful future countdown body, but every
+    // stale countdown body is gray so it cannot look authoritative.
     const nowMs = Date.parse("2026-06-24T12:00:00Z");
     __resetForTest({
       statuslineTemplate: ["m_countdown|term:short"],
@@ -1258,8 +1258,12 @@ describe("m_countdown5h/7d — stale AND past-due renders '<arrow>n/a·5h' in ST
         `stale-but-future should keep its real countdown: ${clean}`,
       );
       assert.ok(
-        !line.includes(STALE_COLOR),
-        `stale-but-future should NOT use STALE_COLOR: ${line}`,
+        line.includes(`${STALE_COLOR}🕛30m`),
+        `stale-but-future should wrap the real countdown in STALE_COLOR: ${line}`,
+      );
+      assert.ok(
+        !line.includes(TEAL_DEFAULT),
+        `stale-but-future should not use the default teal: ${line}`,
       );
     } finally {
       __resetForTest();
@@ -1294,10 +1298,9 @@ describe("m_countdown5h/7d — stale AND past-due renders '<arrow>n/a·5h' in ST
     }
   });
 
-  it("inline :color:red wins over the stale+past-due STALE_COLOR override", () => {
-    // Same precedence rule as m_windowQuota*: an explicit :color:
-    // always wins. But the BODY swap to n/a still happens — only
-    // the color is overridden.
+  it("stale+past-due forces STALE_COLOR over inline :color:red", () => {
+    // Stale is a data-confidence marker, so it wins over an explicit
+    // color override. The BODY swap to n/a still happens.
     const nowMs = Date.parse("2026-06-24T12:00:00Z");
     __resetForTest({
       statuslineTemplate: ["m_countdown|term:short|color:" + RED],
@@ -1316,13 +1319,37 @@ describe("m_countdown5h/7d — stale AND past-due renders '<arrow>n/a·5h' in ST
         `explicit :color: should still swap body to n/a: ${clean}`,
       );
       assert.ok(
-        line.includes(`${RED}🕛n/a`),
-        `explicit :color: should override STALE_COLOR on the wrap: ${line}`,
+        line.includes(`${STALE_COLOR}🕛n/a`),
+        `stale must force STALE_COLOR even with explicit :color: ${line}`,
       );
       assert.ok(
-        !line.includes(STALE_COLOR),
-        `explicit :color: should NOT also inject STALE_COLOR: ${line}`,
+        !line.includes(RED),
+        `stale must suppress the explicit red override: ${line}`,
       );
+    } finally {
+      __resetForTest();
+    }
+  });
+
+  it("inline future countdown forces STALE_COLOR over :color:red", () => {
+    const nowMs = Date.parse("2026-06-24T12:00:00Z");
+    __resetForTest({
+      statuslineTemplate: ["m_countdown|term:short|color:" + RED],
+      timeFormat: { minUnit: "m", maxUnitCount: 2 },
+    });
+    try {
+      const line = renderProviderLine("minimax", {
+        mode: "used", nowMs,
+        shortInterval: winToIv({ pct: 30, resetAt: new Date(nowMs + 30 * 60_000).toISOString() }),
+        midInterval: null, longInterval: null,
+        balance: null,
+        ageMs: 5 * 60_000, stale: true, version: "",
+      });
+      const clean = strip(line);
+      assert.ok(clean.includes("30m·5h"), `stale future body should stay useful: ${clean}`);
+      assert.ok(line.includes(`${STALE_COLOR}🕛30m`), `stale future body should be gray: ${line}`);
+      assert.ok(!line.includes(RED), `stale should suppress inline red: ${line}`);
+      assert.ok(!line.includes(TEAL_DEFAULT), `stale should suppress default teal: ${line}`);
     } finally {
       __resetForTest();
     }
@@ -2069,6 +2096,89 @@ describe("m_quota band color (vX.X.X+)", () => {
       assert.ok(
         !line.includes(BRIGHT_GREEN),
         `BRIGHT_GREEN band must NOT appear when :color:red is set, got: ${strip(line)}`,
+      );
+    } finally {
+      __resetForTest();
+    }
+  });
+
+  it("stale=true forces STALE_COLOR over the band color", () => {
+    // Stale is a data-confidence marker: even when a usable ratio
+    // exists (60% → band 0 brightGreen normally), the digit must
+    // render gray so it cannot look authoritative.
+    try {
+      __resetForTest({
+        statuslineTemplate: ["m_quota|term:long"],
+        timeFormat: { minUnit: "m", maxUnitCount: 2 },
+      });
+      const line = renderProviderLine("minimax", {
+        mode: "used", nowMs,
+        shortInterval: null,
+        midInterval: null,
+        longInterval: {
+          windowId: "30d",
+          label: "30d",
+          startAt: null, endAt: null, intervalMs: null,
+          usedPercent: null, remainingPercent: null,
+          remainingQuota: null,
+          usedQuota: 900,
+          limitQuota: 1500,
+        },
+        balance: null,
+        ageMs: 5 * 60_000, stale: true, version: "",
+      });
+      assert.ok(
+        strip(line).includes("quota: 900/1500"),
+        `stale quota should keep its body, got: ${strip(line)}`,
+      );
+      assert.ok(
+        line.includes(`${sgr(STALE)}900${"\x1b[0m"}/1500`),
+        `stale quota digit should be STALE_COLOR, got: ${strip(line)}`,
+      );
+      assert.ok(
+        !line.includes(BRIGHT_GREEN),
+        `stale quota digit should NOT use the band color, got: ${strip(line)}`,
+      );
+    } finally {
+      __resetForTest();
+    }
+  });
+
+  it("stale=true forces STALE_COLOR over inline :color:red", () => {
+    // Stale precedence extends to the inline override path: the
+    // explicit user color must NOT win over the stale gray.
+    try {
+      __resetForTest({
+        statuslineTemplate: ["m_quota|term:long|display:used|color:" + RED],
+        timeFormat: { minUnit: "m", maxUnitCount: 2 },
+      });
+      const line = renderProviderLine("minimax", {
+        mode: "used", nowMs,
+        shortInterval: null,
+        midInterval: null,
+        longInterval: {
+          windowId: "30d",
+          label: "30d",
+          startAt: null, endAt: null, intervalMs: null,
+          usedPercent: null, remainingPercent: null,
+          remainingQuota: null,
+          usedQuota: 900,
+          limitQuota: 1500,
+        },
+        balance: null,
+        ageMs: 5 * 60_000, stale: true, version: "",
+      });
+      assert.ok(
+        strip(line).includes("quota: 900/1500"),
+        `stale quota should keep its body, got: ${strip(line)}`,
+      );
+      assert.ok(
+        line.includes(`${sgr(STALE)}900${"\x1b[0m"}/1500`),
+        `stale quota digit should be STALE_COLOR, got: ${strip(line)}`,
+      );
+      assert.ok(
+        !line.includes(RED),
+        `stale should suppress the inline red override, got: ${strip(line)}`,
       );
     } finally {
       __resetForTest();

@@ -369,6 +369,97 @@ export function splitBar(
   };
 }
 
+// vX.X.X+ — experimental centered-bar label. Builds the bar as per-display-
+// column cells; each cell's color is POSITIONAL (colored side = the metric-of-
+// concern side), independent of glyph content. `label` (already ≤4 code points)
+// is overlaid at the display-column center, replacing the cell glyphs but
+// keeping each cell's positional color (so `label:5h` and `label:▓▓` color
+// identically). `coloredColor` is the metric tint (band color / user |color|
+// override / STALE_COLOR). No label → byte-identical to the legacy splitBar
+// layout (one colored run + one plain run).
+function splitBarLabeled(
+  usedPct: number,
+  mode: DisplayMode,
+  width: number,
+  label: string | undefined,
+  coloredColor: string,
+): { leftChunk: string; rightChunk: string; color: string } {
+  const used = Math.max(0, Math.min(100, usedPct));
+  const remaining = 100 - used;
+  const displayed = mode === "remaining" ? remaining : used;
+  const coloredSize = Math.round((displayed / 100) * width);
+  const plainSize = Math.max(0, width - coloredSize);
+
+  const filled = cfg().bar.filled;
+  const empty = cfg().bar.empty;
+
+  const cells: { glyph: string; color: string | undefined }[] = [];
+  for (let i = 0; i < width; i++) {
+    const isColored = mode === "used" ? i < coloredSize : i >= plainSize;
+    const glyph = mode === "used"
+      ? (i < coloredSize ? filled : empty)
+      : (i < plainSize ? empty : filled);
+    cells.push({ glyph, color: isColored ? coloredColor : undefined });
+  }
+
+  if (label) overlayBarLabel(cells, width, label);
+
+  // Serialize consecutive same-color cells into single SGR runs. Wide-char
+  // spacer cells (glyph === "") are invisible and keep the current run intact.
+  let body = "";
+  let runColor: string | undefined;
+  let run = "";
+  const flush = () => {
+    if (run !== "") body += runColor ? `${runColor}${run}${RESET}` : run;
+    run = "";
+  };
+  for (const cell of cells) {
+    if (cell.glyph === "") continue;
+    if (cell.color !== runColor) {
+      flush();
+      runColor = cell.color;
+    }
+    run += cell.glyph;
+  }
+  flush();
+
+  return { leftChunk: body, rightChunk: "", color: coloredColor };
+}
+
+// Overlay `label` centered on a width-cell bar (per display column). Label
+// chars replace the cell glyphs but KEEP the cells' positional colors. Truncates
+// the label to fit `width` display columns; wide chars (CJK/emoji) occupy 2
+// columns via charDisplayWidth.
+function overlayBarLabel(
+  cells: { glyph: string; color: string | undefined }[],
+  width: number,
+  label: string,
+): void {
+  const kept: string[] = [];
+  let labelW = 0;
+  for (const ch of label) {
+    const w = charDisplayWidth(ch);
+    if (w === 0) continue; // control / zero-width chars render nothing
+    if (labelW + w > width) break;
+    kept.push(ch);
+    labelW += w;
+  }
+  if (kept.length === 0) return;
+  const start = Math.floor((width - labelW) / 2);
+  let col = start;
+  for (const ch of kept) {
+    const w = charDisplayWidth(ch);
+    cells[col] = { glyph: ch, color: cells[col].color };
+    if (w === 2) {
+      // A wide glyph occupies 2 display columns but renders once: blank out the
+      // next column as a zero-width spacer so the bar's display width stays
+      // `width` (splitBarLabeled's serializer skips empty-glyph cells).
+      cells[col + 1] = { glyph: "", color: undefined };
+    }
+    col += w;
+  }
+}
+
 // Backwards-compatible simple "filled on left" bar — exported for tests but
 // not used by the render pipeline anymore.
 export function pctBar(usedPctValue: number, width = configStore.get().bar.width): { filled: string; empty: string } {
@@ -514,18 +605,23 @@ function renderQuotaParts(
 // prefix/limit tail stays plain. `userColor` overrides the band (same
 // precedence as every inline module's :color|); axisPct==null → STALE_COLOR
 // (matches the m_window* "no percent → gray" convention).
+// `stale` takes highest precedence: when true, the digit is forced to
+// STALE_COLOR regardless of userColor or band color.
 function wrapQuotaBody(
   parts: NonNullable<ReturnType<typeof renderQuotaParts>>,
   mode: DisplayMode,
   userColor: string | undefined,
   valueOnly: boolean = false,
+  stale: boolean = false,
 ): string {
   const total = parts.total == null ? "--" : `${parts.total}`;
-  // Pick the tint: user override wins; else band color when
-  // ratio is known; else STALE_COLOR (matches m_window*'s
+  // Pick the tint: stale wins first; then user override; else band color
+  // when ratio is known; else STALE_COLOR (matches m_window*'s
   // "no percent → gray" convention).
   let tint: string;
-  if (userColor) {
+  if (stale) {
+    tint = STALE_COLOR;
+  } else if (userColor) {
     tint = userColor;
   } else if (parts.axisPct == null) {
     tint = STALE_COLOR;
@@ -558,39 +654,19 @@ function formatOneChunk(
   w: Window,
   mode: DisplayMode,
   width = cfg().bar.width,
-  // stale=true → the WHOLE colored span (bar chunks + percent tail) wraps in
-  // STALE_COLOR ("this number is from a failed fetch"). splitBar() is left
-  // untouched (tests assert on its .color), so we rebuild the colored chunks
-  // here; the plain side stays plain. Inline :color| overrides still win.
   stale: boolean = false,
+  label?: string,
 ): string {
   const usedPct = Math.max(0, Math.min(100, Math.round(w.pct)));
   const remainingPct = 100 - usedPct;
   const displayedPct = mode === "remaining" ? remainingPct : usedPct;
-  const bar = splitBar(usedPct, mode, width);
-  if (!stale) {
-    return `${bar.leftChunk}${bar.rightChunk} ${bar.color}${displayedPct}%${RESET}`;
-  }
-  // Rewrite the colored chunks + percent tail in STALE_COLOR; the plain side
-  // stays plain so the used/remaining shape is still readable.
-  const filled = cfg().bar.filled;
-  const empty = cfg().bar.empty;
-  const coloredSize = Math.round((displayedPct / 100) * width);
-  const plainSize = Math.max(0, width - coloredSize);
-  let leftChunk: string;
-  let rightChunk: string;
-  if (mode === "used") {
-    const left = filled.repeat(coloredSize);
-    const right = empty.repeat(plainSize);
-    leftChunk = coloredSize > 0 ? `${STALE_COLOR}${left}${RESET}` : "";
-    rightChunk = right;
-  } else {
-    const left = empty.repeat(plainSize);
-    const right = filled.repeat(coloredSize);
-    leftChunk = left;
-    rightChunk = coloredSize > 0 ? `${STALE_COLOR}${right}${RESET}` : "";
-  }
-  return `${leftChunk}${rightChunk} ${STALE_COLOR}${displayedPct}%${RESET}`;
+  // stale=true → the WHOLE colored span (bar cells + percent tail) uses
+  // STALE_COLOR ("this number is from a failed fetch"); the plain side stays
+  // plain so the used/remaining shape stays readable. Inline :color| overrides
+  // still win (the colored-override path routes through formatOneChunkColored).
+  const coloredColor = stale ? STALE_COLOR : colorFor(displayedPct, mode);
+  const bar = splitBarLabeled(usedPct, mode, width, label, coloredColor);
+  return `${bar.leftChunk}${bar.rightChunk} ${bar.color}${displayedPct}%${RESET}`;
 }
 
 // Same layout as formatOneChunk but the colored side + percentage wrap in
@@ -601,25 +677,13 @@ function formatOneChunkColored(
   mode: DisplayMode,
   override: string,
   width = cfg().bar.width,
+  label?: string,
 ): string {
   const usedPct = Math.max(0, Math.min(100, Math.round(w.pct)));
   const remainingPct = 100 - usedPct;
   const displayedPct = mode === "remaining" ? remainingPct : usedPct;
-  const filled = cfg().bar.filled;
-  const empty = cfg().bar.empty;
-  const coloredSize = Math.round((displayedPct / 100) * width);
-  const plainSize = Math.max(0, width - coloredSize);
-  if (mode === "used") {
-    const left = filled.repeat(coloredSize);
-    const right = empty.repeat(plainSize);
-    const leftChunk = coloredSize > 0 ? `${override}${left}${RESET}` : "";
-    return `${leftChunk}${right} ${override}${displayedPct}%${RESET}`;
-  }
-  // mode === "remaining"
-  const left = empty.repeat(plainSize);
-  const right = filled.repeat(coloredSize);
-  const rightChunk = coloredSize > 0 ? `${override}${right}${RESET}` : "";
-  return `${left}${rightChunk} ${override}${displayedPct}%${RESET}`;
+  const bar = splitBarLabeled(usedPct, mode, width, label, override);
+  return `${bar.leftChunk}${bar.rightChunk} ${bar.color}${displayedPct}%${RESET}`;
 }
 
 // |valueOnly|true variant: just the colored percentage (e.g. "81%"), no bar
@@ -1421,7 +1485,9 @@ m_countdown: Object.assign(
     if (isStaleAndPastDue(w, c.stale, c.nowMs)) {
       return `${STALE_COLOR}${formatStalePastDueResetSuffix(iv.label, w, c.nowMs)}${RESET}`;
     }
-    return wrapPlainDefault("m_countdown", formatOneResetSuffix(iv.label, w, c.nowMs), undefined);
+    const body = formatOneResetSuffix(iv.label, w, c.nowMs);
+    if (c.stale) return `${STALE_COLOR}${body}${RESET}`;
+    return wrapPlainDefault("m_countdown", body, undefined);
   }),
   { type: "quota" as const },
 ),
@@ -1436,7 +1502,13 @@ m_quota: Object.assign(
     if (!iv) return placeholderBare("m_quota", c);
     const parts = renderQuotaParts(iv, c.mode);
     if (!parts) return placeholderBare("m_quota", c);
-    return wrapQuotaBody(parts, c.mode, undefined, c.passThrough?.valueOnly === "true");
+    return wrapQuotaBody(
+      parts,
+      c.mode,
+      undefined,
+      c.passThrough?.valueOnly === "true",
+      c.stale,
+    );
   }),
   { type: "quota" as const },
 ),
@@ -2003,23 +2075,29 @@ m_quota: Object.assign(
   // strictly opt-in via lineTemplate.
 
   // Session name (stdin.session_name); missing → "n/a" placeholder.
-  m_session: (c) => c.tokens?.sessionName ? wrapPlainDefault("m_session", c.tokens.sessionName, undefined) : placeholderBare("m_session", c),
+  m_session: (c) => c.tokens?.sessionName
+    ? wrapPlainDefault("m_session", applyWidthLimit(c.tokens.sessionName, resolveWidth({}, c)), undefined)
+    : placeholderBare("m_session", c),
   // Model display name (stdin.model.display_name); missing → "n/a".
-  m_model: (c) => c.tokens?.modelDisplayName ? wrapPlainDefault("m_model", c.tokens.modelDisplayName, undefined) : placeholderBare("m_model", c),
+  m_model: (c) => c.tokens?.modelDisplayName
+    ? wrapPlainDefault("m_model", applyWidthLimit(c.tokens.modelDisplayName, resolveWidth({}, c)), undefined)
+    : placeholderBare("m_model", c),
   // Active provider instance id (e.g. "minimax"). When unmatched but
   // ANTHROPIC_BASE_URL is set, extracts the hostname (protocol/port/sub-paths
   // stripped). Both absent → "n/a" placeholder.
   m_provider: (c) => {
-    if (c.currentProvider) return wrapPlainDefault("m_provider", c.currentProvider, undefined);
+    if (c.currentProvider) return wrapPlainDefault("m_provider", applyWidthLimit(c.currentProvider, resolveWidth({}, c)), undefined);
     const raw = process.env.ANTHROPIC_BASE_URL;
     if (raw) {
-      try { return wrapPlainDefault("m_provider", new URL(raw).hostname.toLowerCase(), undefined); }
+      try { return wrapPlainDefault("m_provider", applyWidthLimit(new URL(raw).hostname.toLowerCase(), resolveWidth({}, c)), undefined); }
       catch { /* invalid URL → fall through */ }
     }
     return placeholderBare("m_provider", c);
   },
   // Effort level (stdin.effort, already coerced to string); missing → "n/a".
-  m_effort: (c) => c.tokens?.effort ? wrapPlainDefault("m_effort", c.tokens.effort, undefined) : placeholderBare("m_effort", c),
+  m_effort: (c) => c.tokens?.effort
+    ? wrapPlainDefault("m_effort", applyWidthLimit(c.tokens.effort, resolveWidth({}, c)), undefined)
+    : placeholderBare("m_effort", c),
   // Repository identity (stdin.workspace.repo); no component → "n/a".
   m_repo: (c) => {
     const r = c.tokens?.repo;
@@ -2027,20 +2105,26 @@ m_quota: Object.assign(
     const parts = [r.host, r.owner, r.name].filter(
       (p): p is string => p != null && p.length > 0,
     );
-    return parts.length > 0 ? wrapPlainDefault("m_repo", parts.join("/"), undefined) : placeholderBare("m_repo", c);
+    if (parts.length === 0) return placeholderBare("m_repo", c);
+    return wrapPlainDefault("m_repo", applyWidthLimit(parts.join("/"), resolveWidth({}, c)), undefined);
   },
   // Repo name only (stdin.workspace.repo.name); missing/empty → "n/a".
   m_gitName: (c) => {
     const n = c.tokens?.repo?.name;
-    return n != null && n.length > 0 ? wrapPlainDefault("m_gitName", n, undefined) : placeholderBare("m_gitName", c);
+    if (n == null || n.length === 0) return placeholderBare("m_gitName", c);
+    return wrapPlainDefault("m_gitName", applyWidthLimit(n, resolveWidth({}, c)), undefined);
   },
   // Current directory basename (stdin.cwd); missing or root → "n/a".
   m_dirName: (c) => {
     const n = c.tokens?.cwd ? path.basename(c.tokens.cwd) : "";
-    return n.length > 0 ? wrapPlainDefault("m_dirName", n, undefined) : placeholderBare("m_dirName", c);
+    if (n.length === 0) return placeholderBare("m_dirName", c);
+    const body = applyWidthLimit(n, resolveWidth({}, c));
+    return wrapPlainDefault("m_dirName", body, undefined);
   },
   // Claude Code CLI version (stdin.version); missing → "n/a".
-  m_ccVersion: (c) => c.tokens?.ccversion ? wrapPlainDefault("m_ccVersion", c.tokens.ccversion, undefined) : placeholderBare("m_ccVersion", c),
+  m_ccVersion: (c) => c.tokens?.ccversion
+    ? wrapPlainDefault("m_ccVersion", applyWidthLimit(c.tokens.ccversion, resolveWidth({}, c)), undefined)
+    : placeholderBare("m_ccVersion", c),
   // Current git branch; missing git info → "branch:n/a" placeholder.
   // |withStatus|<true|false> (default false): controls ONLY the status suffix
   // and its color — clean → "✅" brightGreen, dirty → "🟠" brown (same colors
@@ -2049,7 +2133,7 @@ m_quota: Object.assign(
   m_branch: (c) => {
     const info = readGitInfo(c.tokens?.cwd);
     if (info?.branch == null) return placeholderBare("m_branch", c);
-    const body = wrapPlainDefault("m_branch", info.branch, undefined);
+    const body = wrapPlainDefault("m_branch", applyWidthLimit(info.branch, resolveWidth({}, c)), undefined);
     if (c.passThrough?.withStatus !== "true") return body;
     const suffixColor = info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN;
     const glyph = info.dirty ? labelFor("gitDirty") : labelFor("gitClean");
@@ -3135,6 +3219,17 @@ const WRAP_PARAM = {
   },
 } as const;
 
+// m_age show parameter — controls when the age annotation renders:
+//   "stale"  → only when provider fetch is stale (ctx.stale === true)
+//   "always" → always render (default, matches current behavior)
+//   "normal" → only when NOT stale (ctx.stale === false)
+const SHOW_PARAM = {
+  named: {
+    show: (raw: string): ResolvedValue | null =>
+      raw === "stale" || raw === "always" || raw === "normal" ? raw : null,
+  },
+} as const;
+
 // `s_move|pos:<n>|char:<c>` pads the current line with `<c>` until the cursor
 // reaches column `pos` (defaults pos=0, char=" "). Cursor already at/past pos →
 // no-op + warn ("误操作" spec — moving left/steady is meaningless). `pos` MUST
@@ -3275,6 +3370,20 @@ const TERM_PARAM = {
   },
 } as const;
 
+// vX.X.X+ — experimental per-bar centered label (`|label|<s>`). Truncates to 4
+// code points; empty/whitespace → badarg. The label's glyphs replace the
+// centered bar cells (display-width aware) but each cell KEEPS its positional
+// color — see splitBarLabeled / overlayBarLabel.
+const LABEL_PARAM = {
+  named: {
+    label: (raw: string): ResolvedValue | null => {
+      const s = raw.trim();
+      if (s === "") return null;
+      return [...s].slice(0, 4).join("");
+    },
+  },
+} as const;
+
 // Per-module display-mode override for the window modules. Accepts "used" or
 // "remaining" verbatim; anything else is a parse-fail → dropped. Narrow by
 // design: the module-level `display` config stays the bare-form default, and
@@ -3316,6 +3425,22 @@ const WITHSTATUS_PARAM = {
   named: {
     withStatus: (raw: string): ResolvedValue | null =>
       raw === "true" || raw === "false" ? raw : null,
+  },
+} as const;
+
+// Per-module width-limit override: `|width|<n>` caps the body's terminal
+// display width (CJK/emoji count 2 via charDisplayWidth). Values 0..7 are too
+// small to fit the 3-dot ellipsis and normalize to "0" (ignored — no
+// truncation); n ≥ 8 keeps the first n-3 columns + "...". Non-numeric /
+// non-integer → badarg (mirrors REPEAT_PARAM).
+const WIDTH_PARAM = {
+  named: {
+    width: (raw: string): ResolvedValue | null => {
+      if (!/^[0-9]+$/.test(raw)) return null;
+      const n = Number(raw);
+      if (!Number.isInteger(n)) return null;
+      return n < 8 ? "0" : raw;
+    },
   },
 } as const;
 
@@ -3424,11 +3549,24 @@ function placeholderGauge(
   const empty = cfg().bar.empty;
   const filled = cfg().bar.filled;
   const width = cfg().bar.width;
+  const label = params.label as string | undefined;
   if (mode === "used") {
-    return valueOnly ? "0%" : `${empty.repeat(width)} 0%`;
+    if (valueOnly) return "0%";
+    const cells: { glyph: string; color: string | undefined }[] = Array.from(
+      { length: width },
+      () => ({ glyph: empty, color: undefined }),
+    );
+    if (label) overlayBarLabel(cells, width, label);
+    return `${cells.map((c) => c.glyph).join("")} 0%`;
   }
   // mode === "remaining": full filled bar, "100%".
-  return valueOnly ? "100%" : `${filled.repeat(width)} 100%`;
+  if (valueOnly) return "100%";
+  const cells: { glyph: string; color: string | undefined }[] = Array.from(
+    { length: width },
+    () => ({ glyph: filled, color: undefined }),
+  );
+  if (label) overlayBarLabel(cells, width, label);
+  return `${cells.map((c) => c.glyph).join("")} 100%`;
 }
 
 // Module → placeholder dispatcher. Each module opts into one of the four shape
@@ -4032,11 +4170,11 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   },
   // Every module also accepts an optional :color| override; a module with no
   // implicit param has an empty schema and the renderer just applies params.color.
-  m_windowQuota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
+  m_windowQuota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named, ...LABEL_PARAM.named } },
   m_countdown: { named: { ...COLOR_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_quota: { named: { ...COLOR_PARAM.named, ...DISPLAY_PARAM.named, ...TERM_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_balance: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_age: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
+  m_age: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SHOW_PARAM.named } },
   m_version: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_pluginSource: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_tokenIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
@@ -4095,16 +4233,16 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
     },
   },
   // Session-info / metadata modules — color + nulldrop only.
-  m_session: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_model: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_provider: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_effort: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_repo: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_gitName: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_dirName: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_branch: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WITHSTATUS_PARAM.named } },
-  m_gitStatus: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_ccVersion: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
+  m_session: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WIDTH_PARAM.named } },
+  m_model: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WIDTH_PARAM.named } },
+  m_provider: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WIDTH_PARAM.named } },
+  m_effort: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WIDTH_PARAM.named } },
+  m_repo: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WIDTH_PARAM.named } },
+  m_gitName: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WIDTH_PARAM.named } },
+  m_dirName: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WIDTH_PARAM.named } },  // Task 1 已改，保持一致
+  m_branch: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WITHSTATUS_PARAM.named, ...WIDTH_PARAM.named } },
+  m_gitStatus: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },  // 不改
+  m_ccVersion: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...WIDTH_PARAM.named } },
   m_ccversion: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_sessionDuration: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_sessionApiDuration: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
@@ -4199,6 +4337,27 @@ function wrapPlainDefault(
   return color ? `${color}${body}${RESET}` : body;
 }
 
+// Truncate `body` to at most `width` terminal columns. width ≤ 0 → unchanged
+// (unlimited). Over-width → first `width-3` columns (per-code-point, so a wide
+// char is never split) + the 3-dot ellipsis "...". Active widths are
+// normalized to ≥ 8 by WIDTH_PARAM, so the prefix budget is always ≥ 5 columns.
+function applyWidthLimit(body: string, width: number): string {
+  if (width <= 0) return body;
+  let total = 0;
+  for (const ch of body) total += charDisplayWidth(ch);
+  if (total <= width) return body;
+  const budget = width - 3;
+  let cols = 0;
+  let out = "";
+  for (const ch of body) {
+    const w = charDisplayWidth(ch);
+    if (cols + w > budget) break;
+    out += ch;
+    cols += w;
+  }
+  return out + "...";
+}
+
 // "Non-zero, non-null" default tint: like wrapPlainDefault but ONLY colors when
 // `value` is a finite number > 0 (value=0 stays plain per the value-zero rule;
 // null/undefined is unreachable — the caller already took the placeholder path).
@@ -4224,6 +4383,20 @@ function passThroughOr<T extends ResolvedValue>(
   if (local !== undefined) return local;
   const pt = ctx.passThrough?.[name];
   return pt === undefined ? undefined : (pt as T);
+}
+
+// Resolve the effective width for a module: inline-explicit (params.width) >
+// outer m_template passThrough (ctx.passThrough.width) > 0 (unlimited).
+// WIDTH_PARAM already normalized 0..7 → "0", so Number(raw) is exact.
+function resolveWidth(
+  params: Record<string, ResolvedValue | undefined>,
+  ctx: RenderContext,
+): number {
+  const raw = passThroughOr<ResolvedValue>(params, ctx, "width");
+  // RESERVED: the ctx.passThrough.width arm is unreachable today — m_template's
+  // named whitelist does NOT forward width (explicit inline |width:N| is the only
+  // path). Do not add `width` to that whitelist without deciding semantics (YAGNI).
+  return raw === undefined || raw === null ? 0 : Number(raw);
 }
 
 // Build a merged `params` view filling missing keys from `ctx.passThrough` (so
@@ -4388,7 +4561,8 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_windowQuota: (params, ctx) => {
     // `term` picks which interval to read (default "short"; open-ended dict —
     // "monthly"/"yearly"/etc. all resolve the same way). Missing interval or no
-    // percent data → placeholder.
+    // percent data → placeholder. `label` (experimental) centers text on the
+    // bar; valueOnly strips the bar so the label is silently ignored.
     const term = (params.term as string | undefined) ?? "short";
     const iv = intervalForTerm(term, ctx);
     if (!iv) return placeholderWithColor("m_windowQuota", params, ctx);
@@ -4397,9 +4571,10 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const mode = (params.display as DisplayMode | undefined) ?? ctx.mode;
     const valueOnly = params.valueOnly === "true";
     const color = params.color as string | undefined;
+    const label = params.label as string | undefined;
     if (valueOnly) return formatPercentOnly(w, mode, color);
-    if (color) return formatOneChunkColored(w, mode, color);
-    return formatOneChunk(w, mode, cfg().bar.width, ctx.stale);
+    if (color) return formatOneChunkColored(w, mode, color, cfg().bar.width, label);
+    return formatOneChunk(w, mode, cfg().bar.width, ctx.stale, label);
   },
   m_countdown: (params, ctx) => {
     // Same `term` arg as m_windowQuota. The label in `<arrow>n/a·<label>` /
@@ -4412,19 +4587,19 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     if (!w) return placeholderWithColor("m_countdown", params, ctx);
     const valueOnly = params.valueOnly === "true";
     if (isStaleAndPastDue(w, ctx.stale, ctx.nowMs)) {
-      const userColor = params.color as string | undefined;
-      const color = userColor ?? STALE_COLOR;
+      // Stale+past-due: forced STALE_COLOR wins over any inline color.
       if (valueOnly) {
         const arrow = pickResetArrow(ctx.nowMs, w.resetStartAt, w.resetDurationMs);
-        return `${color}${arrow}n/a${RESET}`;
+        return `${STALE_COLOR}${arrow}n/a${RESET}`;
       }
       const body = formatStalePastDueResetSuffix(iv.label, w, ctx.nowMs);
-      return `${color}${body}${RESET}`;
+      return `${STALE_COLOR}${body}${RESET}`;
     }
     const body = valueOnly
       ? formatCountdownValueOnly(w, ctx.nowMs)
       : formatOneResetSuffix(iv.label, w, ctx.nowMs);
     if (body === "") return null;
+    if (ctx.stale) return `${STALE_COLOR}${body}${RESET}`;
     return wrapPlainDefault("m_countdown", body, params.color as string | undefined);
   },
   m_quota: (params, ctx) => {
@@ -4438,7 +4613,13 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     const mode = (params.display as DisplayMode | undefined) ?? ctx.mode;
     const parts = renderQuotaParts(iv, mode);
     if (!parts) return placeholderWithColor("m_quota", params, ctx);
-    return wrapQuotaBody(parts, mode, params.color as string | undefined, passThroughOr(params, ctx, "valueOnly") === "true");
+    return wrapQuotaBody(
+      parts,
+      mode,
+      params.color as string | undefined,
+      passThroughOr(params, ctx, "valueOnly") === "true",
+      ctx.stale,
+    );
   },
   m_balance: (params, ctx) => {
     // Missing balance → "balance:n/a" placeholder; the placeholder only fires
@@ -4449,12 +4630,16 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return text || placeholderWithColor("m_balance", params, ctx);
   },
   m_age: (params, ctx) => {
-    // Missing ageMs → "age:n/a" placeholder.
-    if (ctx.ageMs == null) return placeholderWithColor("m_age", params, ctx);
     // Cross-recursion dedup (same as the bare path): the first m_age instance
     // (bare or inline, top-level or nested) claims the slot.
     if (ctx.ageEmittedRef?.value) return null;
     if (ctx.ageEmittedRef) ctx.ageEmittedRef.value = true;
+    // show parameter: "stale" | "always" | "normal" (default "always")
+    const show = (params.show as string | undefined) ?? "always";
+    if (show === "stale" && !ctx.stale) return null;
+    if (show === "normal" && ctx.stale) return null;
+    // Missing ageMs → "age:n/a" placeholder (only reached when show allows).
+    if (ctx.ageMs == null) return placeholderWithColor("m_age", params, ctx);
     const color = (params.color as string | undefined) ?? DEFAULT_COLORS["m_age"];
     return formatStaleSuffix(ctx.ageMs, !ctx.stale, color);
   },
@@ -5016,18 +5201,18 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_session: (params, ctx) => {
     const s = ctx.tokens?.sessionName;
     if (s == null) return placeholderWithColor("m_session", params, ctx);
-    return wrapPlainDefault("m_session", s, params.color as string | undefined);
+    return wrapPlainDefault("m_session", applyWidthLimit(s, resolveWidth(params, ctx)), params.color as string | undefined);
   },
   m_model: (params, ctx) => {
     const s = ctx.tokens?.modelDisplayName;
     if (s == null) return placeholderWithColor("m_model", params, ctx);
-    return wrapPlainDefault("m_model", s, params.color as string | undefined);
+    return wrapPlainDefault("m_model", applyWidthLimit(s, resolveWidth(params, ctx)), params.color as string | undefined);
   },
   m_provider: (params, ctx) => {
-    if (ctx.currentProvider) return wrapPlainDefault("m_provider", ctx.currentProvider, params.color as string | undefined);
+    if (ctx.currentProvider) return wrapPlainDefault("m_provider", applyWidthLimit(ctx.currentProvider, resolveWidth(params, ctx)), params.color as string | undefined);
     const raw = process.env.ANTHROPIC_BASE_URL;
     if (raw) {
-      try { return wrapPlainDefault("m_provider", new URL(raw).hostname.toLowerCase(), params.color as string | undefined); }
+      try { return wrapPlainDefault("m_provider", applyWidthLimit(new URL(raw).hostname.toLowerCase(), resolveWidth(params, ctx)), params.color as string | undefined); }
       catch { /* invalid URL → fall through */ }
     }
     return placeholderWithColor("m_provider", params, ctx);
@@ -5035,7 +5220,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_effort: (params, ctx) => {
     const s = ctx.tokens?.effort;
     if (s == null) return placeholderWithColor("m_effort", params, ctx);
-    return wrapPlainDefault("m_effort", s, params.color as string | undefined);
+    return wrapPlainDefault("m_effort", applyWidthLimit(s, resolveWidth(params, ctx)), params.color as string | undefined);
   },
   m_repo: (params, ctx) => {
     const r = ctx.tokens?.repo;
@@ -5044,22 +5229,23 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
       (p): p is string => p != null && p.length > 0,
     );
     if (parts.length === 0) return placeholderWithColor("m_repo", params, ctx);
-    return wrapPlainDefault("m_repo", parts.join("/"), params.color as string | undefined);
+    return wrapPlainDefault("m_repo", applyWidthLimit(parts.join("/"), resolveWidth(params, ctx)), params.color as string | undefined);
   },
   m_gitName: (params, ctx) => {
     const n = ctx.tokens?.repo?.name;
     if (n == null || n.length === 0) return placeholderWithColor("m_gitName", params, ctx);
-    return wrapPlainDefault("m_gitName", n, params.color as string | undefined);
+    return wrapPlainDefault("m_gitName", applyWidthLimit(n, resolveWidth(params, ctx)), params.color as string | undefined);
   },
   m_dirName: (params, ctx) => {
     const n = ctx.tokens?.cwd ? path.basename(ctx.tokens.cwd) : "";
     if (n.length === 0) return placeholderWithColor("m_dirName", params, ctx);
-    return wrapPlainDefault("m_dirName", n, params.color as string | undefined);
+    const body = applyWidthLimit(n, resolveWidth(params, ctx));
+    return wrapPlainDefault("m_dirName", body, params.color as string | undefined);
   },
   m_branch: (params, ctx) => {
     const info = readGitInfo(ctx.tokens?.cwd);
     if (info?.branch == null) return placeholderWithColor("m_branch", params, ctx);
-    const body = wrapPlainDefault("m_branch", info.branch, params.color as string | undefined);
+    const body = wrapPlainDefault("m_branch", applyWidthLimit(info.branch, resolveWidth(params, ctx)), params.color as string | undefined);
     if (params.withStatus !== "true") return body;
     const suffixColor = info.dirty ? NAMED_PALETTE.brown : BRIGHT_GREEN;
     const glyph = info.dirty ? labelFor("gitDirty") : labelFor("gitClean");
@@ -5074,7 +5260,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
   m_ccVersion: (params, ctx) => {
     const v = ctx.tokens?.ccversion;
     if (v == null) return placeholderWithColor("m_ccVersion", params, ctx);
-    return wrapPlainDefault("m_ccVersion", v, params.color as string | undefined);
+    return wrapPlainDefault("m_ccVersion", applyWidthLimit(v, resolveWidth(params, ctx)), params.color as string | undefined);
   },
   // Deprecated alias — same body as m_ccVersion.
   m_ccversion: (params, ctx) => {

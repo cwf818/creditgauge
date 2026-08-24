@@ -36,7 +36,8 @@ const DEFAULT_LINE_TEMPLATE: {
     "s_dot|wrap:true",
     "m_windowQuota|term:long",
     "m_countdown|term:long|valueOnly:true|nulldrop:true",
-    "m_quota|term:long|display:remaining|nulldrop:true"
+    "m_quota|term:long|display:remaining|nulldrop:true",
+    "m_age|show:stale"
   ],
   balance: ["m_modeLabel|color:yellow", "m_balance", "m_age"],
 };
@@ -77,7 +78,7 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   ],
   // "context_info" — context-window bar + used/limit usage.
   context_info: [
-    "m_label|📜: |color:yellow",
+    "m_label|📜 |color:yellow",
     "m_windowContext|display:used",
     "m_contextUsage|valueOnly:true"
   ],
@@ -89,16 +90,16 @@ export const DEFAULT_LINE_TEMPLATES: LineTemplates = {
   ],
   // "mem_info" — system RAM bar + absolute used/total.
   mem_info: [
-    "m_label|▦ : |color:yellow",
+    "m_label|🖳 |color:yellow",
     "m_windowMemUsage|display:used",
-    "m_memUsage|valueOnly:true",
+    "m_memUsage|valueOnly:true"
   ],
   // "git_info" — git branch with clean/dirty status + line deltas.
   git_info: [
     "m_label|⎇ : |color:yellow",
-    "m_dirName",
+    "m_dirName|width:25",
     ":",
-    "m_branch|withStatus:true",
+    "m_branch|withStatus:true|width:25",
     "m_linesAdded",
     "m_linesRemoved"
   ],
@@ -199,22 +200,24 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   // per-turn token deltas); line 2 is byte-identical to `simple`
   // (quota/balance/plugin_info dispatch by provider type).
   solo: [
-    "m_label|⎇ : |color:yellow",
-    "m_branch|withStatus:true",
+    "m_template|git_info",
     "s_pipe|wrap:true",
-    "m_label|📜: |color:yellow",
-    "m_contextUsage|valueOnly:true",
+    "m_template|context_info",
     "s_pipe|wrap:true",
-    "m_label|💳: |color:blue",
-    "m_provider",
-    "/",
-    "m_model",
-    "m_tokenIn",
-    "m_tokenOut",
+    "m_template|mem_info",
     "s_newline",
+
+    "m_template|model_info",
+    "m_label|🗪 : |color:orange",
+    "m_template|scopeline|scope:session",
+    "m_label|⏱️ |color:yellow",
+    "m_accApiMs|scope:session|valueOnly:true",
+    "m_label|🪙 |color:yellow",
+    "m_accTokenCost|scope:session|valueOnly:true",
+    "s_newline",
+
     "m_template|quota|type:quota",
-    "m_template|balance|type:balance",
-    "m_template|plugin_info|type:unknown",
+    "m_template|balance|type:balance"
   ],
 
   // Full layout: header (git + context + memory + version), then

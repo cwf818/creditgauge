@@ -1454,6 +1454,217 @@ describe("lineTemplate — m_windowQuota|term:short / m_windowQuota|term:mid / m
   });
 });
 
+// vX.X.X+ — experimental |label| bar overlay for m_windowQuota. The label
+// (≤4 code points) is centered on the bar, replacing the display columns it
+// covers. Color is POSITIONAL: each cell (including label glyphs) keeps the
+// color the used/remaining split gives its column — so label:5h and label:▓▓
+// color identically, and a label straddling the colored/plain boundary splits
+// per char. valueOnly ignores the label; the placeholder bar shows it.
+describe("lineTemplate — m_windowQuota experimental |label| bar overlay", () => {
+  beforeEach(() => __resetUnknownModuleWarnForTest());
+  afterEach(() => __resetForTest());
+
+  it("m_windowQuota|label:5h at 38% used renders the label in the plain zone: '▓▓▓5h░░░ 38%'", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:5h"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 38, remainingPercent: 100 - 38, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    // 38% used → coloredSize 3 → cols 0-2 ▓ green, cols 3-7 ░ plain. Label
+    // "5h" centered at cols 3-4 (both plain): `▓▓▓` green + `5h░░░` plain.
+    assert.equal(strip(line), "▓▓▓5h░░░ 38%", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[38;5;41m▓▓▓\x1b[0m"), `green bar run: ${JSON.stringify(line)}`);
+    assert.ok(!line.includes("\x1b[38;5;41m5h"), `label must NOT be green at cols 3-4: ${JSON.stringify(line)}`);
+  });
+
+  it("m_windowQuota|label:5h at 100% used keeps the label inside the colored run: '▓▓▓5h▓▓▓ 100%'", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:5h"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 100, remainingPercent: 0, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    // 100% → coloredSize 8 → every cell (incl. label) is red (band [90,100]).
+    assert.equal(strip(line), "▓▓▓5h▓▓▓ 100%", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[38;5;196m▓▓▓5h▓▓▓\x1b[0m"), `whole bar+label must be one red run: ${JSON.stringify(line)}`);
+  });
+
+  it("m_windowQuota|label:mo renders '▓▓▓mo▓▓▓' at 100% used", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:mo"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 100, remainingPercent: 0, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(strip(line), "▓▓▓mo▓▓▓ 100%", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("label over 4 code points truncates to 4: '5h7d8x' → '5h7d'", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:5h7d8x"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 100, remainingPercent: 0, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    // 4 chars → centered at cols 2-5: `▓▓5h7d▓▓`.
+    assert.equal(strip(line), "▓▓5h7d▓▓ 100%", `got: ${JSON.stringify(line)}`);
+    assert.ok(!strip(line).includes("8x"), `truncated tail leaked: ${JSON.stringify(line)}`);
+  });
+
+  it("label straddling the colored/plain boundary colors per char: 50% used '5h' → '5' green, 'h' plain", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:5h"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 50, remainingPercent: 100 - 50, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    // 50% → coloredSize 4 → cols 0-3 green, cols 4-7 plain. Label at cols 3-4:
+    // col3 "5" green (was ▓), col4 "h" plain (was ░).
+    assert.equal(strip(line), "▓▓▓5h░░░ 50%", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[38;5;41m▓▓▓5\x1b[0mh"), `col3 '5' green then col4 'h' plain: ${JSON.stringify(line)}`);
+  });
+
+  it("label glyph content is irrelevant to color: label:▓▓ colors positionally at 50% used", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:▓▓"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 50, remainingPercent: 50, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    // 50% → coloredSize 4. Label "▓▓" at cols 3-4: col3 '▓' green (was ▓),
+    // col4 '▓' plain (was ░) — glyph content never affects the positional color.
+    assert.equal(strip(line), "▓▓▓▓▓░░░ 50%", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[38;5;41m▓▓▓▓\x1b[0m▓"), `green run stops at col3, col4 '▓' plain: ${JSON.stringify(line)}`);
+  });
+
+  it("display:remaining renders the label on the right-colored side: '░░░5h▓▓▓ 62%'", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|display:remaining|label:5h"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 38, remainingPercent: 100 - 38, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    // displayedPct 62 → coloredSize 5 → cols 0-2 ░ plain, cols 3-7 ▓ green
+    // (colorFor(62,"remaining") → band 0 bright green). Label at cols 3-4 sits
+    // on the colored side.
+    assert.equal(strip(line), "░░░5h▓▓▓ 62%", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[38;5;41m5h▓▓▓\x1b[0m"), `label + right fill one green run: ${JSON.stringify(line)}`);
+  });
+
+  it("wide CJK label centers by display width: '中' → '▓▓▓中▓▓▓' at 100% used", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:中"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 100, remainingPercent: 0, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(charDisplayWidth("中"), 2);
+    assert.equal(strip(line), "▓▓▓中▓▓▓ 100%", `got: ${JSON.stringify(line)}`);
+  });
+
+  it("wide CJK label at the colored/plain boundary keeps the anchor-column color: 50% used '中' → '▓▓▓中░░░ 50%'", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:中"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 50, remainingPercent: 50, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    // 50% → coloredSize 4 → cols 0-3 green, cols 4-7 plain. '中' (wide, 2 cols)
+    // anchored at col3 (green) with a zero-width spacer at col4: green run
+    // "▓▓▓中", plain run "░░░". A single glyph can't split color — anchor wins.
+    assert.equal(strip(line), "▓▓▓中░░░ 50%", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[38;5;41m▓▓▓中\x1b[0m"), `anchor-column-wins: 中 carries the colored tint: ${JSON.stringify(line)}`);
+  });
+
+  it("valueOnly:true ignores the label: '38%' only", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:5h|valueOnly:true"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 38, remainingPercent: 100 - 38, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    assert.equal(strip(line), "38%", `got: ${JSON.stringify(line)}`);
+    assert.ok(!strip(line).includes("5h"), `label leaked into valueOnly: ${JSON.stringify(line)}`);
+  });
+
+  it("placeholder (missing interval) shows the label centered: '░░░mo░░░ 0%'", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|nulldrop:false|label:mo"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    // placeholderGauge: used mode → 8 plain ░ cells, label at cols 3-4, STALE_COLOR wrap.
+    assert.equal(strip(line), "░░░mo░░░ 0%", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[90m"), `placeholder wraps in STALE_COLOR: ${JSON.stringify(line)}`);
+  });
+
+  it("placeholder in remaining mode shows the label on the full filled bar: '▓▓▓mo▓▓▓ 100%'", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|nulldrop:false|display:remaining|label:mo"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: null, midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    // placeholderGauge remaining mode → 8 filled cells + label "mo" at cols 3-4,
+    // wrapped in STALE_COLOR by placeholderWithColor.
+    assert.equal(strip(line), "▓▓▓mo▓▓▓ 100%", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[90m"), `placeholder wraps in STALE_COLOR: ${JSON.stringify(line)}`);
+  });
+
+  it("m_windowQuota|label: (empty value) is a hard noop (drops and warns)", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:"] });
+    const { value: line, warns } = withCapturedStderr(() =>
+      renderProviderLine("minimax", {
+        mode: "used", nowMs: Date.now(),
+        shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 38, remainingPercent: 100 - 38, remainingQuota: null, usedQuota: null, limitQuota: null },
+        midInterval: null, balance: null,
+        ageMs: null, stale: false, version: "",
+      }),
+    );
+    assert.equal(line, "", `got: ${JSON.stringify(line)}`);
+    assert.equal(warns.filter((w) => w.includes("unknown lineTemplate module")).length, 1);
+  });
+
+  it("m_windowQuota|label:5h|color:red colors the label per positional rule with the override tint", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:5h|color:red"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 50, remainingPercent: 50, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: false, version: "",
+    });
+    // 50% → coloredSize 4 → cols 0-3 red (override), col4 "h" plain. Label at
+    // cols 3-4: col3 "5" red (was ▓), col4 "h" plain (was ░).
+    assert.equal(strip(line), "▓▓▓5h░░░ 50%", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[38;5;196m▓▓▓5\x1b[0m"), `got: ${JSON.stringify(line)}`);
+  });
+
+  it("stale m_windowQuota|label:5h uses STALE_COLOR for the colored side + label char", () => {
+    __resetForTest({ statuslineTemplate: ["m_windowQuota|label:5h"] });
+    const line = renderProviderLine("minimax", {
+      mode: "used", nowMs: Date.now(),
+      shortInterval: { windowId: "5h", label: "5h", startAt: null, endAt: null, intervalMs: null, usedPercent: 50, remainingPercent: 50, remainingQuota: null, usedQuota: null, limitQuota: null },
+      midInterval: null, balance: null,
+      ageMs: null, stale: true, version: "",
+    });
+    // 50% → coloredSize 4 → cols 0-3 STALE_COLOR, col4 "h" plain.
+    assert.equal(strip(line), "▓▓▓5h░░░ 50%", `got: ${JSON.stringify(line)}`);
+    assert.ok(line.includes("\x1b[90m▓▓▓5\x1b[0m"), `stale tint on col3 '5': ${JSON.stringify(line)}`);
+  });
+});
+
 describe("lineTemplate — plain-text modules :color override", () => {
   beforeEach(() => __resetUnknownModuleWarnForTest());
   afterEach(() => __resetForTest());

@@ -3064,6 +3064,170 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
     assert.equal(strip(out), "n/a");
   });
 
+  it("m_dirName|width:25 truncates a 30-col basename to 22 cols + '...'", () => {
+    const long = "a".repeat(30);
+    const out = renderTemplate(
+      ["m_dirName|width:25"],
+      ctxFor(fakeSnapshot({ cwd: `/home/user/${long}` })),
+    ).join("\n");
+    assert.equal(strip(out), "a".repeat(22) + "...");
+  });
+
+  it("m_dirName|width:25 counts CJK by display column (13 中 = 26 cols → 11 中 + '...')", () => {
+    const out = renderTemplate(
+      ["m_dirName|width:25"],
+      ctxFor(fakeSnapshot({ cwd: "/home/user/" + "中".repeat(13) })),
+    ).join("\n");
+    assert.equal(strip(out), "中".repeat(11) + "...");
+  });
+
+  it("m_dirName|width:7 is ignored (too small for the ellipsis) → full body", () => {
+    const long = "a".repeat(30);
+    const out = renderTemplate(
+      ["m_dirName|width:7"],
+      ctxFor(fakeSnapshot({ cwd: `/home/user/${long}` })),
+    ).join("\n");
+    assert.equal(strip(out), long);
+  });
+
+  it("m_dirName|width:25 leaves a short basename untouched", () => {
+    const out = renderTemplate(
+      ["m_dirName|width:25"],
+      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
+    ).join("\n");
+    assert.equal(strip(out), "creditgauge");
+  });
+
+  it("m_dirName|width:abc is a badarg (module drops, single-token form mirrors the existing badarg test)", () => {
+    __resetUnknownModuleWarnForTest();
+    const out = renderTemplate(
+      ["m_dirName|width:abc"],
+      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
+    ).join("\n");
+    assert.equal(out, "");
+  });
+
+  it("m_gitName|width:10 truncates a long repo name to 7 cols + '...'", () => {
+    const long = "a".repeat(30);
+    const out = renderTemplate(
+      ["m_gitName|width:10"],
+      ctxFor(fakeSnapshot({ repo: { host: "github.com", owner: "cwf818", name: long } })),
+    ).join("\n");
+    assert.equal(strip(out), "a".repeat(7) + "...");
+  });
+
+  it("m_repo|width:25 truncates the joined host/owner/name", () => {
+    const long = "a".repeat(30);
+    const out = renderTemplate(
+      ["m_repo|width:25"],
+      ctxFor(fakeSnapshot({ repo: { host: "github.com", owner: "cwf818", name: long } })),
+    ).join("\n");
+    // "github.com/cwf818/" = 18 cols; budget = 25-3 = 22 → room for 4 more a's.
+    assert.equal(strip(out), "github.com/cwf818/" + "a".repeat(4) + "...");
+  });
+
+  it("m_model|width:15 truncates a long model name", () => {
+    const out = renderTemplate(
+      ["m_model|width:15"],
+      ctxFor(fakeSnapshot({ modelDisplayName: "deepseek-reasoner-v3-ultra-long" })),
+    ).join("\n");
+    // budget = 15-3 = 12 cols → "deepseek-rea" (12 ASCII chars) + "..." = 15.
+    assert.equal(strip(out), "deepseek-rea" + "...");
+  });
+
+  it("m_provider|width:12 truncates a long provider id", () => {
+    // WIDTH_PARAM ignores any n < 8 (normalizes to "0"), and "minimax" (7 cols)
+    // is shorter than every valid width — so this uses a longer provider id.
+    const out = renderTemplate(
+      ["m_provider|width:12"],
+      { ...ctxFor(fakeSnapshot()), currentProvider: "deepseek-reasoner-v3" },
+    ).join("\n");
+    // budget = 12-3 = 9 → "deepseek-" (9 ASCII cols) + "..." = 12.
+    assert.equal(strip(out), "deepseek-" + "...");
+  });
+
+  it("m_ccVersion|width:8 truncates a long version string", () => {
+    const out = renderTemplate(
+      ["m_ccVersion|width:8"],
+      ctxFor(fakeSnapshot({ ccversion: "2.1.191.20260810" })),
+    ).join("\n");
+    assert.equal(strip(out), "2.1.1" + "...");
+  });
+
+  it("m_session|width:12 truncates a long session name", () => {
+    const out = renderTemplate(
+      ["m_session|width:12"],
+      ctxFor(fakeSnapshot({ sessionName: "strip-diagnostics-display" })),
+    ).join("\n");
+    // budget = 12-3 = 9 → "strip-dia" (9 ASCII cols) + "..." = 12.
+    assert.equal(strip(out), "strip-dia" + "...");
+  });
+
+  it("m_effort|width:25 leaves short values untouched", () => {
+    const out = renderTemplate(
+      ["m_effort|width:25"],
+      ctxFor(fakeSnapshot({ effort: "high" })),
+    ).join("\n");
+    assert.equal(strip(out), "high");
+  });
+
+  it("m_branch|width:10|withStatus:true truncates the branch body and keeps the ✅ suffix", () => {
+    let repoDir: string | undefined;
+    try {
+      execFileSync("git", ["--version"], { stdio: "ignore", timeout: 1000 });
+    } catch {
+      return; // skip — no git on PATH
+    }
+    const longBranch = "very-long-branch-name-that-overflows";
+    repoDir = mkdtempSync(join(tmpdir(), "creditgauge-render-width-branch-"));
+    execFileSync("git", ["init", "-q", "-b", longBranch], { cwd: repoDir });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: repoDir });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: repoDir });
+    writeFileSync(join(repoDir, "r"), "x");
+    execFileSync("git", ["add", "."], { cwd: repoDir });
+    execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: repoDir });
+    try {
+      __resetGitInfoCacheForTest();
+      const out = renderTemplate(
+        ["m_branch|width:10|withStatus:true"],
+        ctxFor(fakeSnapshot({ cwd: repoDir })),
+      ).join("\n");
+      // 7 cols prefix + "..." (3 cols) = 10; "✅" (clean suffix) still appended.
+      assert.equal(strip(out), "very-lo" + "..." + "✅");
+    } finally {
+      if (repoDir) rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it("m_gitName|width:10 does not split an emoji at the budget boundary", () => {
+    // body = "aaaaaa📦bbbb" = 6 a's (6 cols) + 📦 (2 cols) + 4 b's (4 cols)
+    // = 12 cols > width 10 → truncate. budget = 10-3 = 7: the 6 a's (6 cols)
+    // fit, 📦 would make 8 > 7 → stop before the emoji → "aaaaaa" + "...".
+    const out = renderTemplate(
+      ["m_gitName|width:10"],
+      ctxFor(fakeSnapshot({ repo: { host: "github.com", owner: "cwf818", name: "aaaaaa📦bbbb" } })),
+    ).join("\n");
+    assert.equal(strip(out), "aaaaaa" + "...");
+  });
+
+  it("m_provider|width:15 truncates the ANTHROPIC_BASE_URL hostname fallback", () => {
+    // No currentProvider → m_provider falls back to the env-var hostname.
+    const saved = process.env.ANTHROPIC_BASE_URL;
+    process.env.ANTHROPIC_BASE_URL = "https://a-very-long-provider-hostname.example.com/anthropic";
+    try {
+      const out = renderTemplate(
+        ["m_provider|width:15"],
+        ctxFor(fakeSnapshot()),
+      ).join("\n");
+      // hostname = "a-very-long-provider-hostname.example.com" (41 ASCII cols);
+      // budget = 15-3 = 12 → first 12 cols "a-very-long-" + "..." = 15.
+      assert.equal(strip(out), "a-very-long-" + "...");
+    } finally {
+      if (saved === undefined) delete process.env.ANTHROPIC_BASE_URL;
+      else process.env.ANTHROPIC_BASE_URL = saved;
+    }
+  });
+
   it("m_ccVersion|nulldrop|false renders 'n/a' when ccversion is null", () => {
     const out = renderTemplate(
       ["m_ccVersion|nulldrop:false"],
