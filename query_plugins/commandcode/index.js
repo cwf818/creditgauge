@@ -52,6 +52,8 @@ const CREDENTIALS_DIR = join(
   homedir(),
   ".claude", "plugins", "creditgauge", "credentials", "commandcode"
 );
+/** 统一认证文件: { provider, id, savedAt, cookies } — 由 `plugin auth` 写入 */
+const AUTH_FILE = join(CREDENTIALS_DIR, "auth.json");
 const BILLING_ENDPOINT = "https://api.commandcode.ai/internal/billing/credits";
 const SUBSCRIPTIONS_ENDPOINT = "https://api.commandcode.ai/internal/billing/subscriptions";
 const USAGE_PAGE_TPL = "https://commandcode.ai/%s/settings/usage";
@@ -110,17 +112,42 @@ function usagePageUrlFor(accountId) {
 }
 
 /**
- * Build a Cookie header string from a Playwright-format cookie JSON file
- * (same shape the opencode plugin reads). Only cookies whose domain is
- * commandcode.ai or a subdomain of it are forwarded.
+ * 读取统一认证文件 credentials/commandcode/auth.json。
+ * 返回 { id, cookies } 或 null。ID 与 Cookie 由认证工具一次性写入,
+ * 插件无需再从 config.json 的 AUTHENTICATION_KEY 推断。
  */
-function buildCookieHeader(cookiePath) {
-  if (!cookiePath || !existsSync(cookiePath)) return "";
-  const cookies = JSON.parse(readFileSync(cookiePath, "utf-8"));
+function loadAuthFile() {
+  try {
+    if (!existsSync(AUTH_FILE)) return null;
+    const raw = JSON.parse(readFileSync(AUTH_FILE, "utf-8"));
+    if (!isRecord(raw) || typeof raw.id !== "string" || raw.id === "") return null;
+    if (!Array.isArray(raw.cookies)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build a Cookie header string from a cookie array (Playwright format).
+ * Only cookies whose domain is commandcode.ai or a subdomain of it are kept.
+ */
+function buildCookieHeaderFromCookies(cookies) {
+  if (!Array.isArray(cookies)) return "";
   const relevant = cookies.filter(
     (c) => c.domain === "commandcode.ai" || c.domain.endsWith(".commandcode.ai")
   );
   return relevant.map((c) => `${c.name}=${c.value}`).join("; ");
+}
+
+/**
+ * Build a Cookie header string from a Playwright-format cookie JSON file.
+ * Kept for backwards compatibility with older <id>.session-cookies.json files.
+ */
+function buildCookieHeader(cookiePath) {
+  if (!cookiePath || !existsSync(cookiePath)) return "";
+  const cookies = JSON.parse(readFileSync(cookiePath, "utf-8"));
+  return buildCookieHeaderFromCookies(cookies);
 }
 
 // ---------- interval builders ----------
@@ -241,18 +268,29 @@ async function getJson(url, cookieHeader, signal) {
 
 export default {
   /**
-   * @param {string} authenticationKey — CommandCode dashboard account slug
-   *   (e.g. "cwf81881rl"; the <slug> in https://commandcode.ai/<slug>/settings/usage)
+   * @param {string} [authenticationKey] — CommandCode dashboard account slug
+   *   (e.g. "cwf81881rl"). 可选: 优先读取 auth.json 中的 id + cookies;
+   *   仅在 auth.json 不存在时回退到 authenticationKey 定位旧 cookie 文件。
    * @param {object} [ctx] - { signal?: AbortSignal }
    * @returns {Promise<object|null>} { short, mid, long } or null
    */
   async fetchAccountCredit(authenticationKey, ctx) {
-    if (!authenticationKey) return null;
-    const cookiePath = cookiePathForAccount(authenticationKey);
-    const cookieHeader = buildCookieHeader(cookiePath);
+    const auth = loadAuthFile();
+    let accountId = authenticationKey || null;
+    let cookieHeader = "";
+
+    if (auth) {
+      accountId = auth.id || accountId;
+      cookieHeader = buildCookieHeaderFromCookies(auth.cookies);
+    }
+    // 兼容旧文件: <id>.session-cookies.json
+    if (!cookieHeader && accountId) {
+      cookieHeader = buildCookieHeader(cookiePathForAccount(accountId));
+    }
+
     if (cookieHeader === "") {
       throw new Error(
-        `no session cookies found at ${cookiePath} — run: npx creditgauge plugin auth commandcode`,
+        `no session cookies found for commandcode — run: npx creditgauge plugin auth commandcode`,
       );
     }
     const [creditsRaw, subRaw] = await Promise.all([
@@ -281,4 +319,6 @@ export {
   buildMid,
   buildLong,
   fillQuota,
+  loadAuthFile,
+  buildCookieHeaderFromCookies,
 };

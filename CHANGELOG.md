@@ -1,6 +1,35 @@
 # Changelog
 
-## Unreleased
+## v1.2.2 (2026-08-29)
+
+### Feat
+
+- **Zero-dependency plugin auth via CDP (replaces Playwright).** New
+  `query_plugins/auth-cdp.cjs` grabs session cookies straight from your local
+  Chrome/Edge through the DevTools Protocol — no `playwright` install
+  (~300MB) and no automated-browser fingerprints (Cloudflare-proof, since the
+  login happens in your real browser). It auto-detects an already-running
+  debug port (`9222`) or launches a throwaway profile, waits for the login,
+  and writes credentials to a single fixed
+  `credentials/<provider>/auth.json` (`{ provider, id, savedAt, cookies }`)
+  instead of scattering `<id>.session-cookies.json` files. `AUTHENTICATION_KEY`
+  is now optional:
+  - account ID is auto-detected after login (opencode from
+    `/workspace/<wrk_xxx>` in the address bar; commandcode from the
+    `commandcode.ai/<slug>/settings/usage` sidebar link), with a 90s window
+    that falls back to a forced manual prompt.
+  - plugins read `auth.json` first (`loadAuthFile()`), falling back to legacy
+    `<id>.session-cookies.json` files, so existing installs keep working.
+  - `plugin add` now labels `AUTHENTICATION_KEY (optional)` for auth-backed
+    providers and points you to `plugin auth` instead of demanding a key.
+- **`solo` preset** — standalone two-line layout: a compact header line
+  (git branch + status, context usage number only — no bars, no git
+  line-count deltas, no memory — then provider/model + per-turn token
+  deltas) over the `simple` tail (quota / balance / plugin_info dispatch).
+- **`m_provider` default color → yellow, `m_model` default color →
+  orange.** `DEFAULT_COLORS` now reads `colors.yellow` / `colors.orange`
+  (same config-driven pattern as the token modules); an explicit `|color|`
+  override still wins.
 
 ### Fix
 
@@ -17,17 +46,6 @@
   delta. The pathological value never reaches the sample stream /
   `accApiMs`. Tests: stale-baseline self-heal + next-tick re-anchor +
   ceiling boundary updates (1187 total).
-
-### Feat
-
-- **`solo` preset** — standalone two-line layout: a compact header line
-  (git branch + status, context usage number only — no bars, no git
-  line-count deltas, no memory — then provider/model + per-turn token
-  deltas) over the `simple` tail (quota / balance / plugin_info dispatch).
-- **`m_provider` default color → yellow, `m_model` default color →
-  orange.** `DEFAULT_COLORS` now reads `colors.yellow` / `colors.orange`
-  (same config-driven pattern as the token modules); an explicit `|color|`
-  override still wins.
 
 ## v1.2.0 (2026-08-08)
 

@@ -22,7 +22,7 @@ import { copyDirSync, confirm, prompt, select, wrapText } from "./utils.js";
 /**
  * Interactively edit the template fields before installation.
  */
-async function editTemplate(providerMeta) {
+async function editTemplate(providerMeta, providerId) {
   const tpl = { ...providerMeta.template };
 
   console.log("\n--- " + providerMeta.title + " ---\n");
@@ -37,7 +37,16 @@ async function editTemplate(providerMeta) {
   if (providerMeta.alternativeToken && "AUTHENTICATION_KEY" in tpl) {
     console.log(wrapText(providerMeta.alternativeTokenHint, 80, "  "));
     console.log("");
-    const keyVal = await prompt("AUTHENTICATION_KEY", tpl.AUTHENTICATION_KEY);
+    if (providerMeta.hasAuth) {
+      console.log("  AUTHENTICATION_KEY 为可选项 (optional) — 留空即可:");
+      console.log("  安装后运行 npx creditgauge plugin auth " + providerId +
+        " 登录, 账号 ID 与 Cookie 会自动识别并保存。");
+      console.log("");
+    }
+    const keyVal = await prompt(
+      "AUTHENTICATION_KEY" + (providerMeta.hasAuth ? " (optional)" : ""),
+      tpl.AUTHENTICATION_KEY
+    );
     if (keyVal) tpl.AUTHENTICATION_KEY = keyVal;
     console.log("  Tip: can edit manually later\n");
   }
@@ -64,7 +73,7 @@ async function editTemplate(providerMeta) {
     console.log("  u  Edit BASE_URL_COMPARED_TO");
     console.log("  m  Edit COMPARE_METHOD");
     if ("AUTHENTICATION_KEY" in tpl) {
-      console.log("  k  Edit AUTHENTICATION_KEY");
+      console.log("  k  Edit AUTHENTICATION_KEY" + (providerMeta.hasAuth ? " (optional)" : ""));
     }
     if ("CURRENCY" in tpl) {
       console.log("  c  Edit CURRENCY");
@@ -161,7 +170,7 @@ export default async function pluginAdd(args) {
   const filesExist = fs.existsSync(target);
 
   // Edit template interactively
-  const entry = await editTemplate(providerMeta);
+  const entry = await editTemplate(providerMeta, providerId);
 
   // Dry-run
   if (dryRun) {
@@ -218,17 +227,17 @@ export default async function pluginAdd(args) {
   // Summary
   console.log("\nPlugin \"" + providerId + "\" installed.");
 
-  if (entry.AUTHENTICATION_KEY !== undefined && !entry.AUTHENTICATION_KEY) {
+  const keyEmpty = entry.AUTHENTICATION_KEY !== undefined && !entry.AUTHENTICATION_KEY;
+  if (keyEmpty && providerMeta.hasAuth) {
+    console.log("Tip: AUTHENTICATION_KEY 未设置 — 可留空, 登录认证时自动识别:");
+    console.log("  Run: npx creditgauge plugin auth " + providerId);
+  } else if (keyEmpty) {
     console.log("Tip: set AUTHENTICATION_KEY for " + providerId);
-    if (providerMeta.hasAuth) {
-      console.log("  Run: npx creditgauge plugin auth " + providerId);
-    } else {
-      console.log("  Edit " + cfg.configPath());
-    }
+    console.log("  Edit " + cfg.configPath());
   }
 
-  if (providerMeta.hasAuth) {
-    console.log("To log in and get credentials: npx creditgauge plugin auth " + providerId);
+  if (providerMeta.hasAuth && !keyEmpty) {
+    console.log("To refresh credentials: npx creditgauge plugin auth " + providerId);
   }
 
   process.exit(0);

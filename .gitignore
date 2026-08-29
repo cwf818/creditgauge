@@ -17,3 +17,6 @@ npm-debug.log*
 # Personal ad-hoc scratch scripts at repo root (not part of the test suite).
 testcheck.mjs
 testparse.mjs
+
+# WorkBuddy workspace memory (agent session logs) — local only.
+.workbuddy/

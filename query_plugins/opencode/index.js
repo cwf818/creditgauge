@@ -32,6 +32,8 @@ const CREDENTIALS_DIR = join(
   homedir(),
   ".claude", "plugins", "creditgauge", "credentials", "opencode"
 );
+/** 统一认证文件: { provider, id, savedAt, cookies } — 由 `plugin auth` 写入 */
+const AUTH_FILE = join(CREDENTIALS_DIR, "auth.json");
 const WORKSPACE_ORIGIN = "https://opencode.ai";
 
 // ---------- helpers ----------
@@ -53,6 +55,35 @@ function cookiePathForWorkspace(workspaceId) {
 
 function workspaceUrlFor(workspaceId) {
   return `${WORKSPACE_ORIGIN}/workspace/${workspaceId}/go`;
+}
+
+/**
+ * 读取统一认证文件 credentials/opencode/auth.json。
+ * 返回 { id, cookies } 或 null。ID 与 Cookie 由认证工具一次性写入,
+ * 插件无需再从 config.json 的 AUTHENTICATION_KEY 推断。
+ */
+function loadAuthFile() {
+  try {
+    if (!existsSync(AUTH_FILE)) return null;
+    const raw = JSON.parse(readFileSync(AUTH_FILE, "utf-8"));
+    if (!isRecord(raw) || typeof raw.id !== "string" || raw.id === "") return null;
+    if (!Array.isArray(raw.cookies)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build a Cookie header string from a cookie array (Playwright format).
+ * Only cookies for the opencode.ai domain are kept.
+ */
+function buildCookieHeaderFromCookies(cookies) {
+  if (!Array.isArray(cookies)) return "";
+  const relevant = cookies.filter(
+    (c) => c.domain === "opencode.ai" || c.domain.endsWith(".opencode.ai")
+  );
+  return relevant.map((c) => `${c.name}=${c.value}`).join("; ");
 }
 
 /**
@@ -103,26 +134,21 @@ function parseDuration(str) {
 
 /**
  * Build a Cookie header string from a cookie JSON file (Playwright format).
+ * Kept for backwards compatibility with older <id>.session-cookies.json files.
  */
 function buildCookieHeader(cookiePath) {
   if (!cookiePath || !existsSync(cookiePath)) return "";
   const cookies = JSON.parse(readFileSync(cookiePath, "utf-8"));
-  // Only include cookies for opencode.ai domain
-  const relevant = cookies.filter(
-    (c) => c.domain === "opencode.ai" || c.domain.endsWith(".opencode.ai")
-  );
-  return relevant.map((c) => `${c.name}=${c.value}`).join("; ");
+  return buildCookieHeaderFromCookies(cookies);
 }
 
 /**
  * Fetch the workspace page HTML using plain HTTP with cookies.
  * @param {string} url - the workspace URL
- * @param {string} cookiePath - path to .session-cookies.json
+ * @param {string} cookieHeader - Cookie header string (from auth.json or legacy file)
  * @param {object} [ctx] - { signal?: AbortSignal }
  */
-async function fetchPageHtml(url, cookiePath, ctx) {
-  const cookieHeader = buildCookieHeader(cookiePath);
-
+async function fetchPageHtml(url, cookieHeader, ctx) {
   const response = await fetch(url, {
     headers: {
       Cookie: cookieHeader,
@@ -195,11 +221,11 @@ function parseUsageCards(html) {
 /**
  * Scrape the opencode.ai workspace page using HTTP fetch + cookies.
  * @param {string} workspaceUrl - e.g. "https://opencode.ai/workspace/wrk_xxx/go"
- * @param {string} cookiePath - path to .session-cookies.json
+ * @param {string} cookieHeader - Cookie header string
  * @param {object} [ctx] - { signal?: AbortSignal }
  */
-async function scrapeWorkspace(workspaceUrl, cookiePath, ctx) {
-  const html = await fetchPageHtml(workspaceUrl, cookiePath, ctx);
+async function scrapeWorkspace(workspaceUrl, cookieHeader, ctx) {
+  const html = await fetchPageHtml(workspaceUrl, cookieHeader, ctx);
   const cards = parseUsageCards(html);
   return cards;
 }
@@ -306,15 +332,35 @@ function fillQuota(cards) {
 
 export default {
   /**
-   * @param {string} authenticationKey - opencode.ai workspace ID (e.g. "wrk_xxxxxxxxxxxxxxxxxxxxxxxxxx")
+   * @param {string} [authenticationKey] - opencode.ai workspace ID
+   *   (e.g. "wrk_xxxxxxxxxxxxxxxxxxxxxxxxxx"). 可选: 优先读取 auth.json 中的
+   *   id + cookies; 仅在 auth.json 不存在时回退到 authenticationKey 定位旧 cookie 文件。
    * @param {object} [ctx] - { signal?: AbortSignal }
    * @returns {Promise<object|null>} { short, mid, long } or null
    */
   async fetchAccountCredit(authenticationKey, ctx) {
-    if (!authenticationKey) return null;
-    const workspaceUrl = workspaceUrlFor(authenticationKey);
-    const cookiePath = cookiePathForWorkspace(authenticationKey);
-    const cards = await scrapeWorkspace(workspaceUrl, cookiePath, ctx);
+    const auth = loadAuthFile();
+    let workspaceId = authenticationKey || null;
+    let cookieHeader = "";
+
+    if (auth) {
+      workspaceId = auth.id || workspaceId;
+      cookieHeader = buildCookieHeaderFromCookies(auth.cookies);
+    }
+    // 兼容旧文件: <id>.session-cookies.json
+    if (!cookieHeader && workspaceId) {
+      cookieHeader = buildCookieHeader(cookiePathForWorkspace(workspaceId));
+    }
+
+    if (!workspaceId) return null;
+    if (cookieHeader === "") {
+      throw new Error(
+        `no session cookies found for opencode — run: npx creditgauge plugin auth opencode`,
+      );
+    }
+
+    const workspaceUrl = workspaceUrlFor(workspaceId);
+    const cards = await scrapeWorkspace(workspaceUrl, cookieHeader, ctx);
     if (!cards || cards.length === 0) return null;
     return fillQuota(cards);
   },
@@ -332,4 +378,6 @@ export {
   parseDuration,
   findCard,
   scrapeWorkspace,
+  loadAuthFile,
+  buildCookieHeaderFromCookies,
 };
