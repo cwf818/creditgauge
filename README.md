@@ -502,7 +502,7 @@ settings.example.json # template (NEVER commit real settings.json)
 
 **v1.1.8** — New `creditgauge-plugin` CLI (`npx creditgauge plugin add/remove/auth/list`) for query plugin lifecycle management; new opencode.ai workspace quota plugin; query plugin metadata registry (`query_plugins/plugins.json`). Supports `opencode`, `bigmodel`, `copilot-api`, `kimi` out of the box.
 
-**v1.1.7** — New `npx creditgauge install` (auto-mirrors into plugin cache on cache miss, no marketplace required); new `/creditgauge:reset` slash command to wipe per-project runtime caches; new `standard-slim` preset with compressed header row and reduced spacing.
+**v1.1.7** — New `npx creditgauge install` (auto-mirrors into plugin cache on cache miss, no marketplace required); new `/creditgauge:reset` slash command to wipe per-project runtime caches; new `standard-slim` preset with compressed header row and reduced spacing (removed in a later release — superseded by the `solo` preset).
 
 **v1.0.0** — Renamed from `topgauge` to `creditgauge` (hard cut, no compat shim). See CHANGELOG for the rename history (`tokenplan-usage-hud` → `topgauge` v0.7.0 → `creditgauge` v1.0.0).
 

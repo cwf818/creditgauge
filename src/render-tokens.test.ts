@@ -7722,6 +7722,85 @@ describe("renderTemplate — m_tokenCost family (vX.X.X per-model prices)", () =
   });
 
   // ------------------------------------------------------------------
+  // m_tokenCost / m_accTokenCost — CURRENCY-filter → default fallback
+  // with exchange-rate conversion (vX.X.X+). The provider has a
+  // CURRENCY:["USD"] filter and NO per-model/per-provider price, so
+  // resolveTokenPrice walks to the global `default` (CNY) and converts
+  // it to USD via the default block's exchange rates. No rates → the
+  // entry is still rejected → cost:n/a.
+  // ------------------------------------------------------------------
+  const commandcodeSnap = () => fakeSnapshot({
+    modelId: "deepseek-v4-flash[1m]",
+    current: { tokenIn: 739, tokenOut: 178, tokenCacheCreation: 0, tokenCachedIn: 56064 },
+    cost: { totalDurationMs: 600_000, totalApiDurationMs: 60_000, totalLinesAdded: 3965, totalLinesRemoved: 967 },
+  });
+
+  function seedDefaultCnyAndUsdRate(): void {
+    __resetForTest({
+      tokenPrices: {
+        default: { currency: "CNY", in: 3, out: 9, cachedIn: 0.1 },
+      },
+      exchangeRates: { USD: 0.15 },
+      providers: {
+        commandcode: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "http://127.0.0.1:5411",
+          COMPARE_METHOD: "STARTWITH",
+          CURRENCY: ["USD"],
+        },
+      },
+    });
+  }
+
+  it("m_tokenCost converts global-default CNY price to provider CURRENCY[0] (USD) when the model has no entry", () => {
+    seedDefaultCnyAndUsdRate();
+    setPrevTick("sess-test", { totalApiMs: 0 }, "D:\\test");
+    const snap = commandcodeSnap();
+    processTick(snap.cwd, snap, "commandcode");
+    statusStore.commit();
+    const out = renderTemplate(["m_tokenCost"], ctxFor(snap)).join("\n");
+    // default(CNY in=3 out=9 cached=0.1) → USD via rate 0.15 →
+    // (in=0.45 out=1.35 cached=0.015) per 1M. Per-token cost =
+    // 739*0.45e-6 + 178*1.35e-6 + 56064*0.015e-6 = 0.00033255 + 0.0002403
+    // + 0.00084096 = 0.00141381 → formatCost (n<0.01 → 5dp) → "$0.00141".
+    assert.equal(strip(out), "cost:$0.00141");
+  });
+
+  it("m_accTokenCost accumulates the converted cost into the scope slot", () => {
+    seedDefaultCnyAndUsdRate();
+    setPrevTick("sess-test", { totalApiMs: 0 }, "D:\\test");
+    const snap = commandcodeSnap();
+    processTick(snap.cwd, snap, "commandcode");
+    statusStore.commit();
+    const out = renderTemplate(["m_accTokenCost"], ctxFor(snap)).join("\n");
+    assert.equal(strip(out), "cost:$0.00141");
+  });
+
+  it("m_tokenCost stays cost:n/a when the default entry is filtered but no exchange rate exists", () => {
+    // Same CURRENCY filter + default, but exchangeRates empty → the
+    // conversion path is unavailable → the entry stays rejected.
+    __resetForTest({
+      tokenPrices: {
+        default: { currency: "CNY", in: 3, out: 9, cachedIn: 0.1 },
+      },
+      providers: {
+        commandcode: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "http://127.0.0.1:5411",
+          COMPARE_METHOD: "STARTWITH",
+          CURRENCY: ["USD"],
+        },
+      },
+    });
+    setPrevTick("sess-test", { totalApiMs: 0 }, "D:\\test");
+    const snap = commandcodeSnap();
+    processTick(snap.cwd, snap, "commandcode");
+    statusStore.commit();
+    const out = renderTemplate(["m_tokenCost"], ctxFor(snap)).join("\n");
+    assert.match(strip(out), /cost:n\/a/);
+  });
+
+  // ------------------------------------------------------------------
   // m_sumTokenCost (cross-project sum / windowed)
   // Use setStatCacheForTest to seed the aggregate cache directly
   // (avoids JSONL file isolation complexity).

@@ -138,7 +138,7 @@ write_config '{
   "statuslineTemplate": "nope"
 }'
 out="$(run_config)"
-assert_match_str "[status-unknown] lists valid presets" "unknown preset; valid: simple compact standard solo" "$out"
+assert_match_str "[status-unknown] lists valid presets" "unknown preset; valid: simple compact solo standard" "$out"
 
 echo "-- status: upstream enabled / disabled --"
 build_fixture
@@ -186,7 +186,7 @@ echo "-- set-preset: unknown preset errors --"
 build_fixture
 out="$(run_config --preset-nope 2>&1)"; rc=$?
 assert_eq "[set-preset-unknown] exit code" "1" "$rc"
-assert_match_str "[set-preset-unknown] lists valid presets" "valid presets: simple compact standard solo" "$out"
+assert_match_str "[set-preset-unknown] lists valid presets" "valid presets: simple compact solo standard" "$out"
 
 echo "-- set-preset: bad JSON leaves file untouched --"
 build_fixture

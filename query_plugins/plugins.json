@@ -48,5 +48,21 @@
     "alternativeToken": true,
     "alternativeTokenHint": "AUTHENTICATION_KEY 请提供 workspace_id，查询链接中的 wrk_xxx 字串",
     "credentialsDir": "credentials/opencode"
+  },
+  "commandcode": {
+    "title": "CommandCode 用量查询",
+    "description": "CommandCode 账号 token 套餐用量查询。AUTHENTICATION_KEY 请提供账号 slug（usage 页面 URL 中的 <slug>，如 https://commandcode.ai/<slug>/settings/usage）。会话 Cookie 保存于 credentials/commandcode/，与 opencode 插件相同的认证方式",
+    "template": {
+      "TYPE": "QUOTA",
+      "BASE_URL_COMPARED_TO": "http://127.0.0.1:5411",
+      "COMPARE_METHOD": "STARTWITH",
+      "AUTHENTICATION_KEY": "",
+      "CURRENCY": ["USD"]
+    },
+    "hasAuth": true,
+    "authScript": "auth.cjs",
+    "alternativeToken": true,
+    "alternativeTokenHint": "AUTHENTICATION_KEY 请提供账号 slug，即 usage 页面 https://commandcode.ai/<slug>/settings/usage 中的 <slug> 字串",
+    "credentialsDir": "credentials/commandcode"
   }
 }

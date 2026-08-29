@@ -86,7 +86,9 @@ export type TokenSample = {
 // `cost` = stdin.cost; `contextWindow` = size + used%/remaining%.
 // Contract: `current.tokenIn`/`tokenOut`/`tokenCachedIn` are PER-TURN
 // deltas, and the invariant `total_input_tokens == input_tokens +
-// cache_read_input_tokens` holds (violation → diagnostics warning).
+// cache_read_input_tokens + cache_creation_input_tokens` holds. A missing
+// creation-cache value is treated as zero for this check (violation →
+// diagnostics warning).
 // Field names are module-keyed (current.tokenIn ← m_tokenIn,
 // totals.tokenTotalIn ← m_tokenTotalIn, contextWindow.contextWindowSize
 // ← m_contextWindowSize) so stdin → render is one hop.

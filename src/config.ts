@@ -418,6 +418,55 @@ export const configStore = {
   },
 };
 
+// Convert a price entry's currency via the exchange-rate table (pivot
+// = baseCurrency). Returns null when the pair has no safe conversion
+// path (a rate is missing or ≤0) — the caller keeps rejecting the entry
+// so a wrong-currency cost is never silently accepted. scale =
+// toRate/fromRate with base→X treated as X's own rate.
+function convertPriceEntryTo(
+  entry: TokenPriceEntry,
+  target: string,
+  rates: Record<string, number>,
+  baseCurrency: string,
+): TokenPriceEntry | null {
+  if (entry.currency === target) return entry;
+  const fromRate = entry.currency === baseCurrency ? 1 : rates[entry.currency];
+  const toRate = target === baseCurrency ? 1 : rates[target];
+  if (!(fromRate != null && fromRate > 0) || !(toRate != null && toRate > 0)) {
+    return null;
+  }
+  const scale = toRate / fromRate;
+  return {
+    in: entry.in * scale,
+    out: entry.out * scale,
+    cachedIn: entry.cachedIn * scale,
+    currency: target,
+  };
+}
+
+// Apply a provider's CURRENCY filter to one candidate price entry:
+//   - no filter (undefined) → accept as-is
+//   - entry currency in the filter → accept as-is
+//   - otherwise → convert to CURRENCY[0] via exchangeRates when a safe
+//     path exists; reject when it doesn't. An empty CURRENCY array keeps
+//     its current all-reject semantics (CURRENCY[0] undefined → null).
+function acceptPriceEntry(
+  entry: TokenPriceEntry,
+  currencyFilter: string[] | undefined,
+  config: Config,
+): TokenPriceEntry | null {
+  if (!currencyFilter) return entry;
+  if (currencyFilter.includes(entry.currency)) return entry;
+  const target = currencyFilter[0];
+  if (!target) return null;
+  return convertPriceEntryTo(
+    entry,
+    target,
+    config.exchangeRates,
+    config.tokenPrices.default?.currency ?? "CNY",
+  );
+}
+
 // Resolve the effective token price for provider+model via the
 // 5-layer cascade (highest first):
 //   1. config.json providers.<p>.config.tokenPrices.<model>
@@ -425,10 +474,14 @@ export const configStore = {
 //   3. config.json providers.<p>.config.tokenPrices.default
 //   4. config.tokenPrices.json <provider>.default
 //   5. config.tokenPrices.json default
-// No match → null (callers render cost:n/a). Accepts a Config snapshot
-// + providerId + modelId. When the model name ends with `[...]`
-// (e.g. `deepseek-v4-flash[1m]`) and nothing matches, retry with the
-// bracket suffix stripped.
+// Every layer passes through the provider's CURRENCY filter: an entry
+// whose currency is outside the filter is converted to CURRENCY[0] via
+// the exchange-rate table (default block's non-standard fields) when a
+// safe path exists — so a CNY global default can still price a USD-only
+// provider — and rejected otherwise. No match → null (callers render
+// cost:n/a). Accepts a Config snapshot + providerId + modelId. When the
+// model name ends with `[...]` (e.g. `deepseek-v4-flash[1m]`) and
+// nothing matches, retry with the bracket suffix stripped.
 export function resolveTokenPrice(
   config: Config,
   providerId: string | null,
@@ -441,7 +494,9 @@ export function resolveTokenPrice(
 
   // Provider CURRENCY filter: only price entries whose currency is in
   // this array are accepted (avoids silently wrong costs from a
-  // different-currency fallback). Absent = no filter.
+  // different-currency fallback). An entry outside the filter may still
+  // be converted to CURRENCY[0] via exchange rates (see acceptPriceEntry).
+  // Absent = no filter.
   const currencyFilter: string[] | undefined =
     providerId
       ? (config.providers[providerId] as Record<string, unknown> | undefined)
@@ -450,8 +505,8 @@ export function resolveTokenPrice(
 
   // 1. Provider override — specific model
   if (override?.[modelId]) {
-    const c = override[modelId];
-    if (!currencyFilter || currencyFilter.includes(c.currency)) return c;
+    const c = acceptPriceEntry(override[modelId], currencyFilter, config);
+    if (c) return c;
   }
 
   // 2. File — specific model
@@ -463,9 +518,12 @@ export function resolveTokenPrice(
         const e = modelEntry as Record<string, unknown>;
         if (typeof e.in === "number" && typeof e.out === "number" &&
             typeof e.cachedIn === "number" && typeof e.currency === "string") {
-          if (!currencyFilter || currencyFilter.includes(e.currency)) {
-            return { in: e.in, out: e.out, cachedIn: e.cachedIn, currency: e.currency };
-          }
+          const c = acceptPriceEntry(
+            { in: e.in, out: e.out, cachedIn: e.cachedIn, currency: e.currency },
+            currencyFilter,
+            config,
+          );
+          if (c) return c;
         }
       }
     }
@@ -473,8 +531,8 @@ export function resolveTokenPrice(
 
   // 3. Provider override — default
   if (override?.default) {
-    const c = override.default;
-    if (!currencyFilter || currencyFilter.includes(c.currency)) return c;
+    const c = acceptPriceEntry(override.default, currencyFilter, config);
+    if (c) return c;
   }
 
   // 4. File — provider default
@@ -486,9 +544,12 @@ export function resolveTokenPrice(
         const e = def as Record<string, unknown>;
         if (typeof e.in === "number" && typeof e.out === "number" &&
             typeof e.cachedIn === "number" && typeof e.currency === "string") {
-          if (!currencyFilter || currencyFilter.includes(e.currency)) {
-            return { in: e.in, out: e.out, cachedIn: e.cachedIn, currency: e.currency };
-          }
+          const c = acceptPriceEntry(
+            { in: e.in, out: e.out, cachedIn: e.cachedIn, currency: e.currency },
+            currencyFilter,
+            config,
+          );
+          if (c) return c;
         }
       }
     }
@@ -496,8 +557,8 @@ export function resolveTokenPrice(
 
   // 5. File — global default
   if (file.default) {
-    const c = file.default;
-    if (!currencyFilter || currencyFilter.includes(c.currency)) return c;
+    const c = acceptPriceEntry(file.default, currencyFilter, config);
+    if (c) return c;
   }
 
   // Bracket-suffix fallback: strip trailing `[...]` and retry

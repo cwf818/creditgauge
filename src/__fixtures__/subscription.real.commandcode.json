@@ -1,0 +1,25 @@
+{
+  "success": true,
+  "data": {
+    "id": "sub_1U8GH7DSZgxV3MJKTpbWuSKI",
+    "status": "active",
+    "userId": "348c68f9-5c39-4e34-a27c-c24fd4866177",
+    "orgId": null,
+    "createdAt": "2026-08-25T09:03:37.000Z",
+    "priceId": "price_1U0sTYDSZgxV3MJKUKHcvFxc",
+    "metadata": {
+      "fbp": "fb.1.1787317819915.167099685738238770",
+      "commandCode": "true",
+      "commandCodeUserId": "348c68f9-5c39-4e34-a27c-c24fd4866177"
+    },
+    "quantity": 1,
+    "cancelAtPeriodEnd": false,
+    "currentPeriodStart": "2026-08-25T09:03:37.000Z",
+    "currentPeriodEnd": "2026-09-25T09:03:37.000Z",
+    "endedAt": null,
+    "cancelAt": null,
+    "canceledAt": null,
+    "planId": "individual-goat",
+    "pendingPhase": null
+  }
+}

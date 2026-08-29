@@ -5,8 +5,9 @@
 // Tolerates partial input — any field may be missing; each renderer module
 // null-checks its own piece.
 //
-// Invariant: total_input_tokens == current.input_tokens +
-// cache_read_input_tokens. A violation appends a `warning` to the per-project
+// Invariant: total_input_tokens == input_tokens + cache_read_input_tokens +
+// cache_creation_input_tokens. A missing creation-cache value is treated as
+// zero for this check. A violation appends a `warning` to the per-project
 // diagnostics log (gated by CREDITGAUGE_DIAGNOSTICS_ENABLE) — surfacing
 // schema drift without breaking the render path.
 //
@@ -118,29 +119,35 @@ export function parseTokenSnapshot(raw: string): TokenSnapshot | null {
   };
 
   // Invariant check: total_input_tokens must equal input_tokens +
-  // cache_read_input_tokens (verified on the live 2026-06-29 sample and the
-  // stdin.real.json fixture). A violation means provider schema drift — record
+  // cache_read_input_tokens + cache_creation_input_tokens (verified on the
+  // live 2026-06-29 sample and the stdin.real.json fixture). Missing creation
+  // cache is treated as zero. A violation means provider schema drift — record
   // it (gated by CREDITGAUGE_DIAGNOSTICS_ENABLE, 60s dedupe) but don't break
   // the render path. Reads the module-keyed fields tokenTotalIn / tokenIn /
-  // tokenCachedIn.
+  // tokenCachedIn / tokenCacheCreation.
+  const cacheCreation = snap.current.tokenCacheCreation ?? 0;
   if (
     snap.totals.tokenTotalIn != null &&
     snap.current.tokenIn != null &&
     snap.current.tokenCachedIn != null &&
-    snap.totals.tokenTotalIn !== snap.current.tokenIn + snap.current.tokenCachedIn
+    snap.totals.tokenTotalIn !==
+      snap.current.tokenIn + snap.current.tokenCachedIn + cacheCreation
   ) {
     diagnostics.append(
       "warning",
       "tokenTotalIn-invariant",
-      `total_input_tokens=${snap.totals.tokenTotalIn} != input_tokens(${snap.current.tokenIn}) + cache_read_input_tokens(${snap.current.tokenCachedIn})`,
+      `total_input_tokens=${snap.totals.tokenTotalIn} != input_tokens(${snap.current.tokenIn}) + cache_read_input_tokens(${snap.current.tokenCachedIn}) + cache_creation_input_tokens(${cacheCreation})`,
       Date.now(),
       snap.cwd,
       undefined,
       "parse",
     );
-    // On violation, derive tokenIn from the known totals and cache_read
-    // rather than propagating the bogus stdin value (often 0).
-    snap.current.tokenIn = Math.max(0, snap.totals.tokenTotalIn - snap.current.tokenCachedIn);
+    // On violation, derive tokenIn from the known totals and both cache
+    // channels rather than propagating the bogus stdin value (often 0).
+    snap.current.tokenIn = Math.max(
+      0,
+      snap.totals.tokenTotalIn - snap.current.tokenCachedIn - cacheCreation,
+    );
   }
 
   return snap;

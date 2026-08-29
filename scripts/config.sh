@@ -17,7 +17,7 @@
 # without touching settings.json.
 #
 # Valid presets (MUST stay in sync with DEFAULT_STATUSLINE_PRESETS keys in
-# src/config.template.ts): simple, compact, standard, solo.
+# src/config.template.ts): simple, compact, solo, standard.
 
 set -u
 
@@ -26,7 +26,7 @@ ACTION_PRESET=""
 ACTION_DISABLE=0
 ACTION_ENABLE=0
 HELP=0
-VALID_PRESETS="simple compact standard solo"
+VALID_PRESETS="simple compact solo standard"
 
 for arg in "$@"; do
   case "$arg" in

@@ -8,6 +8,7 @@ import {
   __testing,
   configStore,
   loadConfig,
+  resolveTokenPrice,
 } from "./config.ts";
 import { DEFAULT_LINE_TEMPLATES, DEFAULT_STATUSLINE_PRESETS } from "./config.template.ts";
 
@@ -377,5 +378,88 @@ describe("m_* auto-space affix toggles (vX.X.X+)", () => {
     } finally {
       process.stderr.write = origWrite;
     }
+  });
+});
+
+// vX.X.X+ — resolveTokenPrice: a price entry whose currency is outside
+// the provider's CURRENCY filter may be converted to CURRENCY[0] via the
+// exchange-rate table (global default fallback). No safe conversion path
+// → the entry stays rejected (cost:n/a).
+describe("resolveTokenPrice — CURRENCY-filter conversion fallback (vX.X.X+)", () => {
+  const base = () => ({
+    tokenPrices: {
+      default: { currency: "CNY", in: 3, out: 9, cachedIn: 0.1 },
+    },
+    exchangeRates: { USD: 0.15 },
+    providers: {
+      commandcode: {
+        TYPE: "QUOTA",
+        BASE_URL_COMPARED_TO: "http://127.0.0.1:5411",
+        COMPARE_METHOD: "STARTWITH",
+        CURRENCY: ["USD"],
+      },
+    },
+  });
+
+  it("entry outside the filter converts to CURRENCY[0] when rates exist", () => {
+    __resetForTest(base() as never);
+    const r = resolveTokenPrice(configStore.get(), "commandcode", "deepseek-v4-flash");
+    assert.ok(r !== null);
+    assert.equal(r!.currency, "USD");
+    assert.equal(r!.in, 3 * 0.15);
+    assert.equal(r!.out, 9 * 0.15);
+    assert.equal(r!.cachedIn, 0.1 * 0.15);
+  });
+
+  it("bracket-suffixed model id converts via the stripped retry", () => {
+    __resetForTest(base() as never);
+    const r = resolveTokenPrice(configStore.get(), "commandcode", "deepseek-v4-flash[1m]");
+    assert.ok(r !== null);
+    assert.equal(r!.currency, "USD");
+    assert.equal(r!.in, 3 * 0.15);
+  });
+
+  it("entry outside the filter stays rejected when rates are empty", () => {
+    __resetForTest({ ...base(), exchangeRates: {} } as never);
+    const r = resolveTokenPrice(configStore.get(), "commandcode", "deepseek-v4-flash");
+    assert.equal(r, null);
+  });
+
+  it("entry whose currency already matches the filter is accepted unchanged", () => {
+    __resetForTest({
+      ...base(),
+      tokenPrices: {
+        default: { currency: "USD", in: 0.14, out: 0.28, cachedIn: 0.0028 },
+      },
+    } as never);
+    const r = resolveTokenPrice(configStore.get(), "commandcode", "deepseek-v4-flash");
+    assert.ok(r !== null);
+    assert.equal(r!.currency, "USD");
+    assert.equal(r!.in, 0.14);
+  });
+
+  it("no CURRENCY filter → entry accepted as-is regardless of currency", () => {
+    // minimax has no CURRENCY in DEFAULT_PROVIDERS → no filter.
+    __resetForTest({ ...base(), providers: {} } as never);
+    const r = resolveTokenPrice(configStore.get(), "minimax", "MiniMax-M3");
+    assert.ok(r !== null);
+    assert.equal(r!.currency, "CNY");
+    assert.equal(r!.in, 3);
+  });
+
+  it("empty CURRENCY array keeps rejecting every entry", () => {
+    __resetForTest({
+      ...base(),
+      providers: {
+        commandcode: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "http://127.0.0.1:5411",
+          COMPARE_METHOD: "STARTWITH",
+          CURRENCY: [],
+        },
+      },
+    } as never);
+    const r = resolveTokenPrice(configStore.get(), "commandcode", "deepseek-v4-flash");
+    assert.equal(r, null);
   });
 });

@@ -217,9 +217,11 @@ describe("parseTokenSnapshot — null cases", () => {
 });
 
 // v0.8.0+ — invariant check on parse:
-//   total_input_tokens == current.input + current.cacheRead
+//   total_input_tokens == input_tokens + cache_read_input_tokens
+//     + cache_creation_input_tokens
 // When violated, parseTokenSnapshot appends a `warning` to the
-// per-project diagnostics log. The warning is gated by
+// per-project diagnostics log. Missing cache_creation_input_tokens is
+// treated as zero for this check. The warning is gated by
 // `CREDITGAUGE_DIAGNOSTICS_ENABLE=1`. Tests below exercise both
 // the satisfied-invariant and violated-invariant paths against a
 // sandboxed CLAUDE_CONFIG_DIR so the user's real diagnostics log
@@ -262,7 +264,28 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
     assert.equal(line, null, "no diagnostics line should be written");
   });
 
-  it("violation: totals=200, in=100, cacheRead=50 → warn (200 != 100+50) + fallback", () => {
+  it("nonzero cache creation satisfies invariant (3 + 79266 + 182 = 79451) — no warn", () => {
+    setDebugFlags({ parse: true });
+    const cwd = "D:\\invariant-nonzero-creation";
+    const raw = JSON.stringify({
+      session_id: "sess-nonzero-creation",
+      cwd,
+      context_window: {
+        total_input_tokens: 79451,
+        current_usage: {
+          input_tokens: 3,
+          cache_creation_input_tokens: 182,
+          cache_read_input_tokens: 79266,
+        },
+      },
+    });
+    const snap = parseTokenSnapshot(raw);
+    assert.ok(snap);
+    assert.equal(snap!.current.tokenCacheCreation, 182);
+    assert.equal(lastLine(cwd), null, "complete input accounting should not warn");
+  });
+
+  it("violation: totals=200, in=100, cacheRead=50, creation=0 → warn + fallback", () => {
     setDebugFlags({ parse: true });
     const cwd = "D:\\invariant-test";
     const raw = JSON.stringify({
@@ -286,11 +309,36 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
     assert.match(e.msg, /total_input_tokens=200/);
     assert.match(e.msg, /input_tokens\(100\)/);
     assert.match(e.msg, /cache_read_input_tokens\(50\)/);
-    // Fallback: tokenIn is derived from totals - cacheRead
-    assert.equal(snap!.current.tokenIn, 150, "tokenIn should be derived as max(0, 200-50) = 150");
+    assert.match(e.msg, /cache_creation_input_tokens\(0\)/);
+    // Fallback: tokenIn is derived from totals - cacheRead - cacheCreation.
+    assert.equal(snap!.current.tokenIn, 150, "tokenIn should be derived as max(0, 200-50-0) = 150");
   });
 
-  it("violation fallback: totals=999, in=1( bogus), cacheRead=1 → tokenIn=998", () => {
+  it("violation subtracts cache creation in tokenIn fallback", () => {
+    setDebugFlags({ parse: true });
+    const cwd = "D:\\invariant-nonzero-creation-violation";
+    const raw = JSON.stringify({
+      session_id: "sess-nonzero-creation-violation",
+      cwd,
+      context_window: {
+        total_input_tokens: 200,
+        current_usage: {
+          input_tokens: 100,
+          cache_creation_input_tokens: 25,
+          cache_read_input_tokens: 50,
+        },
+      },
+    });
+    const snap = parseTokenSnapshot(raw);
+    assert.ok(snap);
+    const line = lastLine(cwd);
+    assert.ok(line, "expected a warning line to be written");
+    const e = JSON.parse(line!) as { msg: string };
+    assert.match(e.msg, /cache_creation_input_tokens\(25\)/);
+    assert.equal(snap!.current.tokenIn, 125, "fallback should be 200-50-25");
+  });
+
+  it("violation fallback: totals=999, in=1( bogus), cacheRead=1, creation=0 → tokenIn=998", () => {
     const raw = JSON.stringify({
       session_id: "sess-2",
       cwd: "D:\\invariant-test-2",
@@ -301,9 +349,9 @@ describe("parseTokenSnapshot — v0.8.0 tokenTotalIn invariant", () => {
     });
     const snap = parseTokenSnapshot(raw);
     assert.ok(snap);
-    // Invariant violation triggers fallback: tokenIn = max(0, total - cacheRead)
+    // Invariant violation triggers fallback: tokenIn = max(0, total - cacheRead - cacheCreation)
     assert.equal(snap!.totals.tokenTotalIn, 999);
-    assert.equal(snap!.current.tokenIn, 998, "bogus stdin value 1 should be replaced by 999-1");
+    assert.equal(snap!.current.tokenIn, 998, "bogus stdin value 1 should be replaced by 999-1-0");
     assert.equal(snap!.current.tokenCachedIn, 1);
   });
 
