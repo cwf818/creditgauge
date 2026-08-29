@@ -14,7 +14,7 @@
 // Dispatch is TYPE-based (reads the provider's TYPE field from the providers
 // config block). Adding a new provider requires a matching plugin + config.
 
-import type { Quota, Balance, PluginResolution } from "./api.ts";
+import type { Quota, Balance } from "./api.ts";
 import {
   RED,
   renderProviderLine,
@@ -26,25 +26,10 @@ import {
   failLabelForProvider,
   getProviderEntry,
 } from "./providers.ts";
-import * as cache from "./cache.ts";
 import type { Provider, TokenSnapshot } from "./types.ts";
 
 // Tiny local alias — used twice in the empty-output guard below.
 const cfg = (): ReturnType<typeof configStore.get> => configStore.get();
-
-// Read the per-provider pluginSource row via cache.peek (TTL-ignoring), so an
-// override-file change reflects on the NEXT tick even within the data row's
-// TTL. Returns null when no provider matched / no row exists. `"missing"`
-// (matched id with no user override and no built-in) is passed through so
-// m_pluginSource renders ❗ — a misconfigured provider is loud, not silent.
-function peekPluginSource(
-  provider: Provider | null,
-): "user" | "builtin" | "missing" | null {
-  if (!provider) return null;
-  const cached = cache.peek<PluginResolution>(`${provider}:pluginSource`);
-  if (cached === "user" || cached === "builtin" || cached === "missing") return cached;
-  return null;
-}
 
 // Detect a "label-only" degenerate output (renderer ran but every module
 // dropped, leaving just m_modeLabel + s_* separators). Strips ANSI escapes,
@@ -108,9 +93,6 @@ function renderDataLine(
   stale: boolean,
   tokens: TokenSnapshot | null,
   quoteBodies?: Map<string, string>,
-  // "user" | "builtin" | "missing" — the ctx field accepts all three;
-  // "missing" renders ❗ via labels.labelPluginMissing.
-  pluginSource?: "user" | "builtin" | "missing" | null,
 ): string | null {
   const entry = getProviderEntry(provider);
   const mode = resolveDisplayMode();
@@ -131,7 +113,6 @@ function renderDataLine(
       version: configStore.get().version,
       tokens,
       quoteBodies,
-      pluginSource: pluginSource ?? null,
     });
   }
   if (entry.TYPE === "QUOTA") {
@@ -156,7 +137,6 @@ function renderDataLine(
       version: configStore.get().version,
       tokens,
       quoteBodies,
-      pluginSource: pluginSource ?? null,
     });
   }
   if (entry.TYPE === "BALANCE") {
@@ -169,7 +149,6 @@ function renderDataLine(
       version: configStore.get().version,
       tokens,
       quoteBodies,
-      pluginSource: pluginSource ?? null,
     });
   }
   return null;
@@ -216,7 +195,6 @@ export function buildProviderLine(
         version: configStore.get().version,
         tokens,
         quoteBodies,
-        pluginSource: peekPluginSource(provider),
       });
       // Empty-output guard: every module dropped, leaving label + separator
       // artifacts. Fall back to the colored "not available!" sentinel, which
@@ -235,7 +213,6 @@ export function buildProviderLine(
     result.kind === "stale",
     tokens ?? null,
     quoteBodies,
-    peekPluginSource(provider),
   );
   // Empty-output guard: (a) renderDataLine returned literal null (data
   // unusable — all reserved intervals missing on Quota, or an unknown TYPE);

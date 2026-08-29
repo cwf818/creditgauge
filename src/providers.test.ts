@@ -15,7 +15,7 @@ import assert from "node:assert/strict";
 import { __resetForTest } from "./config.ts";
 import {
   compareUrl,
-  fetchForProviderWithKind,
+  fetchForProvider,
   getProviderEntry,
   matchProvider,
   failLabelForProvider,
@@ -502,17 +502,17 @@ describe("providerTypeFor (formerly templateKeyForProvider)", () => {
   });
 });
 
-describe("fetchForProviderWithKind — error paths (no network)", () => {
+describe("fetchForProvider — error paths (no network)", () => {
   it("throws when the provider has no registered entry", async () => {
     await assert.rejects(
-      () => fetchForProviderWithKind("nope", "tok", AbortSignal.timeout(1000)),
+      () => fetchForProvider("nope", "tok", AbortSignal.timeout(1000)),
       /unknown provider: nope/,
     );
   });
 
   it("throws when the provider is null", async () => {
     await assert.rejects(
-      () => fetchForProviderWithKind(null, "tok", AbortSignal.timeout(1000)),
+      () => fetchForProvider(null, "tok", AbortSignal.timeout(1000)),
       /unknown provider/,
     );
   });

@@ -335,7 +335,7 @@ The plugin reuses `process.env.ANTHROPIC_AUTH_TOKEN` to call the provider's plan
 
 The Claude Code statusline is updated in response to interaction events by default (every prompt, every tool result). Starting with **Claude Code 2.1.97**, the `statusLine.refreshInterval` field is honored, letting the statusline refresh on a fixed cadence instead. Two scopes of "refresh interval" are involved and they're independent:
 
-- **This plugin's 60 s TTL** — how long we cache a successful API response before re-fetching. MiniMax and DeepSeek have different rate-limit policies and refresh cadences; 60 s is a deliberate default that keeps the statusline responsive without hammering the API. Cache entries are shadowed to disk under the top-level `state/cache.json` (sibling of `config.json`, wiped by `:uninstall`), so the TTL is honored **across per-tick child-process spawns** — the second tick within 60 s reuses the first tick's value instead of re-fetching. Rows are keyed by provider id (the data row under the provider id, the plugin-source kind under `<provider>:pluginSource`), so different providers never collide on the same file.
+- **This plugin's 60 s TTL** — how long we cache a successful API response before re-fetching. MiniMax and DeepSeek have different rate-limit policies and refresh cadences; 60 s is a deliberate default that keeps the statusline responsive without hammering the API. Cache entries are shadowed to disk under the top-level `state/cache.json` (sibling of `config.json`, wiped by `:uninstall`), so the TTL is honored **across per-tick child-process spawns** — the second tick within 60 s reuses the first tick's value instead of re-fetching. Rows are keyed by provider id, so different providers never collide on the same file.
 - **Claude Code's `statusLine.refreshInterval`** — how often the harness invokes the statusline command. Set in `~/.claude/settings.json` independently of this plugin:
 
   ```json
@@ -394,7 +394,7 @@ The per-tick pipeline is split between **data-processor (writes)** and **render 
 
 ### Response shape
 
-The MiniMax plugin (`src/plugins/minimax/index.js`) projects the raw response into canonical `Quota` directly — there's no host-side parser layer to describe here. See [HOW_TO_CREATE_A_PLUGIN.md](./HOW_TO_CREATE_A_PLUGIN.md) for the plugin ABI and `src/plugins/minimax/index.js` for the worked example.
+The MiniMax plugin (`query_plugins/minimax/index.js`) projects the raw response into canonical `Quota` directly — there's no host-side parser layer to describe here. See [HOW_TO_CREATE_A_PLUGIN.md](./HOW_TO_CREATE_A_PLUGIN.md) for the plugin ABI and `query_plugins/minimax/index.js` for the worked example.
 
 If `base_resp.status_code ≠ 0`, the response is treated as failure and the line is omitted.
 
@@ -415,7 +415,7 @@ The verified real shape (captured against `https://www.minimaxi.com/v1/token_pla
 }
 ```
 
-The plugin picks the entry with the **lowest interval remaining %** as the source of truth (the most-active model). If you capture a fresh response and the shape diverges, save it as `src/__fixtures__/remains.real.json` and tighten the parser in `src/plugins/minimax/index.js`.
+The plugin picks the entry with the **lowest interval remaining %** as the source of truth (the most-active model). If you capture a fresh response and the shape diverges, save it as `src/__fixtures__/remains.real.json` and tighten the parser in `query_plugins/minimax/index.js`.
 
 The DeepSeek response shape is simpler — `{ is_available: bool, balance_infos: [{ currency, total_balance, granted_balance, topped_up_balance }, ...] }` — and the parser iterates **all** entries so every currency the account holds is rendered.
 

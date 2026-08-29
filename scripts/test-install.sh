@@ -110,7 +110,7 @@ build_fixture() {
   local base="${root}/plugins/cache/creditgauge/creditgauge"
   local curr="${base}/0.2.8"
   local prev="${base}/0.2.7"
-  mkdir -p "${curr}/scripts/lib" "${curr}/dist/plugins/minimax" "${curr}/dist/plugins/deepseek" "${prev}/state" \
+  mkdir -p "${curr}/scripts/lib" "${curr}/dist" "${curr}/query_plugins/minimax" "${curr}/query_plugins/deepseek" "${prev}/state" \
            "${root}/plugins/cache" \
            "${root}/plugins/creditgauge"
 
@@ -135,8 +135,8 @@ EOF
   # Provide stub runtime artifacts so the install script's "build on
   # demand" branch is skipped — tests must not need network access.
   printf '# stub\n' > "${curr}/dist/index.js"
-  printf '# stub\n' > "${curr}/dist/plugins/minimax/index.js"
-  printf '# stub\n' > "${curr}/dist/plugins/deepseek/index.js"
+  printf '# stub\n' > "${curr}/query_plugins/minimax/index.js"
+  printf '# stub\n' > "${curr}/query_plugins/deepseek/index.js"
 
   # Optionally pre-populate the STABLE state dir (the "already migrated"
   # case). When with_stable_state=yes, write a DIFFERENT upstream-cmd so
@@ -234,13 +234,13 @@ echo "-- no previous version (only one cache dir): no-op without copying --"
 root="$(mktemp -d -t creditgauge-install-test-XXXXXX)"
 base="${root}/plugins/cache/creditgauge/creditgauge"
 curr="${base}/0.2.8"
-mkdir -p "${curr}/scripts/lib" "${curr}/dist/plugins/minimax" "${curr}/dist/plugins/deepseek" "${root}/plugins/creditgauge"
+mkdir -p "${curr}/scripts/lib" "${curr}/dist" "${curr}/query_plugins/minimax" "${curr}/query_plugins/deepseek" "${root}/plugins/creditgauge"
 ln -s "${SCRIPT_DIR}/wrapper.sh" "${curr}/scripts/wrapper.sh"
 ln -s "${SCRIPT_DIR}/install.sh" "${curr}/scripts/install.sh"
 ln -s "${SCRIPT_DIR}/lib/edit-settings.mjs" "${curr}/scripts/lib/edit-settings.mjs"
 printf '# stub\n' > "${curr}/dist/index.js"
-printf '# stub\n' > "${curr}/dist/plugins/minimax/index.js"
-printf '# stub\n' > "${curr}/dist/plugins/deepseek/index.js"
+printf '# stub\n' > "${curr}/query_plugins/minimax/index.js"
+printf '# stub\n' > "${curr}/query_plugins/deepseek/index.js"
 cat > "${root}/settings.json" <<EOF
 { "statusLine": { "type": "command", "command": "bash -c 'plugin_dir=${curr}; exec bash \"\${plugin_dir}scripts/wrapper.sh\"'", "_creditgauge_managed": true } }
 EOF
@@ -276,14 +276,14 @@ build_journal_fixture() {
   local root
   root="$(mktemp -d -t creditgauge-journal-test-XXXXXX)"
   local base="${root}/plugins/cache/creditgauge/creditgauge/0.9.6"
-  mkdir -p "${base}/scripts/lib" "${base}/dist/plugins/minimax" "${base}/dist/plugins/deepseek"
+  mkdir -p "${base}/scripts/lib" "${base}/dist" "${base}/query_plugins/minimax" "${base}/query_plugins/deepseek"
   ln -sf "${SCRIPT_DIR}/wrapper.sh" "${base}/scripts/wrapper.sh"
   ln -sf "${SCRIPT_DIR}/install.sh" "${base}/scripts/install.sh"
   ln -sf "${SCRIPT_DIR}/lib/edit-settings.mjs" "${base}/scripts/lib/edit-settings.mjs"
   ln -sf "${SCRIPT_DIR}/lib/journal.mjs" "${base}/scripts/lib/journal.mjs"
   printf '# stub\n' > "${base}/dist/index.js"
-  printf '# stub\n' > "${base}/dist/plugins/minimax/index.js"
-  printf '# stub\n' > "${base}/dist/plugins/deepseek/index.js"
+  printf '# stub\n' > "${base}/query_plugins/minimax/index.js"
+  printf '# stub\n' > "${base}/query_plugins/deepseek/index.js"
   case "$with_status_line" in
     no)
       printf '{}\n' > "${root}/settings.json"

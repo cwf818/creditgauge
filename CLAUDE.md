@@ -18,7 +18,7 @@ The plugin is shipped as a **single-plugin marketplace**: the repo root IS the m
 npm install          # install dev deps (esbuild, typescript, tsx, @types/node)
 npm run typecheck    # tsc --noEmit
 npm test             # node --test via tsx (1182 tests across api/render/cache/composition, ~3.8s)
-npm run build        # esbuild → dist/index.js (single self-contained ESM bundle, target=node18) + copy-builtin-plugins.mjs → dist/plugins/{minimax,deepseek}/index.js
+npm run build        # esbuild → dist/index.js (single self-contained ESM bundle, target=node18)
 npm run dev          # esbuild --watch
 ```
 
@@ -77,7 +77,6 @@ scripts/
   config.sh           # read/modify runtime config (statuslineTemplate preset switch, upstream chain toggle)
   reset.sh            # wipe cache.json + state.json + cache.stat.json for the current project only
   migrate-state.sh    # legacy state/token-samples/<hash>/ → state/<hash>/ migration helper
-  copy-builtin-plugins.mjs # build step: src/plugins/<id>/index.js → dist/plugins/<id>/index.js
   dev-uninstall.sh    # DEV-ONLY thin shim → exec uninstall.sh
   lib/edit-settings.mjs # ESM helper used by install.sh
   lib/edit-config.mjs   # ESM helper used by config.sh
@@ -93,7 +92,7 @@ Claude Code's `statusLine.command` spawns a child process that reads a session J
 
 1. `statusLine.command` (written by `scripts/lib/edit-settings.mjs` `write-managed` op) is a `bash -c '…'` snippet that, at invocation time, `ls -d`s every directory under `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache/creditgauge/creditgauge/*/`, sorts by version (`sort -t. -k1,1n …`), tails the highest, and execs `scripts/wrapper.sh` from that `plugin_dir`. Same pattern claude-hud uses. This makes the command **version-independent** — when `/plugin install` rolls the cache forward (0.2.5 → 0.2.6), the existing `statusLine` keeps working without re-running `install.sh`. The command then optionally runs the bash script at `$CREDITGAUGE_UPSTREAM_CMD` (so the user can compose with another statusline, e.g. `ccstatusline` or `claude-hud`), captures its stdout into the `CREDITGAUGE_UPSTREAM` env var, then execs `dist/index.js` forwarding stdin. If `CREDITGAUGE_UPSTREAM_CMD` is unset, `CREDITGAUGE_UPSTREAM` is empty and this plugin becomes the sole statusline. Note: `CREDITGAUGE_UPSTREAM_CMD` is an **absolute path** to a bash script (a shebang + `exec bash -c '...'` wrapper written by install.sh), not a shell command line — older v0.1.10–v0.1.11 used `bash -c` against the path and silently failed; v0.1.12 runs it as a script (`bash "$CREDITGAUGE_UPSTREAM_CMD"`).
 2. `src/index.ts` reads stdin, matches `ANTHROPIC_BASE_URL` against `config.json.providers`, and dispatches through `src/api.ts` to a dynamically imported built-in or user plugin. The selected provider's `AUTHENTICATION_KEY` overrides `process.env.ANTHROPIC_AUTH_TOKEN`.
-3. Built-in plugins fetch and parse their own upstream responses. They return the canonical `Quota` or `Balance` shape through the shared `fetchAccountCredit(authenticationKey, context?)` ABI; user plugins use the same ABI and are loaded from `query_plugins/<id>/index.js` or `.mjs`. **v0.9.0+ — user plugins take precedence over built-ins:** placing a file at `~/.claude/plugins/creditgauge/query_plugins/<id>/index.{js,mjs}` silently overrides the bundled built-in of the same `<id>` (so `minimax` / `deepseek` are no longer a closed set — any user can ship a same-id replacement). No config flag, no stderr warn, no `diagnostics.jsonl` row — resolution is silent. The override side is only surfaced when the user plugin *fails to load* (the error message prefixes with `user plugin …` vs the built-in's `built-in plugin …` so you can tell which file actually threw). **v0.9.0+ — `m_pluginSource` module:** renders 📌 when the active provider’s plugin resolved to the bundled built-in, 🎨 when a user override at `query_plugins/<id>/` won, ❗ when the matched provider id has no plugin at all (neither user override nor built-in). A 4th glyph 🔖 is reserved for a future “claude 官方” branch (data sourced from stdin) but the dispatch arm is not yet wired (CC 分支暂不做实现 2026-07-12). The host stashes the resolution kind into `cache.json` under `<provider>:pluginSource` right after a successful `pluginTransportWithKind` call (see `src/api.ts`). The renderer reads it via `cache.peek` (TTL-ignoring) so adding/removing an override file reflects on the next tick without waiting for the data row to expire. No default tint — the symbol carries the meaning on its own, with `|color|<c>` available as an inline override. When no cache row exists (fresh install / no provider matched), the module drops to no-op. The MiniMax plugin's response parser accepts two shapes:
+3. Plugins fetch and parse their own upstream responses. They return the canonical `Quota` or `Balance` shape through the shared `fetchAccountCredit(authenticationKey, context?)` ABI. Every plugin — bundled (`minimax` / `deepseek`) or user-written — lives under the single `query_plugins/<id>/` layout. Resolution order: `~/.claude/plugins/creditgauge/query_plugins/<id>/index.{js,mjs}` (user-installed / user-overridden, silently wins — no config flag, no stderr warn, no `diagnostics.jsonl` row) then `<package>/query_plugins/<id>/index.js` (the bundled copy). `install.sh` seeds the bundled `minimax` / `deepseek` into the user dir on every (re-)install (no-clobber: a user file at the same id is never overwritten). The MiniMax plugin's response parser accepts two shapes:
    - **Real shape** (verified against `https://www.minimaxi.com/v1/token_plan/remains` on 2026-06-24): `{ model_remains: [{ model_name, current_interval_remaining_percent, current_weekly_remaining_percent, start_time, end_time, weekly_start_time, weekly_end_time, … }, …], base_resp: { status_code } }`. We pick the entry with the **lowest interval remaining %** as the source of truth (the most-active model). `start_time`/`end_time` (and their weekly counterparts) populate `Window.resetStartAt` and `Window.resetDurationMs` so the renderer can pick a window-fill-aware reset arrow.
    - **Legacy/fallback shape**: `{ data: { five_hour: { remaining, limit }, weekly: { remaining, limit } } }` — for any provider that returns the simpler schema (no start fields → reset arrow falls back to `resetArrows[0]`).
 4. Cache: `src/cache.ts` holds a single 60-second TTL entry. On fetch failure it returns the stale value so the statusline doesn't blank.
@@ -231,7 +230,7 @@ After install, run `/creditgauge:install` to wire the wrapper into `settings.jso
 ## Testing notes
 
 - `npm test` runs all 1182 tests in ~3.8s. No network calls in tests — they exercise pure functions and fixtures.
-- The captured real response lives at `src/__fixtures__/quota.real.minimax.json` and is the source of truth for the MiniMax parser's shape assumptions. If MiniMax changes the API, capture a fresh response and update both the fixture and the MiniMax plugin parser (`src/plugins/minimax/index.js`).
+- The captured real response lives at `src/__fixtures__/quota.real.minimax.json` and is the source of truth for the MiniMax parser's shape assumptions. If MiniMax changes the API, capture a fresh response and update both the fixture and the MiniMax plugin parser (`query_plugins/minimax/index.js`).
 - Live smoke test (no Claude Code needed): `echo '{}' | ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic ANTHROPIC_AUTH_TOKEN=<token> node dist/index.js`.
 - Live install smoke test: `bash scripts/install.sh --dry-run` then `bash scripts/install.sh` then `bash scripts/uninstall.sh` (or `bash scripts/uninstall.sh --dry-run` first).
 - Live uninstall smoke test: `bash scripts/uninstall.sh --dry-run` then `bash scripts/uninstall.sh`. Re-run to confirm idempotency.
@@ -239,7 +238,7 @@ After install, run `/creditgauge:install` to wire the wrapper into `settings.jso
 
 ## Build & release
 
-- `npm run build` produces `dist/index.js` (~345 KB) plus `dist/plugins/{minimax,deepseek}/index.js` (copied from `src/plugins/*/index.js` by `scripts/copy-builtin-plugins.mjs`). These are the artifacts the runtime needs.
+- `npm run build` produces `dist/index.js` (~345 KB), the single runtime entry artifact. Plugins are plain JS under `query_plugins/` (bundled copies ship in the package; `install.sh` seeds `minimax` / `deepseek` into `~/.claude/plugins/creditgauge/query_plugins/`).
 - Tag releases as `vX.Y.Z`; marketplace install picks up the highest version directory under `~/.claude/plugins/cache/<plugin>/<plugin>/`.
 - Push to GitHub via `gh repo create cwf818/creditgauge --public --source=. --remote=origin --push` then `git push --tags`. (This requires `gh` CLI auth — see README "Push to GitHub" if `gh` is not available.)
 
@@ -279,7 +278,7 @@ Then re-install:
 npm run build
 HIGHEST=$(ls -d ~/.claude/plugins/cache/creditgauge/creditgauge/*/ | sort -V | tail -1)
 cp dist/index.js "${HIGHEST}dist/index.js"
-cp -r dist/plugins "${HIGHEST}dist/plugins"   # built-in plugin copies
+cp -r query_plugins "${HIGHEST}query_plugins"  # bundled plugin copies (minimax / deepseek)
 # Smoke check: pick a unique identifier from your change and grep
 # for it in the cache bundle. Count must be > 0.
 grep -c "<unique_identifier_from_your_change>" "${HIGHEST}dist/index.js"

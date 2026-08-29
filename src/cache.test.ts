@@ -270,7 +270,7 @@ describe("getWithAge", () => {
 //
 // The cache is cwd-unaware (one Map, one on-disk file) — isolation is
 // the caller's job via distinct key namespaces (provider rows,
-// `<provider>:pluginSource`, `quote:<freqMs>:<address>`, …). This pins
+// `quote:<freqMs>:<address>`, …). This pins
 // the flat-key contract: distinct keys are distinct entries; re-using a
 // key shares the slot (no hidden prefix added).
 

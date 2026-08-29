@@ -263,13 +263,6 @@ const DEFAULT_CONFIG: {
     // m_sumEstQuota prefix (estimates periodic quota from the plan
     // window's aligned used%); renders "est:$30.20".
     labelEstQuota: string;
-    // m_pluginSource glyphs: 📌 built-in, 🎨 user override at
-    // query_plugins/<id>/, 🔖 reserved future "claude 官方" branch,
-    // ❗ matched provider has no plugin (neither user nor built-in).
-    labelPluginSystem: string;
-    labelPluginUserDefined: string;
-    labelPluginCC: string;
-    labelPluginMissing: string;
     // m_branch|withStatus:true clean/dirty suffix glyphs; default "✅" / "🟠".
     labelGitClean: string;
     labelGitDirty: string;
@@ -357,13 +350,6 @@ const DEFAULT_CONFIG: {
     labelTokenCost: "cost:",
     // "est:" — trailing colon so the renderer can concat.
     labelEstQuota: "est:",
-    // m_pluginSource glyphs: 📌 built-in, 🎨 user override, 🔖 reserved
-    // CC branch, ❗ missing plugin (renderer drops the module when
-    // pluginSource is null).
-    labelPluginSystem: "📌",
-    labelPluginUserDefined: "🎨",
-    labelPluginCC: "🔖",
-    labelPluginMissing: "❗",
     // m_branch|withStatus:true clean/dirty suffix glyphs.
     labelGitClean: "✅",
     labelGitDirty: "🟠",
@@ -964,10 +950,6 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
         "labelQuota",
         "labelTokenCost",
         "labelEstQuota",
-        "labelPluginSystem",
-        "labelPluginUserDefined",
-        "labelPluginCC",
-        "labelPluginMissing",
         "labelGitClean",
         "labelGitDirty",
       ];

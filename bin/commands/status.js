@@ -11,8 +11,10 @@
  *
  * Resolution order for the plugin module (same as the statusline runtime
  * in src/api.ts):
- *   1. ~/.claude/plugins/creditgauge/query_plugins/<id>/index.{js,mjs}  (user override)
- *   2. <package>/dist/plugins/<id>/index.js                            (built-in: minimax / deepseek)
+ *   1. ~/.claude/plugins/creditgauge/query_plugins/<id>/index.{js,mjs}
+ *      (user-installed / user-overridden; install.sh seeds the bundled
+ *      minimax / deepseek here)
+ *   2. <package>/query_plugins/<id>/index.js (the bundled copy)
  *
  * ABI: default export must be { fetchAccountCredit(authenticationKey, ctx?) }.
  * The raw result is normalised host-side with the same ensureQuota /
@@ -36,16 +38,13 @@ const __dirname = path.dirname(__filename);
 /** CLI timeout per provider fetch (the statusline runtime uses 5s). */
 const FETCH_TIMEOUT_MS = 20_000;
 
-/** Built-in plugin ids resolved from <package>/dist/plugins/<id>/index.js. */
-const BUILTIN_PLUGIN_IDS = new Set(["minimax", "deepseek"]);
-
 /**
  * Default entries for the bundled providers when they are NOT configured in
  * config.json. The statusline runtime matches them via ANTHROPIC_BASE_URL and
  * uses entry.AUTHENTICATION_KEY first, then the env token; the CLI has no
  * BASE_URL to match, so it queries by id and falls back to the same env token.
  */
-const BUILTIN_DEFAULTS = {
+const BUNDLED_DEFAULTS = {
   minimax: { TYPE: "QUOTA", AUTHENTICATION_KEY: process.env.ANTHROPIC_AUTH_TOKEN ?? "" },
   deepseek: { TYPE: "BALANCE", AUTHENTICATION_KEY: process.env.ANTHROPIC_AUTH_TOKEN ?? "" },
 };
@@ -62,9 +61,9 @@ function userPluginCandidates(providerId) {
   return [path.join(dir, "index.js"), path.join(dir, "index.mjs")];
 }
 
-function builtInPluginPath(providerId) {
-  // pkgRoot/bin/commands/status.js → pkgRoot/dist/plugins/<id>/index.js
-  return path.join(__dirname, "..", "..", "dist", "plugins", providerId, "index.js");
+function bundledPluginPath(providerId) {
+  // pkgRoot/bin/commands/status.js → pkgRoot/query_plugins/<id>/index.js
+  return path.join(__dirname, "..", "..", "query_plugins", providerId, "index.js");
 }
 
 /** Resolve the plugin file for a provider id, or null when neither side has one. */
@@ -72,10 +71,8 @@ export function resolvePluginPath(providerId) {
   for (const p of userPluginCandidates(providerId)) {
     if (fs.existsSync(p)) return p;
   }
-  if (BUILTIN_PLUGIN_IDS.has(providerId)) {
-    const p = builtInPluginPath(providerId);
-    if (fs.existsSync(p)) return p;
-  }
+  const bundled = bundledPluginPath(providerId);
+  if (fs.existsSync(bundled)) return bundled;
   return null;
 }
 
@@ -190,7 +187,7 @@ async function fetchProvider(providerId, entry) {
   const pluginPath = resolvePluginPath(providerId);
   if (!pluginPath) {
     throw new Error(
-      `plugin file not found — checked query_plugins/${providerId}/ and built-in ${providerId}`,
+      `plugin file not found — checked query_plugins/${providerId}/ (user and bundled)`,
     );
   }
   let mod;
@@ -391,12 +388,12 @@ export default async function pluginStatus(args) {
 
   // Resolve the target provider list. Bundled providers (minimax / deepseek)
   // are always reportable: configured entries from config.json win; an
-  // unconfigured built-in falls back to BUILTIN_DEFAULTS (env token) and is
+  // unconfigured built-in falls back to BUNDLED_DEFAULTS (env token) and is
   // queried the same way, so `npx creditgauge status` sees all five providers.
   let targets;
   if (args[0]) {
     const providerId = args[0];
-    if (!providers[providerId] && !BUILTIN_DEFAULTS[providerId]) {
+    if (!providers[providerId] && !BUNDLED_DEFAULTS[providerId]) {
       console.error(`Error: provider "${providerId}" is not installed`);
       console.error("Run first: npx creditgauge plugin add " + providerId);
       process.exit(2);
@@ -406,7 +403,7 @@ export default async function pluginStatus(args) {
     targets = Object.keys(providers);
     // Append bundled providers that are not configured (they get the
     // default entry + env-token fallback below).
-    for (const id of Object.keys(BUILTIN_DEFAULTS)) {
+    for (const id of Object.keys(BUNDLED_DEFAULTS)) {
       if (!(id in providers)) targets.push(id);
     }
     if (targets.length === 0) {
@@ -423,7 +420,7 @@ export default async function pluginStatus(args) {
 
   let failures = 0;
   for (const providerId of targets) {
-    const entry = providers[providerId] ?? BUILTIN_DEFAULTS[providerId];
+    const entry = providers[providerId] ?? BUNDLED_DEFAULTS[providerId];
     const title = color("cyan", `\u2500\u2500 ${providerId} `) +
       color("dim", "\u2500".repeat(Math.max(0, 52 - providerId.length - 2)));
 

@@ -135,10 +135,12 @@ in defaults. See [§6](#6-returned-shape--partialquota--partialbalance) for the 
 
 ### What the host does if your file is missing
 
-If neither `query_plugins/<id>/index.js` nor `index.mjs` exists, the host falls through to:
+All plugins live under the single `query_plugins/<id>/` layout. Resolution order:
 
-1. The **built-in** plugin (`dist/plugins/<id>/index.js`) — only `minimax` or `deepseek`.
-2. Otherwise: a "missing plugin" failure. The host writes `cache.json[<id>:pluginSource] = "missing"` (so `m_pluginSource` renders ❗) and the renderer drops the quota / balance block on the statusline.
+1. `~/.claude/plugins/creditgauge/query_plugins/<id>/index.js` (then `.mjs`) — your file (silently wins; `install.sh` seeds the bundled `minimax` / `deepseek` here, no-clobber).
+2. `<package>/query_plugins/<id>/index.js` — the bundled copy (only `minimax` / `deepseek` ship this way).
+
+If neither exists, the plugin import fails with a "missing plugin" error and the renderer drops the quota / balance block on the statusline.
 
 ---
 
@@ -154,7 +156,7 @@ Three reserved keys (`short` / `mid` / `long`) are always seeded as
 Each interval can be `null` when you have no data for that slot.
 
 ```js
-// Reference: built-in src/plugins/minimax/index.js
+// Reference: bundled query_plugins/minimax/index.js
 const ENDPOINT = "https://www.minimaxi.com/v1/token_plan/remains";
 
 export default {
@@ -187,7 +189,7 @@ export default {
 Returned shape is a `Partial<Balance>`. One `entries` array of `{ currency, totalBalance }`.
 
 ```js
-// Reference: built-in src/plugins/deepseek/index.js
+// Reference: bundled query_plugins/deepseek/index.js
 const ENDPOINT = "https://api.deepseek.com/user/balance";
 
 export default {
@@ -444,14 +446,12 @@ The plugin receives `ctx.signal` — the host's per-tick `AbortSignal`. Always f
 For a provider id `<id>`, the host looks in this order:
 
 ```
-~/.claude/plugins/creditgauge/query_plugins/<id>/index.js   ← user override (silently wins)
-~/.claude/plugins/creditgauge/query_plugins/<id>/index.mjs  ← user override (mjs form)
-dist/plugins/<id>/index.js (or src/plugins/<id>/index.js during dev)  ← built-in (only for `minimax` / `deepseek` ids)
+~/.claude/plugins/creditgauge/query_plugins/<id>/index.js   ← user-installed (silently wins)
+~/.claude/plugins/creditgauge/query_plugins/<id>/index.mjs  ← user-installed (mjs form)
+<package>/query_plugins/<id>/index.js                       ← bundled copy (minimax / deepseek)
 ```
 
-The resolution side is stashed in `cache.json` under `<id>:pluginSource` so the `m_pluginSource` module can render 📌 (built-in) / 🎨 (user) / ❗ (missing). The renderer reads via `cache.peek` which **ignores TTL** — adding or removing an override file reflects on the next tick even before the data cache row expires.
-
-**Putting a file at `<dist>/plugins/<id>/` won't work** — that's the bundle output, regenerated on every `npm run build`. The user path is `~/.claude/plugins/creditgauge/query_plugins/<id>/` (sibling of `state/` and `config.json`).
+The user path is `~/.claude/plugins/creditgauge/query_plugins/<id>/` (sibling of `state/` and `config.json`). `install.sh` seeds the bundled `minimax` / `deepseek` there on every (re-)install; the seed is **no-clobber**, so a file you put at the same id is never overwritten. Resolution is silent — no config flag, no stderr warn.
 
 ---
 
@@ -485,8 +485,8 @@ The kimi plugin's `[fillQuota, findCodingUsage]` exports give you all the surfac
 
 | Symptom                                              | Likely cause                                                                  |
 |------------------------------------------------------|-------------------------------------------------------------------------------|
-| Plugin is ignored; `m_pluginSource` shows 📌 not 🎨  | Wrong provider id — directory name must match the config.json key byte-for-byte. |
-| Plugin is ignored; `m_pluginSource` shows ❗           | File isn't actually a valid ESM module — check `~/.claude/plugins/creditgauge/state/diagnostics.jsonl` for the load error (60-second dedupe window). |
+| Plugin is ignored (bundled copy wins / no file found) | Wrong provider id — directory name must match the config.json key byte-for-byte, and the file must be `index.js` / `index.mjs`. |
+| Plugin fails to load every tick                       | File isn't a valid ESM module — check `~/.claude/plugins/creditgauge/state/diagnostics.jsonl` for the load error (60-second dedupe window). |
 | Hard-fail warnings every tick                        | Plugin throws on every invocation. Read the `user plugin` prefix in the JSONL row to see WHICH file the host loaded. |
 | Network errors but token is correct                  | Plugin forgot to forward `ctx.signal` — Abort timeout fired before the response. |
 | Numbers render as `n/a` or `0`                       | Plugin returned `null` (soft-fail) — check `if (!authenticationKey) return null` isn't gating when the key IS present. |
@@ -527,10 +527,10 @@ Diagnostic rows are deduplicated within a 60-second window — a sustained error
 
 ### Source pointers
 
-- `src/api.ts` — the host loader (`pluginTransportWithKind`, `fetchForProviderByIdWithKind`, `resolvePluginOnDiskWithKind`). 11 KB.
+- `src/api.ts` — the host loader (`pluginTransport`, `fetchForProviderById`, `resolvePluginOnDisk`).
 - `src/plugins/data.ts` — the `Quota`, `Balance`, `Interval`, `AccountCreditPlugin`, `PluginContext` types.
 - `src/plugins/parsers.ts` — `ensureQuota` / `ensureBalance` / `ensureInterval` / `ensureTimeGroup` (the rules from §6).
-- `src/plugins/minimax/index.js` and `src/plugins/deepseek/index.js` — the two working built-ins. Copy-paste to start a new plugin.
+- `query_plugins/minimax/index.js` and `query_plugins/deepseek/index.js` — the two bundled working plugins. Copy-paste to start a new one.
 - `src/__fixtures__/query_plugins/sample/index.js` — a fully-commented no-op sample plugin. Drop it into the user path and it'll load against any provider id.
 - `src/__fixtures__/quota.real.kimi.json` — captured real-shape reference for the kimi API.
 

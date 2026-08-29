@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 import {
   ensureInterval,
   ensureQuota,
-  fetchForProviderByIdWithKind,
-  pluginTransportWithKind,
-  resolvePluginOnDiskWithKind,
+  fetchForProviderById,
+  pluginTransport,
+  resolvePluginOnDisk,
 } from "./api.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -86,10 +86,10 @@ describe("ensure quota", () => {
   });
 });
 
-// MiniMax built-in plugin — mocks fetch and asserts the canonical
-// Quota flowing out of fetchForProviderByIdWithKind (the fill helper
-// is inlined in the plugin since v0.8.47+).
-describe("MiniMax built-in plugin (end-to-end)", () => {
+// MiniMax bundled plugin — mocks fetch and asserts the canonical
+// Quota flowing out of fetchForProviderById (the fill helper is
+// inlined in the plugin since v0.8.47+).
+describe("MiniMax bundled plugin (end-to-end)", () => {
   it("selects the general model regardless of array order", async () => {
     const raw = fixture("quota.real.minimax.json") as {
       model_remains: Array<Record<string, unknown>>;
@@ -102,7 +102,7 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
     globalThis.fetch = async () =>
       new Response(JSON.stringify(reordered), { status: 200 });
     try {
-      const result = await fetchForProviderByIdWithKind(
+      const quota = await fetchForProviderById(
         "minimax",
         {
           TYPE: "QUOTA",
@@ -111,8 +111,7 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
         },
         "secret",
         undefined,
-      );
-      const quota = result.data as unknown as {
+      ) as unknown as {
         intervals: {
           short: { remainingPercent: number; usedPercent: number; intervalMs: number };
           mid: { remainingPercent: number; usedPercent: number; intervalMs: number };
@@ -137,7 +136,7 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
         base_resp: { status_code: 0 },
       }), { status: 200 });
     try {
-      const result = await fetchForProviderByIdWithKind(
+      const result = await fetchForProviderById(
         "minimax",
         {
           TYPE: "QUOTA",
@@ -147,7 +146,7 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
         "secret",
         undefined,
       );
-      assert.equal(result.data, null);
+      assert.equal(result, null);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -161,7 +160,7 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
         base_resp: { status_code: 401 },
       }), { status: 200 });
     try {
-      const result = await fetchForProviderByIdWithKind(
+      const result = await fetchForProviderById(
         "minimax",
         {
           TYPE: "QUOTA",
@@ -171,7 +170,7 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
         "secret",
         undefined,
       );
-      assert.equal(result.data, null);
+      assert.equal(result, null);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -188,7 +187,7 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
         base_resp: { status_code: 0 },
       }), { status: 200 });
     try {
-      const result = await fetchForProviderByIdWithKind(
+      const quota = await fetchForProviderById(
         "minimax",
         {
           TYPE: "QUOTA",
@@ -197,8 +196,7 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
         },
         "secret",
         undefined,
-      );
-      const quota = result.data as unknown as {
+      ) as unknown as {
         intervals: {
           short: { remainingPercent: number; usedPercent: number; startAt: number | null };
           mid: { remainingPercent: number | null };
@@ -215,7 +213,7 @@ describe("MiniMax built-in plugin (end-to-end)", () => {
 });
 
 describe("dynamic plugin loader", () => {
-  it("loads the compiled built-in MiniMax plugin dynamically", async () => {
+  it("loads the bundled MiniMax plugin dynamically", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (_input, init) => {
       assert.equal((init?.headers as Record<string, string>).Authorization, "Bearer secret");
@@ -227,7 +225,7 @@ describe("dynamic plugin loader", () => {
       // through `fetchForProviderById` is the end-to-end path; bare
       // `pluginTransport` returns the plugin's partial output
       // without normalization.
-      const result = await fetchForProviderByIdWithKind(
+      const quota = await fetchForProviderById(
         "minimax",
         {
           TYPE: "QUOTA",
@@ -236,8 +234,7 @@ describe("dynamic plugin loader", () => {
         },
         "secret",
         undefined,
-      );
-      const quota = result.data as unknown as {
+      ) as unknown as {
         intervals: {
           short: { remainingPercent: number; usedPercent: number; intervalMs: number };
           mid: { remainingPercent: number; usedPercent: number; intervalMs: number };
@@ -265,9 +262,9 @@ describe("dynamic plugin loader", () => {
         return { short: { remainingPercent: 50, usedPercent: 50, windowId: token, label: token, startAt: null, endAt: null, intervalMs: null, remainingQuota: null, usedQuota: null, limitQuota: null } };
       }
     };`);
-    const path = resolvePluginOnDiskWithKind("custom");
-    assert.ok(path.path.endsWith("index.mjs"));
-    const result = await fetchForProviderByIdWithKind(
+    const path = resolvePluginOnDisk("custom");
+    assert.ok(path!.endsWith("index.mjs"));
+    const quota = await fetchForProviderById(
       "custom",
       {
         TYPE: "QUOTA",
@@ -277,19 +274,15 @@ describe("dynamic plugin loader", () => {
       },
       "environment-key",
       undefined,
-    );
-    assert.equal(
-      (result.data as unknown as { intervals: { short: { windowId: string } } }).intervals.short
-        .windowId,
-      "configured-key",
-    );
+    ) as unknown as { intervals: { short: { windowId: string } } };
+    assert.equal(quota.intervals.short.windowId, "configured-key");
   });
 
   it("rejects plugins missing fetchAccountCredit", async () => {
     const pluginDir = resolve(tempHome, ".claude", "plugins", "creditgauge", "query_plugins", "old");
     mkdirSync(pluginDir, { recursive: true });
     writeFileSync(resolve(pluginDir, "index.mjs"), "export default { fetch() { return {}; } };");
-    await assert.rejects(() => pluginTransportWithKind("old", "token"), /default export must be \{ fetchAccountCredit\(authenticationKey, context\?\) \}/);
+    await assert.rejects(() => pluginTransport("old", "token"), /default export must be \{ fetchAccountCredit\(authenticationKey, context\?\) \}/);
   });
 
   it("passes partial output through pluginTransport unchanged", async () => {
@@ -304,88 +297,77 @@ describe("dynamic plugin loader", () => {
     writeFileSync(resolve(pluginDir, "index.mjs"), `export default {
       fetchAccountCredit() { return "bad"; },
     };`);
-    const result = await pluginTransportWithKind("bad", "token");
-    assert.equal(result.result, "bad");
+    const result = await pluginTransport("bad", "token");
+    assert.equal(result, "bad");
   });
 });
 
-// v0.9.0+ — user plugins at query_plugins/<id>/ override built-ins;
-// built-in IDs are no longer a closed set. Override is silent (no
-// stderr, no diagnostics). Pins the path-resolution contract and the
-// end-to-end pluginTransport loading path.
-describe("resolvePluginOnDiskWithKind (v0.9.0+ override)", () => {
+// v0.9.x+ — all plugins (bundled or user-written) live under the single
+// query_plugins/ layout. Resolution is: user dir first, bundled copy
+// second. Pins the path-resolution contract and the end-to-end
+// pluginTransport loading path.
+describe("resolvePluginOnDisk", () => {
   function userDir(id: string): string {
     return resolve(tempHome, ".claude", "plugins", "creditgauge", "query_plugins", id);
   }
 
-  it("returns kind=user when query_plugins/<id>/index.js exists", () => {
+  it("returns the user path when query_plugins/<id>/index.js exists", () => {
     mkdirSync(userDir("custom"), { recursive: true });
     writeFileSync(resolve(userDir("custom"), "index.js"), "export default {};");
-    const r = resolvePluginOnDiskWithKind("custom");
-    assert.equal(r.kind, "user");
-    assert.ok(r.path.endsWith("index.js"));
+    const p = resolvePluginOnDisk("custom");
+    assert.ok(p!.endsWith("index.js"));
   });
 
-  it("returns kind=user when only .mjs exists", () => {
+  it("returns the user path when only .mjs exists", () => {
     mkdirSync(userDir("custom"), { recursive: true });
     writeFileSync(resolve(userDir("custom"), "index.mjs"), "export default {};");
-    const r = resolvePluginOnDiskWithKind("custom");
-    assert.equal(r.kind, "user");
-    assert.ok(r.path.endsWith("index.mjs"));
+    const p = resolvePluginOnDisk("custom");
+    assert.ok(p!.endsWith("index.mjs"));
   });
 
   it("prefers .js over .mjs (deterministic tie-break for both present)", () => {
     mkdirSync(userDir("custom"), { recursive: true });
     writeFileSync(resolve(userDir("custom"), "index.js"),  "export default {};");
     writeFileSync(resolve(userDir("custom"), "index.mjs"), "export default {};");
-    const r = resolvePluginOnDiskWithKind("custom");
-    assert.equal(r.kind, "user");
-    assert.ok(r.path.endsWith("index.js"));
+    const p = resolvePluginOnDisk("custom");
+    assert.ok(p!.endsWith("index.js"));
   });
 
-  it("returns kind=builtin for minimax when no user file exists", () => {
+  it("falls back to the bundled query_plugins/ copy for minimax when no user file exists", () => {
     // No query_plugins/minimax/ in tempHome; resolution falls through
-    // to the bundled dist (or src, depending on test runner). Path
-    // always ends with /plugins/minimax/index.js.
-    const r = resolvePluginOnDiskWithKind("minimax");
-    assert.equal(r.kind, "builtin");
-    assert.ok(/[\\/]plugins[\\/]minimax[\\/]index\.js$/.test(r.path),
-      `path should resolve into the bundled plugin tree, got: ${r.path}`);
+    // to the bundled copy at <pkgRoot>/query_plugins/minimax/index.js.
+    const p = resolvePluginOnDisk("minimax");
+    assert.ok(/[\\/]query_plugins[\\/]minimax[\\/]index\.js$/.test(p!),
+      `path should resolve into the bundled query_plugins tree, got: ${p}`);
   });
 
-  it("returns kind=builtin for the canonical 2 built-ins (minimax, deepseek) when no user override", () => {
+  it("falls back to the bundled copy for the canonical 2 plugins (minimax, deepseek)", () => {
     for (const id of ["minimax", "deepseek"]) {
-      const r = resolvePluginOnDiskWithKind(id);
-      assert.equal(r.kind, "builtin");
+      const p = resolvePluginOnDisk(id);
+      assert.ok(p, `${id} should resolve to a plugin file`);
       // Cross-platform path match: posix uses '/' between segments,
-      // windows uses '\\'. The segment after the last separator
-      // before <id> is always 'plugins', and the file is always
-      // <id>/index.js.
-      const re = new RegExp(`[\\\\/]plugins[\\\\/]${id}[\\\\/]index\\.js$`);
-      assert.ok(re.test(r.path),
-        `${id} should resolve to its bundled plugin file, got: ${r.path}`);
+      // windows uses '\\'. The segment before <id> is always
+      // 'query_plugins', and the file is always <id>/index.js.
+      const re = new RegExp(`[\\\\/]query_plugins[\\\\/]${id}[\\\\/]index\\.js$`);
+      assert.ok(re.test(p!),
+        `${id} should resolve to its bundled plugin file, got: ${p}`);
     }
   });
 
-  it("returns kind=missing for copilot when no user plugin at query_plugins/copilot/", () => {
-    // v0.9.x: copilot is no longer bundled (moved to a user-only
-    // ship path). With BUILTIN_PLUGIN_IDS = {minimax, deepseek},
-    // a query_plugins/copilot/ lookup that misses falls through to
-    // the missing kind — the user must install the copilot plugin
-    // themselves (the README's "User plugins" section documents
-    // the install path).
-    const r = resolvePluginOnDiskWithKind("copilot");
-    assert.equal(r.kind, "missing");
+  it("returns the user-side path for a missing plugin (copilot when not installed)", () => {
+    // copilot ships only as a user-installable plugin — with no user
+    // file and no bundled copy, resolution returns the would-be user
+    // path so the import-time 404 surfaces the right hint.
+    const p = resolvePluginOnDisk("copilot");
     const re = /[\\/]query_plugins[\\/]copilot[\\/]index\.js$/;
-    assert.ok(re.test(r.path),
-      `expected path under query_plugins/, got: ${r.path}`);
+    assert.ok(re.test(p!),
+      `expected path under query_plugins/, got: ${p}`);
   });
 
-  it("user-plugin wins over bundled built-in for the same id (minimax override)", () => {
-    // Place a user minimax plugin in query_plugins/. The bundled one
-    // still exists on disk (this checkout has src/plugins/minimax/
-    // and the test build emits dist/plugins/minimax/), but the user
-    // file MUST take precedence.
+  it("user file wins over the bundled copy for the same id (minimax override)", () => {
+    // Place a user minimax plugin in query_plugins/. The bundled copy
+    // still exists on disk (this checkout has query_plugins/minimax/),
+    // but the user file MUST take precedence.
     mkdirSync(userDir("minimax"), { recursive: true });
     const userPath = resolve(userDir("minimax"), "index.js");
     writeFileSync(userPath, `export default {
@@ -397,42 +379,31 @@ describe("resolvePluginOnDiskWithKind (v0.9.0+ override)", () => {
         };
       },
     };`);
-    const r = resolvePluginOnDiskWithKind("minimax");
-    assert.equal(r.kind, "user");
-    assert.equal(r.path, userPath);
+    const p = resolvePluginOnDisk("minimax");
+    assert.equal(p, userPath);
   });
 
-  it("returns kind=missing for unknown ids (no user file, no built-in)", () => {
-    const r = resolvePluginOnDiskWithKind("totally-unknown-provider");
-    assert.equal(r.kind, "missing");
+  it("returns the would-be user path for unknown ids (no user file, no bundled copy)", () => {
+    const p = resolvePluginOnDisk("totally-unknown-provider");
     // Path still points at the would-be user location — the import-time
     // 404 will then surface the right hint ("check query_plugins/").
-    // Cross-platform segment check.
     const re = /[\\/]query_plugins[\\/]totally-unknown-provider[\\/]index\.js$/;
-    assert.ok(re.test(r.path),
-      `expected path under query_plugins/, got: ${r.path}`);
+    assert.ok(re.test(p!),
+      `expected path under query_plugins/, got: ${p}`);
   });
 
   it("rejects invalid ids before touching the filesystem", () => {
-    assert.throws(() => resolvePluginOnDiskWithKind("../escape"), /invalid provider id/);
-    assert.throws(() => resolvePluginOnDiskWithKind("with/slash"),     /invalid provider id/);
-    assert.throws(() => resolvePluginOnDiskWithKind("with space"),     /invalid provider id/);
-  });
-
-  it("resolvePluginOnDiskWithKind reports the user-side override", () => {
-    mkdirSync(userDir("custom"), { recursive: true });
-    writeFileSync(resolve(userDir("custom"), "index.js"), "export default {};");
-    const withKind = resolvePluginOnDiskWithKind("custom");
-    assert.ok(withKind.path.endsWith("index.js"));
-    assert.equal(withKind.kind, "user");
+    assert.throws(() => resolvePluginOnDisk("../escape"), /invalid provider id/);
+    assert.throws(() => resolvePluginOnDisk("with/slash"),     /invalid provider id/);
+    assert.throws(() => resolvePluginOnDisk("with space"),     /invalid provider id/);
   });
 });
 
-// v0.9.0+ — end-to-end: a user plugin at query_plugins/minimax/ runs
-// in place of the bundled built-in. Uses an .mjs plugin + a stub fetch
-// to prove the user file was the one that ran.
-describe("pluginTransport override end-to-end (v0.9.0+)", () => {
-  it("user plugin at query_plugins/minimax/index.mjs wins over the bundled built-in", async () => {
+// End-to-end: a user plugin at query_plugins/minimax/ runs in place of
+// the bundled copy. Uses an .mjs plugin + a stub fetch to prove the
+// user file was the one that ran.
+describe("pluginTransport override end-to-end", () => {
+  it("user plugin at query_plugins/minimax/index.mjs wins over the bundled copy", async () => {
     const userDirPath = resolve(tempHome, ".claude", "plugins", "creditgauge", "query_plugins", "minimax");
     mkdirSync(userDirPath, { recursive: true });
     writeFileSync(resolve(userDirPath, "index.mjs"), `export default {
@@ -451,16 +422,15 @@ describe("pluginTransport override end-to-end (v0.9.0+)", () => {
     let fetchCalled = false;
     globalThis.fetch = async () => {
       fetchCalled = true;
-      throw new Error("built-in should be overridden — fetch must NOT run");
+      throw new Error("bundled plugin should be overridden — fetch must NOT run");
     };
     try {
-      const partial = await pluginTransportWithKind("minimax", "ignored");
-      assert.equal(partial.kind, "user");
+      const partial = await pluginTransport("minimax", "ignored");
       assert.equal(fetchCalled, false, "globalThis.fetch must not be invoked by the user plugin");
-      // partial.result is the RAW plugin return value (before ensureQuota).
+      // partial is the RAW plugin return value (before ensureQuota).
       // The user plugin in this test returns the v0.9.5 open-ended dict
       // shape, so we read it directly.
-      const shape = partial.result as { short: { remainingPercent: number; windowId: string } };
+      const shape = partial as { short: { remainingPercent: number; windowId: string } };
       assert.equal(shape.short.remainingPercent, 42);
       assert.equal(shape.short.windowId, "user");
     } finally {
@@ -468,11 +438,12 @@ describe("pluginTransport override end-to-end (v0.9.0+)", () => {
     }
   });
 
-  it("bundled built-in loads normally when no user override exists", async () => {
-    // No query_plugins/minimax in tempHome → falls through to bundled.
-    // Stub fetch so the real HTTP call doesn't escape the test runner.
-    // The bundled minimax plugin looks up `model_name === "general"`
-    // inside `model_remains[]`, so the stub must include that entry.
+  it("bundled copy loads normally when no user override exists", async () => {
+    // No query_plugins/minimax in tempHome → falls through to the
+    // bundled copy. Stub fetch so the real HTTP call doesn't escape
+    // the test runner. The bundled minimax plugin looks up
+    // `model_name === "general"` inside `model_remains[]`, so the
+    // stub must include that entry.
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => {
       return new Response(JSON.stringify({
@@ -487,14 +458,13 @@ describe("pluginTransport override end-to-end (v0.9.0+)", () => {
       }), { status: 200 });
     };
     try {
-      const partial = await pluginTransportWithKind("minimax", "ignored");
-      assert.equal(partial.kind, "builtin");
-      assert.ok(partial.result, "bundled built-in should return a non-null partial");
-      // partial.result is the RAW plugin return value (before ensureQuota).
+      const partial = await pluginTransport("minimax", "ignored");
+      assert.ok(partial, "bundled copy should return a non-null partial");
+      // partial is the RAW plugin return value (before ensureQuota).
       // The bundled minimax plugin returns the v0.9.5 open-ended dict
       // shape `{ short, mid, long }` directly — the host wraps it back
       // into the canonical Quota via ensureQuota.
-      const shape = partial.result as { short: { remainingPercent: number } | null };
+      const shape = partial as { short: { remainingPercent: number } | null };
       assert.equal(shape.short?.remainingPercent, 50);
     } finally {
       globalThis.fetch = originalFetch;

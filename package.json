@@ -39,9 +39,8 @@
   },
   "scripts": {
     "prepublishOnly": "npm run build",
-    "build": "npm run build:entry && npm run build:plugins",
+    "build": "npm run build:entry",
     "build:entry": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/index.js",
-    "build:plugins": "node scripts/copy-builtin-plugins.mjs",
     "dev": "npm run build:entry -- --watch",
     "typecheck": "tsc --noEmit",
     "test": "node --test --import tsx src/**/*.test.ts",

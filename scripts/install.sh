@@ -110,22 +110,23 @@ if [ -z "$PLUGIN_DIR" ] || [ ! -f "$WRAPPER" ]; then
   exit 1
 fi
 
-# Build the entry bundle and standalone built-in plugins on demand. The
-# marketplace install copies the source tree but does not run npm build, so
-# a fresh install needs all runtime artifacts before statusLine can start.
+# Build the entry bundle on demand. The marketplace install copies the
+# source tree but does not run npm build, so a fresh install needs the
+# runtime entry artifact before statusLine can start. Built-in plugins
+# (minimax / deepseek) ship as plain JS under query_plugins/ in the
+# package — they need no build step, just a copy (see the seed step
+# below).
 DIST_JS="${PLUGIN_DIR%/}/dist/index.js"
-DIST_MINIMAX="${PLUGIN_DIR%/}/dist/plugins/minimax/index.js"
-DIST_DEEPSEEK="${PLUGIN_DIR%/}/dist/plugins/deepseek/index.js"
-if [ ! -f "$DIST_JS" ] || [ ! -f "$DIST_MINIMAX" ] || [ ! -f "$DIST_DEEPSEEK" ]; then
+if [ ! -f "$DIST_JS" ]; then
   if [ "$DRY_RUN" = 1 ]; then
-    echo "install.sh: --dry-run: would build runtime artifacts (${DIST_JS}, ${DIST_MINIMAX}, and ${DIST_DEEPSEEK}) (npm install && npm run build) in ${PLUGIN_DIR%/}"
+    echo "install.sh: --dry-run: would build runtime artifact (${DIST_JS}) (npm install && npm run build) in ${PLUGIN_DIR%/}"
   else
     if ! command -v npm >/dev/null 2>&1; then
       echo "install.sh: npm not found on PATH; cannot build runtime artifacts" >&2
       echo "install.sh: install Node.js (https://nodejs.org) and re-run." >&2
       exit 1
     fi
-    echo "install.sh: runtime artifacts missing; running npm install + npm run build in ${PLUGIN_DIR%/}" >&2
+    echo "install.sh: runtime artifact missing; running npm install + npm run build in ${PLUGIN_DIR%/}" >&2
     (
       cd "${PLUGIN_DIR%/}" || exit 1
       npm install --no-audit --no-fund || exit 1
@@ -159,6 +160,27 @@ fi
 # removed; uninstall is now handled exclusively by /creditgauge:uninstall.)
 if [ "$DRY_RUN" != 1 ]; then
   mkdir -p "$QUERY_PLUGINS_DIR"
+fi
+
+# Seed the bundled plugins (minimax / deepseek) into the user-level
+# query_plugins/ dir. They ship as plain JS under
+# <cache>/query_plugins/<id>/ in the package — same layout as user
+# plugins — and are copied here on every (re-)install so the runtime
+# loads them from the single stable query_plugins/ root. The copy is
+# no-clobber: a user file at the same id (customized or authored by
+# hand) is NEVER overwritten. Skipped on --dry-run.
+if [ "$DRY_RUN" != 1 ]; then
+  for BUILTIN_ID in minimax deepseek; do
+    SRC_PLUGIN="${PLUGIN_DIR%/}/query_plugins/${BUILTIN_ID}"
+    if [ -d "$SRC_PLUGIN" ] && [ -f "${SRC_PLUGIN}/index.js" ]; then
+      if [ -e "${QUERY_PLUGINS_DIR}/${BUILTIN_ID}" ]; then
+        echo "install.sh: kept existing query_plugins/${BUILTIN_ID} (user file wins)"
+      else
+        cp -r "$SRC_PLUGIN" "${QUERY_PLUGINS_DIR}/${BUILTIN_ID}"
+        echo "install.sh: seeded bundled plugin query_plugins/${BUILTIN_ID}"
+      fi
+    fi
+  done
 fi
 
 # Resolve target settings file.
@@ -296,6 +318,7 @@ if [ "$DRY_RUN" = 1 ]; then
   else
     echo "  would skip:    ${SEED_TARGET} (config.min.json not found; DEFAULT_CONFIG used)"
   fi
+  echo "  would seed:    bundled plugins (minimax / deepseek) -> ${QUERY_PLUGINS_DIR}/ (no-clobber; user files win)"
   echo "  new statusLine command will set CREDITGAUGE_UPSTREAM_CMD to:"
   if [ "$INSTALL_MODE" = "replace" ]; then
     echo "    ${UPSTREAM_CMD_FILE}"

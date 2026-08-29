@@ -12,7 +12,7 @@ import type {
   Provider,
   ProviderEntry,
 } from "./types.ts";
-import { fetchForProviderByIdWithKind } from "./api.ts";
+import { fetchForProviderById } from "./api.ts";
 import { normalizeUrl } from "./utils.ts";
 
 // ----- URL matching -----
@@ -82,19 +82,15 @@ export function getProviderEntry(provider: Provider): ProviderEntry | null {
 // the canonical shape (Quota for QUOTA, Balance for BALANCE). Throws on plugin
 // or network error; the caller catches and falls back to stale cache. The
 // `unknown` return is intentional — callers narrow by entry.TYPE, keeping this
-// module ignorant of concrete shapes. Also returns the plugin-resolution side
-// ("user" | "builtin" | "missing") so the host can persist it for m_pluginSource.
-export async function fetchForProviderWithKind(
+// module ignorant of concrete shapes.
+export async function fetchForProvider(
   provider: Provider,
   token: string,
   signal: AbortSignal,
-): Promise<{ data: unknown; pluginSource: import("./api.ts").PluginResolution }> {
+): Promise<unknown> {
   const entry = getProviderEntry(provider);
   if (!entry) throw new Error(`unknown provider: ${String(provider)}`);
-  const r = await fetchForProviderByIdWithKind(provider, entry, token, signal);
-  // TYPE narrowing happens upstream (inside fetchForProviderByIdWithKind's
-  // ensureQuota / ensureBalance). providers.ts stays TYPE-agnostic.
-  return { data: r.data, pluginSource: r.pluginSource };
+  return fetchForProviderById(provider, entry, token, signal);
 }
 
 // The "fail" line's prefix label, picked from modeLabels by TYPE.

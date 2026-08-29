@@ -223,7 +223,7 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
   // Full layout: header (git + context + memory + version), then
   // provider/model + per-turn ticks + per-session api/cost, the session
   // / project scope rows each aligned to a plan window (5h / 7d), and
-  // the quota/balance + pluginSource + quote tail.
+  // the quota/balance + quote tail.
   standard: [
     "m_template|git_info",
     "s_pipe|wrap:true",
@@ -261,8 +261,6 @@ export const DEFAULT_STATUSLINE_PRESETS: Record<string, StatuslineTemplate> = {
     "m_template|quota|type:quota",
     "m_template|balance|type:balance",
     "s_newline",
-    "m_pluginSource",
-    "s_space",
     "m_template|quote",
     "s_pipe|wrap:true",
     "m_version|color:orange"

@@ -126,12 +126,6 @@ type LabelAxis =
   | "quota"                  // "quota: 123/500"
   | "cost"                   // token cost prefix
   | "est"                    // periodic quota estimate prefix
-  | "pluginSystem"        // m_pluginSource glyph — built-in (default "📌")
-  | "pluginUserDefined"   // m_pluginSource glyph — user override (default "🎨")
-  | "pluginCC"            // m_pluginSource glyph — reserved "claude 官方" branch (default
-                          // "🔖"); not yet wired into the dispatch table (CC 分支暂不做实现
-                          // 2026-07-12), but overridable via labels.labelPluginCC.
-  | "pluginMissing"       // m_pluginSource glyph — matched provider id has no plugin (default "❗")
   | "gitClean" | "gitDirty";  // m_branch|withStatus:true clean/dirty suffix glyphs (defaults "✅" / "🟠")
 function labelFor(axis: LabelAxis): string {
   const labels = cfg().labels;
@@ -163,11 +157,6 @@ function labelFor(axis: LabelAxis): string {
     case "cost": return labels.labelTokenCost;
     // Periodic quota estimate prefix, default "est:".
     case "est": return labels.labelEstQuota;
-    // m_pluginSource glyphs, defaults "📌" / "🎨" / "🔖" / "❗".
-    case "pluginSystem":       return labels.labelPluginSystem;
-    case "pluginCC":           return labels.labelPluginCC;
-    case "pluginMissing":      return labels.labelPluginMissing;
-    case "pluginUserDefined":  return labels.labelPluginUserDefined;
     // m_branch|withStatus:true clean/dirty suffix glyphs, defaults "✅" / "🟠".
     case "gitClean": return labels.labelGitClean;
     case "gitDirty": return labels.labelGitDirty;
@@ -1031,11 +1020,6 @@ type RenderContext = {
   // address. Missing key → the address-mode path falls back to local QUOTES.
   // One-tick lifetime.
   quoteBodies?: Map<string, string>;
-  // Which side of the user-vs-builtin fence the active provider's plugin was
-  // loaded from on the most recent fetch (cache row `<provider>:pluginSource`).
-  // null → m_pluginSource drops to no-op. Optional so test fixtures / older
-  // callers can build a ctx without it; renderProviderLine normalizes → null.
-  pluginSource?: "user" | "builtin" | "missing" | null;
   // Normalized ANTHROPIC_BASE_URL, used by m_sum* to filter JSONL rows to the
   // current provider. undefined (no provider configured) skips the filter.
   providerBaseUrl?: string;
@@ -1530,19 +1514,6 @@ m_quota: Object.assign(
   },
   // Plugin version. Empty version → "v:n/a" placeholder (was: drop).
   m_version: (c) => (c.version ? wrapPlainDefault("m_version", `v${c.version}`, undefined) : placeholderBare("m_version", c)),
-  // Visual indicator of which side of the user-vs-builtin fence the active
-  // provider's plugin was loaded from: built-in 📌, user override 🎨, or
-  // missing ❗ (matched id has no plugin). Glyphs come from labels.* (config-
-  // overridable). No default tint — the symbol carries the meaning. Unknown
-  // source (no provider matched / no cache row) → null, so the template drops
-  // it (no "source:n/a" noise). A 4th branch, "cc" / 🔖, is reserved for the
-  // future claude-官方 case but not yet wired into the dispatch table.
-  m_pluginSource: (c) => {
-    if (c.pluginSource === "builtin") return labelFor("pluginSystem");
-    if (c.pluginSource === "user")    return labelFor("pluginUserDefined");
-    if (c.pluginSource === "missing") return labelFor("pluginMissing");
-    return null;
-  },
   // ----- token-usage modules -----
   // Each module is independent and returns null when its source data is
   // unavailable; the default plan / balance templates do NOT include any of
@@ -4176,7 +4147,6 @@ const INLINE_SCHEMAS: Record<string, InlineSchema> = {
   m_balance: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_age: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...SHOW_PARAM.named } },
   m_version: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
-  m_pluginSource: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named } },
   m_tokenIn: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_tokenOut: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
   m_contextSize: { named: { ...COLOR_PARAM.named, ...NULDROP_PARAM.named, ...VALUEONLY_PARAM.named } },
@@ -4647,18 +4617,6 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     // Missing version → "v:n/a" placeholder.
     if (!ctx.version) return placeholderWithColor("m_version", params, ctx);
     return wrapPlainDefault("m_version", `v${ctx.version}`, params.color as string | undefined);
-  },
-  m_pluginSource: (params, ctx) => {
-    // Mirrors the MODULES path: glyph per resolution kind, NO default tint —
-    // only an explicit |color| applies one. No cache row → null (no-op).
-    const glyph =
-      ctx.pluginSource === "builtin" ? labelFor("pluginSystem") :
-      ctx.pluginSource === "user" ? labelFor("pluginUserDefined") :
-      ctx.pluginSource === "missing" ? labelFor("pluginMissing") :
-      null;
-    if (glyph == null) return null;
-    const color = params.color as string | undefined;
-    return color ? `${color}${glyph}${RESET}` : glyph;
   },
   m_tokenIn: (params, ctx) => {
     const r = computeTickDelta(ctx, "in");
@@ -5814,9 +5772,6 @@ export function renderTemplate(template: readonly string[], ctx: RenderContext):
         inline = expandInlineToken(tok, "m_age", 6, ctx);
       } else if (tok.startsWith("m_version|")) {
         inline = expandInlineToken(tok, "m_version", 10, ctx);
-      } else if (tok.startsWith("m_pluginSource|")) {
-        // Unique stem, no prefix-shadowing concern. Skip 15.
-        inline = expandInlineToken(tok, "m_pluginSource", 15, ctx);
       } else if (tok.startsWith("m_tokenIn|")) {
         inline = expandInlineToken(tok, "m_tokenIn", 10, ctx);
       } else if (tok.startsWith("m_tokenOut|")) {
@@ -6154,13 +6109,6 @@ export function renderProviderLine(
     // Optional. Pre-fetched quote bodies from `preFetchQuotes` (src/api.quote.ts);
     // absent → m_quote falls back to local QUOTES.
     quoteBodies?: Map<string, string>;
-    // Optional. Which side of the user-vs-builtin fence the active provider's
-    // plugin was loaded from, or `"missing"` when the matched id has no plugin.
-    // Populated by dispatch.ts:buildProviderLine from the per-provider cache
-    // row. Absent → null → m_pluginSource drops to no-op (no "source:n/a" for
-    // unconfigured users). `"missing"` surfaces as ❗ so a misconfigured
-    // provider id (e.g. providers.copilot without the plugin) is loud.
-    pluginSource?: "user" | "builtin" | "missing" | null;
   },
 ): string {
   // Synthesize the contextWindow Window from
@@ -6218,9 +6166,6 @@ export function renderProviderLine(
     // Per-tick quote body map from preFetchQuotes. Undefined when no
     // address-mode m_quote token is active.
     quoteBodies: ctx.quoteBodies,
-    // Default to null so legacy callers (tests constructing ctx inline) don't
-    // have to thread the field; m_pluginSource drops to no-op in that case.
-    pluginSource: ctx.pluginSource ?? null,
     // Default provider filter for m_sum* modules. Computed from
     // ANTHROPIC_BASE_URL; empty/unset → undefined (skip provider filtering).
     // Used by parseWindowScope.

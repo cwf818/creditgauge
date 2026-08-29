@@ -25,11 +25,10 @@ import { type FetchResult, buildProviderLine } from "./dispatch.ts";
 import { applyProviderOverrides, configStore, loadConfig } from "./config.ts";
 import * as statusStore from "./status-store.ts";
 import {
-  fetchForProviderWithKind,
+  fetchForProvider,
   getProviderEntry,
   matchProvider,
 } from "./providers.ts";
-import { resolvePluginOnDiskWithKind } from "./api.ts";
 import { parseTokenSnapshot } from "./session-parse.ts";
 import * as diagnostics from "./diagnostics.ts";
 import { preFetchQuotes } from "./api.quote.ts";
@@ -83,8 +82,8 @@ async function readStdin(): Promise<string> {
 // ProviderEntry.AUTHENTICATION_KEY in src/types.ts); empty token AND empty
 // AUTHENTICATION_KEY makes the fetcher return null → stale cache / fail line.
 //
-// Exported for unit tests to pin the `<provider>:pluginSource` cache-row
-// invariant without the stdin→render pipeline. @internal — not public API.
+// Exported for unit tests to pin the per-tick fetch invariant without
+// the stdin→render pipeline. @internal — not public API.
 export async function fetchProviderData(
   provider: Provider,
   token: string,
@@ -124,21 +123,11 @@ export async function fetchProviderData(
   }
 
   try {
-    // fetchForProviderWithKind also reports which side of the user-vs-builtin
-    // fence resolved the provider. The kind is persisted under
-    // `<provider>:pluginSource`, sharing the data row's TTL; the renderer
-    // reads it via cache.peek WITHOUT a TTL gate so an override-file swap
-    // reflects on the next tick even on a within-TTL data hit.
-    const { data, pluginSource } = await fetchForProviderWithKind(
+    const data = await fetchForProvider(
       provider,
       token,
       AbortSignal.timeout(timeoutMs),
     );
-    // Always persist the pluginSource side, even when data is null, so
-    // m_pluginSource renders ❗ for kind="missing" (no query_plugins/<id>/
-    // file + not a built-in) regardless of whether the fetcher returned
-    // usable data.
-    cache.set(`${cacheKey}:pluginSource`, pluginSource, ttlMs);
     if (data) {
       cache.set(cacheKey, data, ttlMs);
       // ageMs=0 on a brand-new fetch — the renderer suppresses the
@@ -154,19 +143,6 @@ export async function fetchProviderData(
   } catch {
     // Network / plugin error. Stale-on-error: keep showing the last good
     // value; the plugin loader records the underlying error.
-    //
-    // Also persist the pluginSource side: the import-time 404 path
-    // (`query_plugins/<id>/index.js` missing for a non-builtin id) throws
-    // BEFORE fetchForProviderWithKind returns, so computing the kind eagerly
-    // via resolvePluginOnDiskWithKind here makes kind="missing" loud (❗)
-    // on the next tick instead of silent.
-    try {
-      const { kind } = resolvePluginOnDiskWithKind(provider!);
-      cache.set(`${cacheKey}:pluginSource`, kind, ttlMs);
-    } catch {
-      // resolvePluginOnDiskWithKind asserts a safe id; ignore failures
-      // here so we don't shadow the original throw.
-    }
     const stale =
       entry.TYPE === "QUOTA" ? peekCache<Quota>() : peekCache<Balance>();
     if (stale) return { kind: "stale", data: stale.value, ageMs: stale.ageMs };

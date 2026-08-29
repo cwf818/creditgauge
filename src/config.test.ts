@@ -90,7 +90,7 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     // context_info + mem_info + version on line 1, model_info + tickline
     // (+ per-session api/cost) on line 2, the session/project scopelines
     // paired with per-window periodlines (5h / 7d) on lines 3-4, then
-    // the quota/balance dispatch, and pluginSource + quote on the last
+    // the quota/balance dispatch, and quote + version on the last
     // line.
     writeFileSync(join(dir, "config.json"), JSON.stringify({ statuslineTemplate: "standard" }));
     const cfg = await loadConfig();
@@ -99,7 +99,7 @@ describe("statuslineTemplate — string-form preset lookup (vX.X.X+)", () => {
     assert.ok(cfg.statuslineTemplate.includes("m_template|scopeline|scope:session"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|periodline|window:5h"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|periodline|window:7d"));
-    assert.ok(cfg.statuslineTemplate.includes("m_pluginSource"));
+    assert.ok(!cfg.statuslineTemplate.includes("m_pluginSource"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|quota|type:quota"));
     assert.ok(cfg.statuslineTemplate.includes("m_template|balance|type:balance"));
   });

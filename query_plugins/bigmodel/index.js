@@ -53,10 +53,9 @@
 //
 // and the plugin at ~/.claude/plugins/creditgauge/query_plugins/bigmodel/
 // index.js (this file) will be picked up — the loader resolves
-// query_plugins/<id>/index.js BEFORE the bundled built-in tree, so
-// pluginSource renders as 🎨 (labelPluginUserDefined). To swap in a
-// custom bigmodel plugin, just overwrite this file; no config change
-// needed.
+// query_plugins/<id>/ (user dir first, bundled copy second). To swap
+// in a custom bigmodel plugin, just overwrite this file; no config
+// change needed.
 
 const ENDPOINT = "https://bigmodel.cn/api/monitor/usage/quota/limit";
 // Fixed 5h / 7d windows for the two TOKENS_LIMIT slots. The BigModel

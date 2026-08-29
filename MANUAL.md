@@ -20,10 +20,9 @@ User-facing quickstart + ops procedures (install, uninstall, clean, commands, de
 12. [Color values](#12-color-values)
 13. [Drop semantics and `nulldrop`](#13-drop-semantics-and-nulldrop)
 14. [Per-module type filters](#14-per-module-type-filters)
-15. [`m_pluginSource`](#15-m_pluginsource)
-16. [`m_quote`](#16-m_quote)
-17. [Token usage family](#17-token-usage-family)
-18. [Composition with the upstream statusline](#18-composition-with-the-upstream-statusline)
+15. [`m_quote`](#15-m_quote)
+16. [Token usage family](#16-token-usage-family)
+17. [Composition with the upstream statusline](#17-composition-with-the-upstream-statusline)
 19. [Recipes](#19-recipes)
 
 ---
@@ -398,15 +397,15 @@ export type PluginContext = {
 };
 ```
 
-### Override resolution order
+### Plugin resolution
 
-For a provider id `<id>`:
+For a provider id `<id>`, the plugin file is resolved from the single
+`query_plugins/` layout:
 
-1. `~/.claude/plugins/creditgauge/query_plugins/<id>/index.js` (then `.mjs`) — user override (silently wins).
-2. `dist|src/plugins/<id>/index.js` — built-in (only for canonical built-in ids `minimax`, `deepseek`).
-3. Otherwise: miss. The host writes `<provider>:pluginSource = "missing"` to the cache row and `m_pluginSource` renders ❗.
+1. `~/.claude/plugins/creditgauge/query_plugins/<id>/index.js` (then `.mjs`) — user-installed / user-overridden (silently wins). `install.sh` seeds the bundled `minimax` / `deepseek` here.
+2. `<package>/query_plugins/<id>/index.js` — the bundled copy (e.g. a dev checkout where install.sh hasn't run).
 
-Id safety regex: `^[A-Za-z0-9_-]+$`. Timeout: 5s (`PLUGIN_TIMEOUT_MS` in `src/api.ts`). On any load / timeout / contract error, the host writes a `warning` row to `diagnostics.jsonl` and surfaces the side (`user plugin <path>: <err>` vs `built-in plugin <path>: <err>`).
+Id safety regex: `^[A-Za-z0-9_-]+$`. Timeout: 5s (`PLUGIN_TIMEOUT_MS` in `src/api.ts`). On any load / timeout / contract error, the host writes a `warning` row to `diagnostics.jsonl` with the plugin path qualified.
 
 Full ABI walkthrough (authoring recipes, fillQuota patterns, standalone testing): [HOW_TO_CREATE_A_PLUGIN.md](./HOW_TO_CREATE_A_PLUGIN.md).
 
@@ -445,7 +444,7 @@ Four presets ship in `DEFAULT_STATUSLINE_PRESETS` (`src/config.template.ts:141-2
 |------------|-------|-----------------------------------------------------------------------------------------------------|
 | `simple`   | 1     | One-line provider-type dispatch: `m_template\|quota\|type:quota` + `m_template\|balance\|type:balance` + `m_template\|plugin_info\|type:unknown`. Minimal fallback. |
 | `compact`  | 6     | Condensed stack: git + context + memory header / provider·model + tickline / session scopes + api·cost / project scopes with ⌛5h + ⌛7d sums / quota·balance / quote. |
-| `standard` | 6     | `compact`'s header widened with `mem_info` + version, a combined tickline + per-session api/cost row, and a `m_pluginSource` + quote tail; the ⌛5h / ⌛7d rows use the `periodline` fragment. |
+| `standard` | 6     | `compact`'s header widened with `mem_info` + version, a combined tickline + per-session api/cost row, and a quote + version tail; the ⌛5h / ⌛7d rows use the `periodline` fragment. |
 | `solo`     | 2     | Standalone: a compact header (git branch + status, context usage number, provider/model + per-turn token deltas — no bars, no git deltas, no memory) over the `simple` tail. |
 
 Source bodies: `src/config.template.ts:DEFAULT_STATUSLINE_PRESETS`.
@@ -723,24 +722,7 @@ The renderer tags each module with a `type` value. A module's emit is skipped wh
 
 ---
 
-## 15. `m_pluginSource`
-
-Visual indicator of which side of the user-vs-builtin fence the active provider's plugin resolved from.
-
-| `ctx.pluginSource` value | Glyph (default) | Meaning                                                                                |
-| ------------------------ | --------------- | -------------------------------------------------------------------------------------- |
-| `"builtin"`              | `📌`             | Plugin loaded from the bundled `dist/plugins/<id>/` tree.                              |
-| `"user"`                 | `🎨`             | Plugin loaded from a user override at `~/.claude/plugins/creditgauge/query_plugins/<id>/`. |
-| `"missing"`              | `❗`             | `matchProvider` returned an id but neither user nor built-in produced a file.            |
-| `null` / `undefined`     | (drop)          | No provider matched, or no cache row yet.                                              |
-
-Glyphs come from `labels.labelPluginSystem / .labelPluginUserDefined / .labelPluginMissing` (defaults `📌 / 🎨 / ❗`). A 4th axis `labelPluginCC` (default `🔖`) is reserved for a future "claude 官方" branch.
-
-The cache row key is `<provider>:pluginSource`, written by `index.ts:main` right after each successful `pluginTransportWithKind` call. The renderer reads it via `cache.peek` (TTL-ignoring) so a user adding/removing their override file reflects on the next tick without waiting for the data row to expire.
-
----
-
-## 16. `m_quote`
+## 15. `m_quote`
 
 A rotating quote, frequency-bucketed (local) or strings from a remote endpoint.
 
@@ -762,7 +744,7 @@ m_quote|address:https://api.xygeng.cn/one|quote:data.content|author:data.name
 
 ---
 
-## 17. Token usage family
+## 16. Token usage family
 
 Three-tier semantic split (per-turn / acc / sum) plus the cost three-tuple. Source: stdin (`tokens.*`) for per-turn; `state/<projectHash>/state.json` for acc; top-level `state/cache.stat.json` cross-project scan (TTL=300s) for sum.
 
@@ -812,7 +794,7 @@ Inline args: `color`, `nulldrop`, `model`, `window`, `align`, `term`, `valueOnly
 
 ---
 
-## 18. Composition with the upstream statusline
+## 17. Composition with the upstream statusline
 
 The upstream statusline (whatever `CREDITGAUGE_UPSTREAM` contains — possibly multi-line, possibly ANSI-colored) always goes FIRST, and the plugin's rendered output is appended after it with exactly one newline separator. There is no prepend split: `s_newline` (or any multi-line module body) only makes the plugin's OWN output multi-line, and that whole block lands below the upstream.
 

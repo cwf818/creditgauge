@@ -19,9 +19,8 @@
 // browser dashboard hits, so the localStorage access_token is the
 // only credential Kimi accepts. If you log out / refresh from the
 // browser, copy the new access_token out of localStorage and paste
-// it back into config.json — the cache row `kimi:pluginSource` does
-// not gate on credential validity, so a stale token shows up as a
-// silent `Remain: --:…` placeholder until the renderer falls back.
+// it back into config.json — a stale token shows up as a silent
+// `Remain: --:…` placeholder until the renderer falls back.
 
 const ENDPOINT =
   "https://www.kimi.com/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages";

@@ -5,9 +5,9 @@
 // the shadow lets a within-TTL hit on tick N+1 skip the network fetch.
 //
 // Key namespaces are chosen by callers (not render.ts): index.ts uses the
-// provider name and `<provider>:pluginSource`; api.quote.ts uses
-// `quote:<freqMs>:<address>`; render.ts reads via peekWithTtl/peek. NO
-// per-project prefixing — all projects share this single top-level file.
+// provider name; api.quote.ts uses `quote:<freqMs>:<address>`; render.ts
+// reads via peekWithTtl/peek. NO per-project prefixing — all projects share
+// this single top-level file.
 //
 // Stale-on-error: callers fall back to `peek(key)` on fetch failure; peek
 // ignores TTL and returns whatever the disk has.
