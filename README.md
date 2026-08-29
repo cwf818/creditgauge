@@ -80,6 +80,8 @@ npx creditgauge plugin add       # install a query plugin (interactive)
 npx creditgauge plugin remove    # remove a query plugin
 npx creditgauge plugin auth      # authenticate a query plugin
 npx creditgauge plugin list      # list available plugins
+npx creditgauge plugin status    # query usage for one/all providers
+npx creditgauge status           # alias of `plugin status`
 npx creditgauge --version
 npx creditgauge --help
 ```

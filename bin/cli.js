@@ -13,6 +13,8 @@
 //   npx creditgauge plugin remove    → remove a query plugin
 //   npx creditgauge plugin auth      → authenticate a plugin
 //   npx creditgauge plugin list      → list available plugins
+//   npx creditgauge plugin status    → query usage for one/all providers
+//   npx creditgauge status           → alias of `plugin status`
 //   npx creditgauge --version / -v
 //   npx creditgauge --help / -h
 //
@@ -254,6 +256,7 @@ async function dispatchPlugin(sub, subArgs) {
         "  npx creditgauge plugin remove <provider> [--dry-run]",
         "  npx creditgauge plugin auth <provider> [--mode ...]",
         "  npx creditgauge plugin list",
+        "  npx creditgauge plugin status [provider]   (alias: npx creditgauge status [provider])",
       ].join("\n") + EOL,
     );
     process.exit(sub ? 0 : 1);
@@ -264,6 +267,7 @@ async function dispatchPlugin(sub, subArgs) {
     remove: "./commands/plugin-remove.js",
     auth:   "./commands/plugin-auth.js",
     list:   "./commands/plugin-list.js",
+    status: "./commands/status.js",
   };
   const modPath = subMap[sub];
   if (!modPath) {
@@ -443,6 +447,8 @@ async function main() {
         "  npx creditgauge plugin remove <provider>    remove a query plugin",
         "  npx creditgauge plugin auth <provider>      authenticate a plugin",
         "  npx creditgauge plugin list                 list available plugins",
+        "  npx creditgauge plugin status [provider]    query usage (one or all providers)",
+        "  npx creditgauge status [provider]           alias of `plugin status`",
         "  npx creditgauge --version",
         "  npx creditgauge --help",
       ].join("\n") + EOL,
@@ -458,6 +464,16 @@ async function main() {
     const sub = restArgs[0];
     const subArgs = restArgs.slice(1);
     await dispatchPlugin(sub, subArgs);
+    return;
+  }
+
+  // Top-level `status` is an alias of `plugin status` (kept so the hint
+  // printed by query_plugins/auth-cdp.cjs — "npx creditgauge status" —
+  // resolves to the same usage report).
+  if (cmd === "status") {
+    const subArgs = restArgs;
+    const mod = await import("./commands/status.js");
+    await mod.default(subArgs);
     return;
   }
 

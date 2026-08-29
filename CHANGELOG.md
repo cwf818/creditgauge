@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.2.3 (2026-08-29)
+
+### Feat
+
+- **New `npx creditgauge status [provider]` command** (alias:
+  `npx creditgauge plugin status [provider]`). Prints a per-provider usage /
+  balance report for one or all providers, using the same plugin
+  ABI + `ensureQuota` / `ensureBalance` normalisation as the statusline
+  runtime (user plugin at `query_plugins/<id>/` wins, built-in
+  `minimax` / `deepseek` fall back). With no argument it reports every
+  provider configured in config.json **plus the bundled minimax / deepseek**
+  — an unconfigured built-in reads its key from the `ANTHROPIC_AUTH_TOKEN`
+  env var (or `providers.<id>.AUTHENTICATION_KEY`) and prints a hint instead
+  of a bogus null/network error when no key is available. Exit codes:
+  0 = all OK, 1 = at least one provider failed (error printed inline),
+  2 = usage error (unknown / not configured provider). This makes the
+  "现在可以直接运行 npx creditgauge status 查看用量" hint printed by
+  `plugin auth` (auth-cdp.cjs) actually work.
+  - Quota providers render a 10-cell usage bar per window (5h / 7d / 30d, …)
+    with used %, absolute quota when the plugin reports it, and a reset
+    countdown. Sentinel reset times (0 / 1970-era) degrade to the cycle
+    length instead of printing a bogus 1970 date.
+  - Balance providers render per-currency balances; `isAvailable=false`
+    surfaces as an account-unavailable line.
+  - ANSI colors are used only when stdout is a TTY (respects `NO_COLOR`).
+
 ## v1.2.2 (2026-08-29)
 
 ### Feat
