@@ -17,7 +17,7 @@ The plugin is shipped as a **single-plugin marketplace**: the repo root IS the m
 ```bash
 npm install          # install dev deps (esbuild, typescript, tsx, @types/node)
 npm run typecheck    # tsc --noEmit
-npm test             # node --test via tsx (1182 tests across api/render/cache/composition, ~3.8s)
+npm test             # node --test via tsx (1248 tests across api/render/cache/composition, ~28s on win32)
 npm run build        # esbuild → dist/index.js (single self-contained ESM bundle, target=node18)
 npm run dev          # esbuild --watch
 ```
@@ -33,8 +33,6 @@ src/
   api.ts              # dynamic plugin loader + canonical Quota/Balance exports
   plugins/data.ts     # plugin ABI and canonical Quota/Balance shapes
   plugins/parsers.ts  # built-in field-mapping parsers
-  plugins/minimax/    # standalone Quota plugin source
-  plugins/deepseek/   # standalone BALANCE plugin source
   # v0.8.36+ — m_windowMemUsage is the RAM-usage sibling of
   # m_memUsage (which renders absolute bytes "Mem:X.XG/Y.YG" as a
   # two-tone string: the used chunk is band-colored via
@@ -67,6 +65,19 @@ commands/
   clean-journal.md    # /creditgauge:clean-journal slash command (Pattern B2)
   reset.md            # /creditgauge:reset slash command (Pattern B2)
   config.md           # /creditgauge:config slash command (Pattern B2)
+query_plugins/
+  plugins.json        # registry metadata (title / config template / hasAuth) for the bundled providers
+  minimax/            # bundled QUOTA plugin (index.js) — seeded into the user dir by install.sh
+  deepseek/           # bundled BALANCE plugin (index.js) — seeded into the user dir by install.sh
+  kimi/               # bundled QUOTA plugin (kimi.com billing)
+  bigmodel/           # bundled QUOTA plugin (bigmodel.cn token-plan)
+  commandcode/        # bundled QUOTA plugin
+  copilot-api/        # bundled QUOTA plugin (local copilot-api proxy)
+  opencode/           # bundled QUOTA plugin
+  auth-cdp.cjs        # shared zero-dep CDP browser-auth helper (v1.2.2)
+  # Resolution: ~/.claude/plugins/creditgauge/query_plugins/<id>/ (user) wins,
+  # then this bundled copy. install.sh seeds minimax/deepseek into the user
+  # dir on every (re-)install (no-clobber).
 scripts/
   wrapper.sh          # bash wrapper: CREDITGAUGE_UPSTREAM_CMD → CREDITGAUGE_UPSTREAM → us
   install.sh          # settings.json patcher (install/restore/dry-run; uninstall is its own command in v0.9.x+)

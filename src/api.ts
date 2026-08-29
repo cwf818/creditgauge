@@ -73,12 +73,17 @@ function bundledPluginPath(providerId: string): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "query_plugins", providerId, "index.js");
 }
 
-// Resolve the plugin file for a provider id, or null when neither the
-// user dir nor the bundled copy has one. User plugins at
+// Resolve the plugin file for a provider id. User plugins at
 // ~/.claude/plugins/creditgauge/query_plugins/<id>/ always win over the
 // bundled copy — override is silent (no stderr warn, no diagnostics
 // append) per the user's "静默覆盖" decision (2026-07-11).
-export function resolvePluginOnDisk(providerId: string): string | null {
+//
+// Always returns a path: when neither the user dir nor the bundled copy
+// has a file, it returns the would-be user-side path so the import-time
+// 404 surfaces a path-qualified hint ("check query_plugins/<id>/"). The
+// caller (pluginTransport) relies on that — there is no null / "missing"
+// sentinel here.
+export function resolvePluginOnDisk(providerId: string): string {
   assertSafeProviderId(providerId);
   const js = queryPluginPath(providerId);
   if (existsSync(js)) return js;
@@ -118,11 +123,6 @@ export async function pluginTransport(
   context?: PluginContext,
 ): Promise<unknown> {
   const pluginPath = resolvePluginOnDisk(providerId);
-  if (!pluginPath) {
-    const message = `plugin ${providerId}: no file under query_plugins/${providerId}/ (user or bundled)`;
-    diagnostics.append("warning", "fetch", message, Date.now());
-    throw new Error(message);
-  }
   let module: { default?: AccountCreditPlugin };
   try {
     module = (await import(pathToFileURL(pluginPath).href)) as typeof module;

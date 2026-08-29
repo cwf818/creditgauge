@@ -23,7 +23,8 @@ User-facing quickstart + ops procedures (install, uninstall, clean, commands, de
 15. [`m_quote`](#15-m_quote)
 16. [Token usage family](#16-token-usage-family)
 17. [Composition with the upstream statusline](#17-composition-with-the-upstream-statusline)
-19. [Recipes](#19-recipes)
+18. [Recipes](#18-recipes)
+19. [Debug logging](#19-debug-logging)
 
 ---
 
@@ -809,7 +810,7 @@ This is how a multi-line preset renders: the upstream statusline on its own line
 
 ---
 
-## 19. Recipes
+## 18. Recipes
 
 ### Minimal — just the mode label and 5h window
 
@@ -888,7 +889,7 @@ On a Quota provider the `usage` branch renders; on a BALANCE provider the `balan
 
 ---
 
-## 20. Debug logging
+## 19. Debug logging
 
 Opt-in JSONL log of plugin-internal events. Disabled by default;
 opt-in via two-level AND-gate:
