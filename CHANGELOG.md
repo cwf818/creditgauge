@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.2.4 (2026-08-30)
+
+### Refactor
+
+- **Unified plugin layout under root `query_plugins/` — dropped the
+  builtin/user/missing distinction in plugin resolution.** Bundled
+  `minimax` / `deepseek` source moved from `src/plugins/` to the root
+  `query_plugins/` (same layout as user plugins). `install.sh` now seeds
+  the bundled plugins into `~/.claude/plugins/creditgauge/query_plugins/`
+  (no-clobber, user file wins) instead of relying on `<cache>/dist/plugins/`;
+  removed `scripts/copy-builtin-plugins.mjs` and the `build:plugins` step.
+  `api.ts` resolves uniformly from `query_plugins` (user dir first, bundled
+  copy second); the `PluginResolution` / `*WithKind` exports and the
+  builtin/🎨 user `m_pluginSource` render module (with its `labelPlugin*`
+  config fields) were removed; the standard preset tail was simplified.
+- **`resolvePluginOnDisk` always returns a path — null sentinel dropped.**
+  A missing plugin now resolves to the would-be user path so the import-time
+  404 surfaces a path-qualified hint (`check query_plugins/<id>/`);
+  `pluginTransport` no longer special-cases null. Tests pinned to the new
+  contract (missing ids → would-be user path, user override still wins over
+  the bundled copy).
+- Docs brought in line: `CLAUDE.md` (dropped the removed
+  `plugins/minimax|deepseek` entries, added the `query_plugins/` layout,
+  fixed the stale test count 1182 → 1248), `MANUAL.md` TOC renumbering
+  (Recipes 18, Debug logging 19), `HOW_TO_CREATE_A_PLUGIN.md` /
+  `README.md` / `CHANGELOG` updated to the unified layout.
+
 ## v1.2.3 (2026-08-29)
 
 ### Feat
