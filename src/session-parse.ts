@@ -83,9 +83,15 @@ export function parseTokenSnapshot(raw: string): TokenSnapshot | null {
     };
   }
 
+  // `workspace.project_dir` — the project root Claude Code was launched
+  // in; distinct from cwd (a nested subdir opened mid-session). m_dirName
+  // derives its basename from this (sole source).
+  const projectDir = workspaceObj ? strOrNull(workspaceObj.project_dir) : null;
+
   const snap: TokenSnapshot = {
     sessionId: strOrNull(r.session_id),
     cwd: strOrNull(r.cwd),
+    projectDir,
     totals: {
       tokenTotalIn: numOrNull(cwObj?.total_input_tokens),
       tokenTotalOut: numOrNull(cwObj?.total_output_tokens),

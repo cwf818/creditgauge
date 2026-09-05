@@ -37,7 +37,8 @@ import * as cache from "./cache.ts";
 // m_memUsage data source: Darwin shells out to `vm_stat`, others use os.*.
 import * as os from "node:os";
 import { execSync } from "node:child_process";
-// m_dirName derives its body from stdin.cwd via path.basename.
+// m_dirName derives its body from stdin.workspace.project_dir via
+// path.basename.
 import * as path from "node:path";
 export type { PrevTickSnapshot, AvgSnapshot };
 
@@ -2085,9 +2086,10 @@ m_quota: Object.assign(
     if (n == null || n.length === 0) return placeholderBare("m_gitName", c);
     return wrapPlainDefault("m_gitName", applyWidthLimit(n, resolveWidth({}, c)), undefined);
   },
-  // Current directory basename (stdin.cwd); missing or root → "n/a".
+  // Project directory basename (stdin.workspace.project_dir); missing →
+  // "n/a" (no cwd fallback — projectDir is the sole source).
   m_dirName: (c) => {
-    const n = c.tokens?.cwd ? path.basename(c.tokens.cwd) : "";
+    const n = c.tokens?.projectDir ? path.basename(c.tokens.projectDir) : "";
     if (n.length === 0) return placeholderBare("m_dirName", c);
     const body = applyWidthLimit(n, resolveWidth({}, c));
     return wrapPlainDefault("m_dirName", body, undefined);
@@ -5195,7 +5197,7 @@ const INLINE_RENDERERS: Record<string, InlineRenderer> = {
     return wrapPlainDefault("m_gitName", applyWidthLimit(n, resolveWidth(params, ctx)), params.color as string | undefined);
   },
   m_dirName: (params, ctx) => {
-    const n = ctx.tokens?.cwd ? path.basename(ctx.tokens.cwd) : "";
+    const n = ctx.tokens?.projectDir ? path.basename(ctx.tokens.projectDir) : "";
     if (n.length === 0) return placeholderWithColor("m_dirName", params, ctx);
     const body = applyWidthLimit(n, resolveWidth(params, ctx));
     return wrapPlainDefault("m_dirName", body, params.color as string | undefined);

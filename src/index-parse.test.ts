@@ -32,6 +32,8 @@ describe("parseTokenSnapshot — happy path", () => {
     // cwd matches the captured fixture (D:\WorkSpace\topgauge — real
     // session payload from this machine, preserved as historical data).
     assert.equal(snap!.cwd, "D:\\WorkSpace\\topgauge");
+    // projectDir mirrors workspace.project_dir in the fixture.
+    assert.equal(snap!.projectDir, "D:\\WorkSpace\\topgauge");
     assert.equal(snap!.totals.tokenTotalIn, 126860);
     assert.equal(snap!.totals.tokenTotalOut, 265);
     assert.equal(snap!.current.tokenIn, 140);
@@ -119,6 +121,7 @@ describe("parseTokenSnapshot — v0.4.0+ field edge cases", () => {
     const snap = parseTokenSnapshot(raw);
     assert.ok(snap);
     assert.equal(snap!.repo, null);
+    assert.equal(snap!.projectDir, null);
   });
 
   it("tolerates workspace without repo", () => {
@@ -126,6 +129,15 @@ describe("parseTokenSnapshot — v0.4.0+ field edge cases", () => {
     const snap = parseTokenSnapshot(raw);
     assert.ok(snap);
     assert.equal(snap!.repo, null);
+  });
+
+  it("parses workspace.project_dir", () => {
+    const raw = JSON.stringify({ workspace: { project_dir: "/home/user/creditgauge" } });
+    const snap = parseTokenSnapshot(raw);
+    assert.ok(snap);
+    assert.equal(snap!.projectDir, "/home/user/creditgauge");
+    // project_dir absent → null (cwd stays the stdin root field).
+    assert.equal(parseTokenSnapshot(JSON.stringify({ cwd: "/x" }))!.projectDir, null);
   });
 
   it("tolerates missing version", () => {

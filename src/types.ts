@@ -95,6 +95,11 @@ export type TokenSample = {
 export type TokenSnapshot = {
   sessionId: string | null;
   cwd: string | null;
+  // stdin.workspace.project_dir — the project root (distinct from cwd,
+  // which can be a nested subdir opened mid-session). m_dirName renders
+  // its basename (sole source — no cwd fallback); optional so old
+  // fixtures/literals without it type-check.
+  projectDir?: string | null;
   totals: {
     tokenTotalIn: number | null;
     tokenTotalOut: number | null;

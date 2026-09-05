@@ -2257,24 +2257,45 @@ describe("renderTemplate — v0.4.0+ session-info modules", () => {
     assert.equal(strip(out), "n/a");
   });
 
-  it("m_dirName| bare renders the current directory basename", () => {
+  it("m_dirName| bare renders basename of workspace.project_dir (project root)", () => {
     const out = renderTemplate(
       ["m_dirName"],
-      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
+      ctxFor(
+        fakeSnapshot({
+          cwd: "/home/user/creditgauge/src/render",
+          projectDir: "/home/user/creditgauge",
+        }),
+      ),
     ).join("\n");
+    // Sole source is projectDir → the project root basename, not the
+    // nested-subdir (cwd) basename.
     assert.equal(strip(out), "creditgauge");
+  });
+
+  it("m_dirName| emits 'n/a' when projectDir is absent even if cwd is set (no cwd fallback)", () => {
+    // Strict projectDir-only semantics: a present cwd does NOT backfill.
+    const out = renderTemplate(
+      ["m_dirName"],
+      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge", projectDir: null })),
+    ).join("\n");
+    assert.equal(strip(out), "n/a");
   });
 
   it("m_dirName| default tint is purple (紫)", () => {
     const out = renderTemplate(
       ["m_dirName"],
-      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
+      ctxFor(
+        fakeSnapshot({
+          cwd: "/home/user/creditgauge/src/render",
+          projectDir: "/home/user/creditgauge",
+        }),
+      ),
     ).join("\n");
     assert.ok(out.includes("\x1b[38;5;141m"), `got: ${JSON.stringify(out)}`);
   });
 
-  it("m_dirName| emits 'n/a' when cwd is missing (v6.x placeholder)", () => {
-    const out = renderTemplate(["m_dirName"], ctxFor(fakeSnapshot({ cwd: null }))).join("\n");
+  it("m_dirName| emits 'n/a' when projectDir is missing (v6.x placeholder)", () => {
+    const out = renderTemplate(["m_dirName"], ctxFor(fakeSnapshot({ projectDir: null }))).join("\n");
     assert.equal(strip(out), "n/a");
   });
 
@@ -3051,24 +3072,37 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
   it("m_dirName|color|magenta wraps the dir basename in magenta", () => {
     const out = renderTemplate(
       ["m_dirName|color:magenta"],
-      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
+      ctxFor(
+        fakeSnapshot({
+          cwd: "/home/user/creditgauge/src",
+          projectDir: "/home/user/creditgauge",
+        }),
+      ),
     ).join("\n");
     assert.ok(out.includes("\x1b[38;5;201m"), `got: ${JSON.stringify(out)}`);
   });
 
-  it("m_dirName|nulldrop|false renders 'n/a' when cwd is null", () => {
+  it("m_dirName|nulldrop|false renders 'n/a' when projectDir is null (even with cwd set)", () => {
     const out = renderTemplate(
       ["m_dirName|nulldrop:false"],
-      ctxFor(fakeSnapshot({ cwd: null })),
+      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge", projectDir: null })),
     ).join("\n");
     assert.equal(strip(out), "n/a");
   });
 
-  it("m_dirName|width:25 truncates a 30-col basename to 22 cols + '...'", () => {
+  it("m_dirName|nulldrop|false renders the projectDir basename when present", () => {
+    const out = renderTemplate(
+      ["m_dirName|nulldrop:false"],
+      ctxFor(fakeSnapshot({ cwd: "/ignored", projectDir: "/home/user/creditgauge" })),
+    ).join("\n");
+    assert.equal(strip(out), "creditgauge");
+  });
+
+  it("m_dirName|width:25 truncates a 30-col basename to 22 cols + '...' (source = projectDir)", () => {
     const long = "a".repeat(30);
     const out = renderTemplate(
       ["m_dirName|width:25"],
-      ctxFor(fakeSnapshot({ cwd: `/home/user/${long}` })),
+      ctxFor(fakeSnapshot({ cwd: `/ignored/nested`, projectDir: `/home/user/${long}` })),
     ).join("\n");
     assert.equal(strip(out), "a".repeat(22) + "...");
   });
@@ -3076,7 +3110,7 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
   it("m_dirName|width:25 counts CJK by display column (13 中 = 26 cols → 11 中 + '...')", () => {
     const out = renderTemplate(
       ["m_dirName|width:25"],
-      ctxFor(fakeSnapshot({ cwd: "/home/user/" + "中".repeat(13) })),
+      ctxFor(fakeSnapshot({ cwd: "/ignored", projectDir: "/home/user/" + "中".repeat(13) })),
     ).join("\n");
     assert.equal(strip(out), "中".repeat(11) + "...");
   });
@@ -3085,7 +3119,7 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
     const long = "a".repeat(30);
     const out = renderTemplate(
       ["m_dirName|width:7"],
-      ctxFor(fakeSnapshot({ cwd: `/home/user/${long}` })),
+      ctxFor(fakeSnapshot({ cwd: `/ignored`, projectDir: `/home/user/${long}` })),
     ).join("\n");
     assert.equal(strip(out), long);
   });
@@ -3093,7 +3127,9 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
   it("m_dirName|width:25 leaves a short basename untouched", () => {
     const out = renderTemplate(
       ["m_dirName|width:25"],
-      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
+      ctxFor(
+        fakeSnapshot({ cwd: "/home/user/creditgauge/src", projectDir: "/home/user/creditgauge" }),
+      ),
     ).join("\n");
     assert.equal(strip(out), "creditgauge");
   });
@@ -3102,7 +3138,9 @@ describe("renderTemplate — :nulldrop inline override (v0.4.0+)", () => {
     __resetUnknownModuleWarnForTest();
     const out = renderTemplate(
       ["m_dirName|width:abc"],
-      ctxFor(fakeSnapshot({ cwd: "/home/user/creditgauge" })),
+      ctxFor(
+        fakeSnapshot({ cwd: "/home/user/creditgauge/src", projectDir: "/home/user/creditgauge" }),
+      ),
     ).join("\n");
     assert.equal(out, "");
   });
