@@ -5835,12 +5835,12 @@ describe("renderTemplate — v0.8.0+ labels.* config customization", () => {
   });
 
   it("labelTokenOut override reaches m_tokenOut (per-turn axis)", () => {
-    withLabels({ labelTokenOut: "↓:" }, () => {
+    withLabels({ labelTokenOut: "↑:" }, () => {
       const snap = fakeSnapshot();
       processTick(snap.cwd, snap, null);
       statusStore.commit();
       const a = renderTemplate(["m_tokenOut"], ctxFor(snap)).join("\n");
-      assert.equal(strip(a), "↓:155");
+      assert.equal(strip(a), "↑:155");
     });
   });
 
