@@ -22,10 +22,21 @@ import { normalizeUrl } from "./utils.ts";
 // with a trailing-slash ANTHROPIC_BASE_URL matches an EXACT-registered
 // base and vice versa.
 //
-// `STARTWITH` adds a suffix-attack guard: the char right after the prefix must
-// be undefined (end), "/", "?", or "#" — rejecting `https://api.deepseek.com.evil.example`.
-// The guard indexes the ORIGINAL baseUrl at pattern.length (not the stripped
-// length) so a trailing-slash variant still lands the check on the trailing "/".
+// `STARTWITH` adds a suffix-attack guard: what follows the prefix must end the
+// URL, start a path/query/fragment, or be a port separator — rejecting
+// `https://api.deepseek.com.evil.example`. Both sides are compared in NORMALIZED
+// form (so the guard indexes the same string it prefix-matched).
+//
+// Two normalization quirks make a bare-host pattern special:
+//   - `normalizeUrl` cannot drop a root pathname: `http://127.0.0.1` serializes
+//     back as `http://127.0.0.1/` (see utils.normalizeUrl). That stray "/"
+//     would make `startsWith` fail against `http://127.0.0.1:15721/`, whose
+//     char after the host is ":" — so a trailing "/" on the pattern is
+//     stripped here (only the root-pathname case can survive normalization).
+//   - ":<digits>" is then the only legal non-path suffix, so a host pattern
+//     matches a ported URL. It must be followed by a boundary or the end —
+//     `:443@evil.example` stays rejected (that URL's host is evil.example,
+//     the prefix is only userinfo).
 export function compareUrl(
   method: CompareMethod,
   baseUrl: string,
@@ -39,11 +50,14 @@ export function compareUrl(
     case "INCLUDE":
       return url.includes(pat);
     case "STARTWITH": {
-      if (!url.startsWith(pat)) return false;
-      const tail = baseUrl[pattern.length];
-      // undefined = exact match (no char after the prefix); /, ?, #
-      // are the legal boundary characters.
-      return tail === undefined || tail === "/" || tail === "?" || tail === "#";
+      const prefix = pat.endsWith("/") ? pat.slice(0, -1) : pat;
+      if (!url.startsWith(prefix)) return false;
+      const rest = url.slice(prefix.length);
+      // "" = exact match; /, ?, # start a path/query/fragment.
+      if (rest === "" || rest[0] === "/" || rest[0] === "?" || rest[0] === "#") {
+        return true;
+      }
+      return /^:\d+(?:[/?#]|$)/.test(rest);
     }
   }
 }

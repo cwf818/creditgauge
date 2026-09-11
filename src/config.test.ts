@@ -52,6 +52,68 @@ describe("provider defaults", () => {
     assert.equal(configStore.get().providers.custom.AUTHENTICATION_KEY, "configured");
     assert.equal("BEARER_KEY" in (configStore.get().providers.custom as object), false);
   });
+
+  // `""` is the documented "no credential needed" marker — it is what every
+  // auth-less entry in query_plugins/plugins.json ships (copilot-api / kimi /
+  // opencode / commandcode). Treating it as invalid made install.sh's seed
+  // warn on every statusline tick, so it is dropped silently instead.
+  it("treats AUTHENTICATION_KEY: '' as absent, without warning", async () => {
+    writeFileSync(join(dir, "config.json"), JSON.stringify({
+      providers: {
+        custom: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "https://custom.example/anthropic",
+          COMPARE_METHOD: "EXACT",
+          AUTHENTICATION_KEY: "",
+        },
+      },
+    }));
+    const origWrite = process.stderr.write.bind(process.stderr);
+    const writes: string[] = [];
+    (process.stderr.write as unknown) = (chunk: string | Uint8Array): boolean => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      await loadConfig();
+      assert.equal("AUTHENTICATION_KEY" in configStore.get().providers.custom, false);
+      assert.ok(
+        !writes.some((w) => /AUTHENTICATION_KEY/.test(w)),
+        `expected no AUTHENTICATION_KEY warn; got ${JSON.stringify(writes)}`,
+      );
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  });
+
+  it("a non-string AUTHENTICATION_KEY still warns", async () => {
+    writeFileSync(join(dir, "config.json"), JSON.stringify({
+      providers: {
+        custom: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "https://custom.example/anthropic",
+          COMPARE_METHOD: "EXACT",
+          AUTHENTICATION_KEY: 12345,
+        },
+      },
+    }));
+    const origWrite = process.stderr.write.bind(process.stderr);
+    const writes: string[] = [];
+    (process.stderr.write as unknown) = (chunk: string | Uint8Array): boolean => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      await loadConfig();
+      assert.equal("AUTHENTICATION_KEY" in configStore.get().providers.custom, false);
+      assert.ok(
+        writes.some((w) => /AUTHENTICATION_KEY must be a string/.test(w)),
+        `expected stderr warn; got ${JSON.stringify(writes)}`,
+      );
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  });
 });
 
 describe("config facade", () => {

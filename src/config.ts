@@ -1548,10 +1548,16 @@ function validateProviderEntry(_name: string, v: unknown): ProviderEntry | null 
   }
   let validatedAuthenticationKey: string | undefined;
   if ("AUTHENTICATION_KEY" in e && e.AUTHENTICATION_KEY !== undefined) {
-    if (typeof e.AUTHENTICATION_KEY === "string" && e.AUTHENTICATION_KEY.length > 0) {
-      validatedAuthenticationKey = e.AUTHENTICATION_KEY;
+    if (typeof e.AUTHENTICATION_KEY === "string") {
+      // "" means "this provider needs no credential" — the documented
+      // convention, and what every auth-less entry in
+      // query_plugins/plugins.json ships. Dropped silently: warning per
+      // config load would fire on every statusline tick.
+      if (e.AUTHENTICATION_KEY.length > 0) {
+        validatedAuthenticationKey = e.AUTHENTICATION_KEY;
+      }
     } else {
-      warn("provider AUTHENTICATION_KEY must be a non-empty string; dropping the field");
+      warn("provider AUTHENTICATION_KEY must be a string; dropping the field");
     }
   }
   // Provider-specific Config overrides, validated here only for shape

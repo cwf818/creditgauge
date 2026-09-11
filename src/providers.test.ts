@@ -355,6 +355,132 @@ describe("compareUrl — trailing-slash edge cases (2026-07-15)", () => {
   });
 });
 
+describe("compareUrl — STARTWITH bare-host pattern vs ported URL (2026-09-11)", () => {
+  // A bare scheme+host pattern normalizes to host + "/" (a root pathname
+  // always serializes back with its slash — see utils.normalizeUrl), which
+  // used to make `url.startsWith(pat)` fail against an URL whose char after
+  // the host is ":". The pattern's root slash is now dropped, and ":<digits>"
+  // accepted as a port boundary, so a host pattern covers every port on it.
+
+  it("matches a URL carrying an explicit port", () => {
+    assert.equal(
+      compareUrl("STARTWITH", "http://127.0.0.1:15721", "http://127.0.0.1"),
+      true,
+    );
+  });
+
+  it("matches the same host on a different port", () => {
+    assert.equal(
+      compareUrl("STARTWITH", "http://127.0.0.1:5411", "http://127.0.0.1"),
+      true,
+    );
+  });
+
+  it("matches a port followed by a path / query / fragment", () => {
+    assert.equal(
+      compareUrl(
+        "STARTWITH",
+        "http://127.0.0.1:15721/v1/messages",
+        "http://127.0.0.1",
+      ),
+      true,
+    );
+    assert.equal(
+      compareUrl("STARTWITH", "http://127.0.0.1:15721?a=1", "http://127.0.0.1"),
+      true,
+    );
+    assert.equal(
+      compareUrl("STARTWITH", "http://127.0.0.1:15721#frag", "http://127.0.0.1"),
+      true,
+    );
+  });
+
+  it("matches the bare host itself (no port)", () => {
+    assert.equal(
+      compareUrl("STARTWITH", "http://127.0.0.1", "http://127.0.0.1"),
+      true,
+    );
+    assert.equal(
+      compareUrl("STARTWITH", "http://127.0.0.1/", "http://127.0.0.1"),
+      true,
+    );
+  });
+
+  it("cannot be defeated by a port in userinfo", () => {
+    // `https://api.deepseek.com:443@evil.example/` has host evil.example —
+    // the prefix only spans its userinfo. The "@" after the digits is not a
+    // boundary, so the suffix-attack guard rejects it.
+    assert.equal(
+      compareUrl(
+        "STARTWITH",
+        "https://api.deepseek.com:443@evil.example/",
+        "https://api.deepseek.com",
+      ),
+      false,
+    );
+  });
+
+  it("still rejects a non-numeric suffix after the colon", () => {
+    assert.equal(
+      compareUrl("STARTWITH", "http://127.0.0.1:x", "http://127.0.0.1"),
+      false,
+    );
+  });
+
+  it("still rejects a dot-suffixed host attack", () => {
+    assert.equal(
+      compareUrl("STARTWITH", "http://127.0.0.1.evil.example", "http://127.0.0.1"),
+      false,
+    );
+  });
+
+  it("does not let a host pattern cross into a different host", () => {
+    assert.equal(
+      compareUrl("STARTWITH", "http://127.0.0.10", "http://127.0.0.1"),
+      false,
+    );
+  });
+
+  it("a port-bearing pattern does NOT match a different port", () => {
+    assert.equal(
+      compareUrl(
+        "STARTWITH",
+        "http://127.0.0.1:5411",
+        "http://127.0.0.1:15721",
+      ),
+      false,
+    );
+  });
+
+  it("a path-bearing pattern does not match an unrelated path", () => {
+    assert.equal(
+      compareUrl(
+        "STARTWITH",
+        "http://127.0.0.1:15721/other",
+        "http://127.0.0.1:15721/anthropic",
+      ),
+      false,
+    );
+  });
+
+  it("matchProvider routes the ported URL to the bare-host entry", () => {
+    __resetForTest({
+      providers: {
+        commandcode: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "http://127.0.0.1",
+          COMPARE_METHOD: "STARTWITH",
+          config: {},
+        },
+      },
+    } as never);
+    assert.equal(matchProvider("http://127.0.0.1:15721"), "commandcode");
+    assert.equal(matchProvider("http://127.0.0.1:5411/usage"), "commandcode");
+    // A different host still doesn't match.
+    assert.equal(matchProvider("http://127.0.0.1.evil.example"), null);
+  });
+});
+
 describe("matchProvider — custom config", () => {
   it("matches a custom provider added via __resetForTest", () => {
     __resetForTest({
