@@ -1,8 +1,9 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   __resetForTest,
   __testing,
@@ -12,6 +13,8 @@ import {
   resolveTokenPrice,
 } from "./config.ts";
 import { DEFAULT_LINE_TEMPLATES, DEFAULT_STATUSLINE_PRESETS } from "./config.template.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 let dir: string;
 let tpDir: string;
@@ -587,5 +590,45 @@ describe("resolveTokenPrice — CURRENCY-filter conversion fallback (vX.X.X+)", 
     } as never);
     const r = resolveTokenPrice(configStore.get(), "commandcode", "deepseek-v4-flash");
     assert.equal(r, null);
+  });
+});
+
+// README.md / MANUAL.md / 快速上手指南.md all tell the user to copy this file
+// to config.json and edit it, so it has to actually parse and load clean. Both
+// halves regressed at once and nobody noticed: three C-style `//` comment lines
+// made the whole file unparseable, and minimax's `"TYPE": "Quota"` (lowercase)
+// failed the uppercase-only enum check, dropping the entry outright. The
+// annotations are therefore `//_`-prefixed KEYS (valid JSON), and this test is
+// the thing that notices when one of them lands somewhere that reads as data.
+describe("config.example.json (checked-in template)", () => {
+  const examplePath = resolve(here, "..", "config.example.json");
+
+  it("is valid JSON", () => {
+    const raw = readFileSync(examplePath, "utf8");
+    assert.doesNotThrow(() => JSON.parse(raw), "config.example.json must parse");
+  });
+
+  it("loads through loadConfig with zero warnings", async () => {
+    __testing.setPathResolver(() => examplePath);
+    const origWrite = process.stderr.write.bind(process.stderr);
+    const writes: string[] = [];
+    (process.stderr.write as unknown) = (chunk: string | Uint8Array): boolean => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      const cfg = await loadConfig();
+      assert.deepEqual(
+        writes,
+        [],
+        `config.example.json produced warnings: ${JSON.stringify(writes)}`,
+      );
+      // Both built-ins survive validation — the uppercase TYPE trap.
+      assert.equal(cfg.providers.minimax.TYPE, "QUOTA");
+      assert.equal(cfg.providers.deepseek.TYPE, "BALANCE");
+    } finally {
+      process.stderr.write = origWrite;
+      __testing.resetPathResolver();
+    }
   });
 });

@@ -1,20 +1,64 @@
 {
+  "//_about": "Reference config.json — every top-level field, with the built-in default values. Copy to ~/.claude/plugins/creditgauge/config.json (or $CLAUDE_CONFIG_DIR/plugins/creditgauge/config.json) and edit. This file is valid JSON on purpose: '//_'-prefixed KEYS carry the annotations, so it parses as-is. Full guide: MANUAL.md §2.",
+  "//_precedence": "defaults  ⊕  this file (top-level)  ⊕  providers.<p>.config  — provider config is highest. A bad field warns on stderr and falls back to its default; it never takes the whole file down.",
+
   "cacheTtlMs": 60000,
   "fetchTimeoutMs": 5000,
+  "//_display_comment": "\"used\" | \"remaining\". Picks which end of the quota window the bar and percentage show. Default: \"remaining\".",
   "display": "used",
+  "//_modeLabels_comment": "Line prefix, chosen by provider TYPE (QUOTA → used/remaining, BALANCE → balance).",
   "modeLabels": {
     "used": "Usage:",
     "remaining": "Remain:",
     "balance": "Balance:"
   },
+
+  "//_labels_comment": "Prefix for each token-stat axis, shared by the per-turn / m_acc* / m_sum* families of that axis. Values are used verbatim (include your own trailing colon/space). Omit any field to keep its default.",
+  "labels": {
+    "labelTokenIn": "in:",
+    "labelTokenOut": "out:",
+    "labelTokenCachedIn": "cache:",
+    "labelTokenTotalIn": "total:",
+    "labelApiMs": "api:",
+    "labelApiCalls": "calls:",
+    "labelTokenInSpeed": "in:",
+    "labelTokenOutSpeed": "out:",
+    "labelTokenHitRate": "hit:",
+    "labelTokenCost": "cost:",
+    "labelEstQuota": "est:",
+    "labelMemUsage": "Mem:",
+    "labelMemUsed": "used:",
+    "labelMemTotal": "total:",
+    "labelContextSize": "size:",
+    "labelContextWindowSize": "size:",
+    "labelContextUsedPercent": "used:",
+    "labelContextRemainingPercent": "remain:",
+    "labelContextUsage": "ctx:",
+    "labelStartTime": "start:",
+    "labelEndTime": "end:",
+    "labelQuota": "quota: ",
+    "labelGitClean": "✅",
+    "labelGitDirty": "🟠"
+  },
+
+  "//_colors_comment": "A symbolic shortcut (brightBlack / brightGreen / darkGreen / yellow / orange / red) OR a literal ANSI SGR matching ^\\x1b\\[[0-9;]*m$. NOTE: 'broken' has no shortcut — its default is plain red, not 'red' (which is bright red). Newlines are rejected.",
   "colors": {
     "brightGreen": "brightGreen",
     "darkGreen": "darkGreen",
     "yellow": "yellow",
     "orange": "orange",
     "red": "red",
-    "stale": "brightBlack"
+    "stale": "brightBlack",
+    "broken": "\u001b[31m"
   },
+  "//_cacheHitColors_comment": "3-band palette for m_tokenHitRate: >= cacheHitThresholds[1] → good, >= [0] → warn, else bad.",
+  "cacheHitColors": {
+    "good": "brightGreen",
+    "warn": "yellow",
+    "bad": "orange"
+  },
+
+  "//_thresholds_comment": "percentBands: 5-band cutoffs for percentage rendering. balanceBands: the same for DeepSeek's absolute balance (not %). Each must be exactly 4 ascending numbers.",
   "thresholds": {
     "percentBands": [60, 70, 80, 90],
     "balanceBands": [5, 10, 20, 50]
@@ -24,38 +68,68 @@
     "fallback": "¥",
     "default": "CNY"
   },
+
+  "//_stale_comment": "Glyphs for the m_age annotation: 'healthy' when the chain is fresh, 'broken' when the fetch failed and a cached value is being shown.",
   "stale": {
     "ageEmoji": { "healthy": "🔗", "broken": "⛓️‍💥" }
   },
+
   "bar": {
     "width": 8,
     "filled": "▓",
     "empty": "░"
   },
+  "//_timeFormat_comment": "Governs ALL time rendering (reset countdown, stale suffix). minUnit is the smallest unit shown — units below it collapse to \"<1<minUnit>\". maxUnitCount (clamped [1,4]) is how many non-zero units to keep: 2h3m4s → \"2h3m\".",
   "timeFormat": {
     "minUnit": "m",
     "maxUnitCount": 2
   },
+  "//_countdown_comment": "Reset-countdown glyphs, indexed by remainingMs / resetDurationMs so the array reads left-to-right as \"few remaining → many remaining\". Two glyphs reproduce the v0.2.1 hourglass pair; one glyph is static. Providers without start data (DeepSeek, legacy) fall back to index 0.",
   "countdown": {
     "resetArrows": ["🕛", "🕚", "🕙", "🕘", "🕗", "🕖", "🕕", "🕔", "🕓", "🕒", "🕑", "🕐"]
   },
-  "lineTemplate": {
-    "plan": [
-      "m_modeLabel", "s_0",
-      "m_windowQuota|term|short", "s_0", "m_countdown|term|short",
-      "s_0", "s_1", "s_0",
-      "m_windowQuota|term|mid", "s_0", "m_countdown|term|mid"
-    ],
-    "balance": ["m_modeLabel", "s_0", "m_balance"]
+
+  "//_autoSpace_comment": "prefixSpace prepends a space before each module; suffixSpace appends one before a following module. An explicit |prefix:| / |suffix:| on a token wins over these.",
+  "prefixSpace": true,
+  "suffixSpace": false,
+
+  "//_tokenFormat_comment": "Compact-number and precision knobs for the m_token* family. thresholds is [lo, hi]: < lo renders raw, < hi renders k, above renders M. cacheHitThresholds is [lo, hi] for the 3-band cache-hit palette. speedScaleBands maps tokens/s to the 5-band speed scale (4 ascending cutoffs per direction; 'in' bands are 5x 'out' because input streams run hotter).",
+  "tokenFormat": {
+    "thresholds": [1000, 1000000],
+    "precision": 1,
+    "speedPrecision": 1,
+    "cachePctPrecision": 1,
+    "cacheHitThresholds": [50, 80],
+    "speedScaleBands": {
+      "in": [50, 100, 200, 400],
+      "out": [10, 20, 40, 80]
+    }
   },
+
+  "//_lineTemplates_comment": "Registry of reusable token-array fragments, read by m_template's first argument. Allowed tokens: any m_* module EXCEPT m_template, plus s_* separators. Keys are yours to choose — colliding with a shipped fragment warns and is skipped. Shipped keys: quota, balance, model_info, context_info, plugin_info, mem_info, git_info, quote. NOTE: every key here is a fragment name, so a '//_'-prefixed comment key would be read as one and warn — annotations for this block must live outside it.",
+  "lineTemplates": {
+    "myHeader": ["m_modeLabel", "s_space", "m_windowQuota|term:short"]
+  },
+  "//_statuslineTemplate_comment": "The template actually rendered: a string[] of tokens, or a string naming a preset (simple / compact / solo / standard). Default is the array below — it routes by provider TYPE through the shipped quota/balance fragments.",
+  "statuslineTemplate": ["m_template|quota|type:quota", "m_template|balance|type:balance"],
+
+  "//_tokenPrices_comment": "Token pricing lives in config.tokenPrices.json (a sibling of this file), NOT here — see config.tokenPrices.example.json for the provider→model hierarchy and the 5-layer resolution cascade.",
+
+  "//_quoteInsecureTls_comment": "Pass --insecure / -k to curl for m_quote address-mode fetches. Opt in only for self-signed / untrusted-CA HTTPS endpoints.",
+  "quoteInsecureTls": false,
+
+  "//_debug_comment": "Per-subkey diagnostics, AND-gated with CREDITGAUGE_DIAGNOSTICS_ENABLE=1. Valid subkeys: stdin, statusStore, config, cache, statCache, smokeNormalizeTick, pluginVersion, parse. Truthy strings (\"1\"/\"true\"/\"yes\") or boolean true; unknown keys are dropped.",
+  "debug": {},
+
   "//_providerOverride_comment": "Force one provider instead of matching ANTHROPIC_BASE_URL. Must name a key in `providers` that also has a plugin on disk, else it warns and falls back to matching. Use it for local proxies that share a host and differ only by an arbitrary port. Empty = no override.",
   "providerOverride": "",
+  "//_providers_comment": "Registry of providers. TYPE and COMPARE_METHOD are case-sensitive and must be uppercase — a wrong-case value drops the whole entry. COMPARE_METHOD: EXACT | INCLUDE (substring) | STARTWITH (prefix + suffix-attack guard). An entry overriding a built-in id (minimax, deepseek) inherits the fields it omits.",
   "providers": {
     "minimax": {
-      "TYPE": "Quota",
+      "TYPE": "QUOTA",
       "BASE_URL_COMPARED_TO": "https://api.minimaxi.com/anthropic",
       "COMPARE_METHOD": "EXACT",
-      "//_config_comment": "Optional per-provider config overrides. tokenPrices here has the highest priority (levels 1 and 3 in the 5-layer cascade).",
+      "//_config_comment": "Optional per-provider overrides of any top-level key EXCEPT `providers` (no recursion) and `providerOverride` (self-referential). tokenPrices set here has the highest priority — levels 1 and 3 of the 5-layer cascade.",
       "//_config_example": { "config": { "tokenPrices": { "MiniMax-M3": { "currency": "USD", "in": 15, "out": 75, "cachedIn": 1.5 } } } }
     },
     "deepseek": {
@@ -63,9 +137,5 @@
       "BASE_URL_COMPARED_TO": "https://api.deepseek.com/anthropic",
       "COMPARE_METHOD": "EXACT"
     }
-  },
-  // vX.X.X+ — tokenPrices has moved to config.tokenPrices.json.
-  // See config.tokenPrices.example.json for the provider-model
-  // hierarchy and 5-layer resolution cascade.
-  "_comment_tokenPrices": "moved to config.tokenPrices.json"
+  }
 }
