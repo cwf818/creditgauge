@@ -1,5 +1,72 @@
 # Changelog
 
+## v1.2.5 (2026-09-12)
+
+### Feat
+
+- **Top-level `providerOverride` forces the active provider, bypassing URL
+  matching.** URL matching cannot separate local proxies that share a host
+  and differ only by an arbitrary port — under a bare-host `STARTWITH`
+  pattern every port on that host matches, and the winner is decided by
+  `providers` insertion order rather than by what the user configured. The
+  new top-level `providerOverride` string names the provider outright; it is
+  honored only when the name is a key in `providers` AND a plugin file exists
+  for it (`api.pluginExistsOnDisk`), otherwise it warns on stderr and falls
+  back to `matchProvider` — a silent fallback would render a different
+  provider than the one asked for. Top-level only: a provider's own `config`
+  block cannot set it. `resolveProvider` is the new resolution entry point;
+  `index.ts`'s single `matchProvider` call site goes through it, so
+  `applyProviderOverrides` / `processAndSaveTick` / `buildProviderLine` all
+  inherit the override without a second notion of the active provider.
+- **`/creditgauge:config --provider-<id>` / `--clear-provider`** wire that key
+  into the existing config command (`edit-config.mjs` `set-provider` /
+  `clear-provider` ops). `set-provider` hard-fails when the id is not a key in
+  `providers` (writes nothing, lists the known ids) and only prints a note when
+  no plugin file is found — plugin resolution stays the runtime's call. The id
+  is regex-gated so a configured value can never walk the filesystem; the
+  bundled lookup walks `../query_plugins/<id>/`, mirroring `src/api.ts`'s
+  user-then-bundled order. The no-arg status view reports both and flags a
+  name that is no longer a key in `providers`; `--help` now prints its leading
+  comment block structurally instead of a hardcoded `sed` line range.
+- **`m_dirName` sources `workspace.project_dir`** instead of `stdin.cwd`, so
+  the module stays pinned to the project root (the directory claude-code was
+  launched in) even when the session cd's into a nested subdir mid-run. Missing
+  `project_dir` renders the `n/a` placeholder rather than falling back to `cwd`.
+
+### Fix
+
+- **`STARTWITH` bare-host pattern now matches ported URLs.** `compareUrl`'s
+  `STARTWITH` rejected `http://127.0.0.1` against the configured
+  `http://127.0.0.1:15721`, from two stacked causes: `normalizeUrl` cannot drop
+  a root pathname, so the pattern serialized back as `http://127.0.0.1/` and
+  `startsWith` failed on the `:` at index 16; and the boundary guard accepted
+  only end / `/` / `?` / `#`, rejecting the port separator, while indexing the
+  original `baseUrl` with the unnormalized pattern length. The pattern's
+  trailing `/` is now stripped and the remainder read off the normalized url,
+  accepting `:<digits>` when followed by a boundary or the end.
+  `:443@evil.example` stays rejected.
+- **`AUTHENTICATION_KEY: ""` is now treated as absent, silently.** `""` is the
+  documented no-credential marker and what every auth-less entry in
+  `query_plugins/plugins.json` ships, so `install.sh`'s seed warned on stderr
+  on every statusline tick. Non-string values still warn; the field is left
+  absent rather than `""` so `api.ts`'s `??` still falls through to the env
+  token.
+
+### Docs
+
+- **`config.example.json` is a working template again.** Three C-style `//`
+  comment lines made the whole file fail `JSON.parse`, so the verbatim copy
+  that README / MANUAL / 快速上手指南 instruct produced `DEFAULT_CONFIG`.
+  Annotations are now `//_`-prefixed KEYS so the file stays valid JSON; the
+  dead `lineTemplate` block (removed in v0.4.0) became `lineTemplates` +
+  `statuslineTemplate`; and the missing reference fields were filled in
+  (`labels`, `cacheHitColors`, `tokenFormat`, `prefixSpace` / `suffixSpace`,
+  `quoteInsecureTls`, `debug`, `providerOverride`). Two further defects fixed:
+  minimax declared `"TYPE": "Quota"` (the enum is uppercase-only, so the entry
+  was dropped and the example's own provider did not work) and the dead
+  `lineTemplate` tokens warned on every load. A test now asserts the file is
+  valid JSON and loads through `loadConfig` with zero warnings.
+
 ## v1.2.4 (2026-08-30)
 
 ### Refactor
