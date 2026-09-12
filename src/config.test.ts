@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import {
   __resetForTest,
   __testing,
+  applyProviderOverrides,
   configStore,
   loadConfig,
   resolveTokenPrice,
@@ -131,6 +132,69 @@ describe("config facade", () => {
   it("exposes the split template constants through config.ts", () => {
     assert.ok(__testing.DEFAULT_CONFIG.statuslineTemplate.length > 0);
     assert.ok(__testing.DEFAULT_CONFIG.lineTemplates.model_info.length > 0);
+  });
+});
+
+describe("providerOverride", () => {
+  // A top-level string naming the provider to force, skipping URL matching.
+  // Existence of the name in `providers` and of its plugin on disk is NOT
+  // checked here — the registry isn't final until mergeConfig's providers
+  // block merges, which runs after applyOverrides. resolveProvider owns that.
+  it("defaults to \"\"", async () => {
+    await loadConfig();
+    assert.equal(configStore.get().providerOverride, "");
+  });
+
+  it("loads a configured name", async () => {
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ providerOverride: "commandcode" }));
+    const cfg = await loadConfig();
+    assert.equal(cfg.providerOverride, "commandcode");
+  });
+
+  it("accepts an unknown name at load time (resolution is resolveProvider's job)", async () => {
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ providerOverride: "not-a-provider" }));
+    const cfg = await loadConfig();
+    assert.equal(cfg.providerOverride, "not-a-provider");
+  });
+
+  it("a non-string warns and keeps the default", async () => {
+    writeFileSync(join(dir, "config.json"), JSON.stringify({ providerOverride: 42 }));
+    const origWrite = process.stderr.write.bind(process.stderr);
+    const writes: string[] = [];
+    (process.stderr.write as unknown) = (chunk: string | Uint8Array): boolean => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      const cfg = await loadConfig();
+      assert.equal(cfg.providerOverride, "");
+      assert.ok(
+        writes.some((w) => /providerOverride must be a string/.test(w)),
+        `expected stderr warn; got ${JSON.stringify(writes)}`,
+      );
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  });
+
+  it("a provider's own config block cannot set it", async () => {
+    // Otherwise the key would be self-referential: resolving the forced
+    // provider is what reads the overrides that would contain it.
+    writeFileSync(join(dir, "config.json"), JSON.stringify({
+      providers: {
+        custom: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "https://custom.example/anthropic",
+          COMPARE_METHOD: "EXACT",
+          config: { providerOverride: "minimax" },
+        },
+      },
+    }));
+    await loadConfig();
+    applyProviderOverrides(
+      configStore.get().providers.custom.config as Record<string, unknown>,
+    );
+    assert.equal(configStore.get().providerOverride, "");
   });
 });
 

@@ -96,6 +96,20 @@ export function resolvePluginOnDisk(providerId: string): string {
   return js;
 }
 
+// Existence test for resolvePluginOnDisk. That function always returns a
+// path (its missing-case returns the would-be user path), so stat'ing the
+// result is the existence check — and an id that fails
+// assertSafeProviderId's shape gate (dots, slashes, …) throws, which here
+// means "no plugin" rather than a crash. Used to validate a configured
+// provider override before trusting it.
+export function pluginExistsOnDisk(providerId: string): boolean {
+  try {
+    return existsSync(resolvePluginOnDisk(providerId));
+  } catch {
+    return false;
+  }
+}
+
 async function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

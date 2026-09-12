@@ -305,6 +305,15 @@ const DEFAULT_CONFIG: {
   version: string;
   // Declarative provider registry; see DEFAULT_PROVIDERS.
   providers: Record<string, ProviderEntry>;
+  // Force one provider, skipping ANTHROPIC_BASE_URL matching entirely.
+  // URL matching cannot separate local proxies that share a host and differ
+  // only by an arbitrary port — a bare-host STARTWITH pattern necessarily
+  // matches every port on that host (commandcode on 127.0.0.1:15721 vs
+  // opencode on 127.0.0.1:3456). Must name a key present in `providers`
+  // that also has a plugin on disk; anything else warns and falls back to
+  // matching. "" (default) = no override. Top-level only — a provider's
+  // own `config` block cannot set it (that would be self-referential).
+  providerOverride: string;
   // top-level `intervals` was REMOVED — plugins parse their own responses.
   // `m_quote` fetcher passes `--insecure` to curl so self-signed /
   // expired / untrusted-CA HTTPS endpoints work. Opt-in (default
@@ -379,6 +388,7 @@ const DEFAULT_CONFIG: {
   exchangeRates: {} as Record<string, number>,
   version: "",
   providers: DEFAULT_PROVIDERS,
+  providerOverride: "",
   quoteInsecureTls: false,
   // {} — all subkeys off until configured.
   debug: {} as Partial<Record<import("./diagnostics.ts").Subkey, boolean>>,
@@ -1404,6 +1414,22 @@ function applyOverrides(base: Config, raw: Record<string, unknown>, isProviderOv
       out.quoteInsecureTls = v;
     } else {
       warn("quoteInsecureTls must be a boolean; using default");
+    }
+  }
+
+  // providerOverride — top-level only. A provider's own `config` block
+  // setting it would be self-referential (the forced provider would have
+  // to be resolved to read the key that resolves it), so it is ignored
+  // there. Whether the name actually exists in `providers` and has a
+  // plugin on disk is checked at resolution time by resolveProvider (the
+  // registry isn't final until mergeConfig's providers block is merged,
+  // which runs after this function).
+  if (!isProviderOverride && "providerOverride" in raw) {
+    const v = raw.providerOverride;
+    if (typeof v === "string") {
+      out.providerOverride = v;
+    } else {
+      warn("providerOverride must be a string; using default");
     }
   }
 

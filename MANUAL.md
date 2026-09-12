@@ -198,6 +198,12 @@ Every key honored by the loader, with its type, default, and validator. Source-o
   // Pass --insecure / -k to curl for m_quote address-mode fetches.
   "quoteInsecureTls": false,
 
+  // Force one provider, skipping ANTHROPIC_BASE_URL matching. Must name a
+  // key in `providers` below, which must also have a plugin on disk —
+  // anything else warns and falls back to matching. "" = no override.
+  // See §3 for when this is needed (local proxies sharing a host).
+  "providerOverride": "",
+
   // Provider registry. See §3.
   "providers": {
     "minimax":  { "TYPE": "QUOTA",   "BASE_URL_COMPARED_TO": "https://api.minimaxi.com/anthropic", "COMPARE_METHOD": "EXACT" },
@@ -213,6 +219,7 @@ Every key honored by the loader, with its type, default, and validator. Source-o
 - `bar.width` — integer in `[3, 64]`.
 - Numeric fields — finite, positive where relevant.
 - `lineTemplates.<key>` — non-empty array of strings. Loader strips nested `m_template*` tokens (no recursive indirection).
+- `providerOverride` — string. A non-string warns and keeps the default (`""`). Whether the name is *usable* is not checked at load time — see §3.
 
 ### config.tokenPrices.json (vX.X.X+)
 
@@ -286,7 +293,7 @@ The `providers` block is a `Record<string, ProviderEntry>`. Each entry declares 
 | `TYPE`                 | yes      | `"QUOTA"` (5h + 7d two-window line) or `"BALANCE"` (account-balance line). Selects the plugin output shape and the renderer fail-line label. |
 | `BASE_URL_COMPARED_TO` | yes      | URL pattern to match `ANTHROPIC_BASE_URL` against. Non-empty string. |
 | `COMPARE_METHOD`       | yes      | One of `"EXACT"` / `"INCLUDE"` (substring) / `"STARTWITH"` (prefix with suffix-attack guard). A NEW provider entry MUST declare it — a missing or invalid value drops the whole entry (no implicit default). Entries overriding a built-in id inherit the built-in value when omitted. |
-| `AUTHENTICATION_KEY`   | no       | Alternative credential that overrides `process.env.ANTHROPIC_AUTH_TOKEN` for this provider. Keeps plugin source credential-free. Plugin receives it as the first arg to `fetchAccountCredit` and forwards on the upstream `Authorization` header. When unset, the env token takes over. Bad values (non-string, empty string) drop just the field; the entry still loads and the fetcher falls back to the env token. |
+| `AUTHENTICATION_KEY`   | no       | Alternative credential that overrides `process.env.ANTHROPIC_AUTH_TOKEN` for this provider. Keeps plugin source credential-free. Plugin receives it as the first arg to `fetchAccountCredit` and forwards on the upstream `Authorization` header. When unset, the env token takes over. `""` means "this provider needs no credential" and is dropped silently (the convention every auth-less plugin registry entry ships) — the key ends up absent, so the env token still takes over. A non-string value warns and drops just the field; the entry still loads. |
 | `config`               | no       | Per-provider override of any top-level config key EXCEPT `providers` (no recursion). Nested `providers` keys are forbidden. |
 
 ### `COMPARE_METHOD` modes
@@ -295,7 +302,7 @@ The `providers` block is a `Record<string, ProviderEntry>`. Each entry declares 
 |------------|--------------------------------------------------------|---------------------|
 | `EXACT`    | `baseUrl === pattern`                                  | n/a — exact match.  |
 | `INCLUDE`  | `baseUrl.includes(pattern)`                            | n/a — substring.    |
-| `STARTWITH`| `baseUrl.startsWith(pattern)`                          | Character right after the prefix must be `undefined`, `/`, `?`, or `#`. So `https://api.deepseek.com.evil.example` is rejected even though it `startsWith("https://api.deepseek.com")`. |
+| `STARTWITH`| `baseUrl.startsWith(pattern)`                          | What follows the prefix must end the URL, start a path/query/fragment, or be a port separator (`:` + digits). So `https://api.deepseek.com.evil.example` is rejected even though it `startsWith("https://api.deepseek.com")`, and so is `https://api.deepseek.com:443@evil.example/` (its real host is `evil.example` — the prefix only spans userinfo). A bare scheme+host pattern like `http://127.0.0.1` therefore matches **every port** on that host, which is why [`providerOverride`](#provideroverride) exists. |
 
 ### Built-in defaults
 
@@ -319,6 +326,36 @@ A user entry inherits missing fields from the built-in default for the same id. 
 ```
 
 The cache key for a provider's response is its name (two Quota providers get separate cache slots). The matcher's iteration order is insertion order of the `providers` object — the first matching entry wins.
+
+### `providerOverride`
+
+A top-level `providerOverride` string names the active provider outright, skipping `ANTHROPIC_BASE_URL` matching:
+
+```jsonc
+{
+  "providerOverride": "commandcode",
+  "providers": {
+    "commandcode": {
+      "TYPE": "QUOTA",
+      "BASE_URL_COMPARED_TO": "http://127.0.0.1:15721",
+      "COMPARE_METHOD": "EXACT"
+    }
+  }
+}
+```
+
+Use it for **local proxies**. When several proxies share a host and differ only by an arbitrary port, URL matching cannot tell them apart — under a bare-host `STARTWITH` pattern every port on that host matches, and which one wins is decided by insertion order rather than by what you actually configured. `providerOverride` removes the guess.
+
+Resolution rules:
+
+| Situation | Result |
+|-----------|--------|
+| `""` (default) or absent | `ANTHROPIC_BASE_URL` matching, unchanged. |
+| Names a key in `providers` **that also has a plugin on disk** (`query_plugins/<id>/index.{js,mjs}`, user copy or bundled) | That provider wins. `ANTHROPIC_BASE_URL` is ignored — it may even be unset. |
+| Names a key missing from `providers` | One stderr warning, then fall back to URL matching. |
+| Names a provider whose plugin file is missing | One stderr warning, then fall back to URL matching. |
+
+Falling back is deliberately loud: a silent fallback would render a *different* provider than the one asked for, which is the confusion this key exists to remove. It is **top-level only** — a provider's own `config` block cannot set it (that would be self-referential, since resolving the forced provider is what reads that block).
 
 ---
 

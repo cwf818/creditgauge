@@ -6,13 +6,13 @@
 // at call time, so config changes via `__resetForTest` are picked up
 // on the next call (no module-level state).
 
-import { configStore } from "./config.ts";
+import { configStore, warn } from "./config.ts";
 import type {
   CompareMethod,
   Provider,
   ProviderEntry,
 } from "./types.ts";
-import { fetchForProviderById } from "./api.ts";
+import { fetchForProviderById, pluginExistsOnDisk } from "./api.ts";
 import { normalizeUrl } from "./utils.ts";
 
 // ----- URL matching -----
@@ -78,6 +78,41 @@ export function matchProvider(
     }
   }
   return null;
+}
+
+// Resolve the active provider: an explicit `providerOverride` beats URL
+// matching, when it is usable. The override exists because matching cannot
+// separate local proxies that share a host and differ only by an arbitrary
+// port — under a bare-host STARTWITH pattern every port on that host matches,
+// and the first entry in `providers` wins regardless of which proxy is
+// actually configured.
+//
+// "Usable" means the name is a key in `providers` AND a plugin file exists for
+// it. Anything else warns and falls back to matchProvider: a silent fallback
+// would render a different provider than the one asked for, which is exactly
+// the confusion the override is meant to remove.
+export function resolveProvider(
+  baseUrl: string | undefined | null,
+): Provider {
+  const override = configStore.get().providerOverride;
+  if (override) {
+    const providers = configStore.get().providers;
+    if (!(override in providers)) {
+      warn(
+        `providerOverride "${override}" is not a key in providers; ` +
+        `falling back to ANTHROPIC_BASE_URL matching`,
+      );
+    } else if (!pluginExistsOnDisk(override)) {
+      warn(
+        `providerOverride "${override}" has no plugin at ` +
+        `query_plugins/${override}/; falling back to ANTHROPIC_BASE_URL ` +
+        `matching`,
+      );
+    } else {
+      return override;
+    }
+  }
+  return matchProvider(baseUrl);
 }
 
 // Look up a provider's full entry by name. Returns null if the

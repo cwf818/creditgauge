@@ -18,6 +18,7 @@ import {
   fetchForProvider,
   getProviderEntry,
   matchProvider,
+  resolveProvider,
   failLabelForProvider,
   providerTypeFor,
 } from "./providers.ts";
@@ -478,6 +479,117 @@ describe("compareUrl — STARTWITH bare-host pattern vs ported URL (2026-09-11)"
     assert.equal(matchProvider("http://127.0.0.1:5411/usage"), "commandcode");
     // A different host still doesn't match.
     assert.equal(matchProvider("http://127.0.0.1.evil.example"), null);
+  });
+});
+
+// A configured `providerOverride` names the active provider outright, so a
+// local proxy can be selected when URL matching can't tell proxies apart.
+// The name is only trusted when it is a key in `providers` AND a plugin file
+// exists for it; otherwise it warns and URL matching still decides.
+describe("resolveProvider — providerOverride", () => {
+  // Capture stderr for the warning assertions — config.warn writes there
+  // first (the diagnostics JSONL half no-ops without the opt-in gate).
+  function captureStderr<T>(fn: () => T): { result: T; writes: string[] } {
+    const origWrite = process.stderr.write.bind(process.stderr);
+    const writes: string[] = [];
+    (process.stderr.write as unknown) = (chunk: string | Uint8Array): boolean => {
+      writes.push(String(chunk));
+      return true;
+    };
+    try {
+      return { result: fn(), writes };
+    } finally {
+      process.stderr.write = origWrite;
+    }
+  }
+
+  it("a valid override beats a URL that matches a different provider", () => {
+    __resetForTest({ providerOverride: "minimax" } as never);
+    // The URL alone resolves to deepseek; the override must win.
+    assert.equal(
+      resolveProvider("https://api.deepseek.com/anthropic"),
+      "minimax",
+    );
+  });
+
+  it("applies even when ANTHROPIC_BASE_URL is unset", () => {
+    __resetForTest({ providerOverride: "minimax" } as never);
+    assert.equal(resolveProvider(undefined), "minimax");
+    assert.equal(resolveProvider(null), "minimax");
+  });
+
+  it("no override → URL matching, unchanged", () => {
+    __resetForTest({ providerOverride: "" } as never);
+    assert.equal(
+      resolveProvider("https://api.deepseek.com/anthropic"),
+      "deepseek",
+    );
+    assert.equal(resolveProvider("https://api.anthropic.com"), null);
+  });
+
+  it("warns and falls back when the name is not a key in providers", () => {
+    __resetForTest({ providerOverride: "nope" } as never);
+    const { result, writes } = captureStderr(() =>
+      resolveProvider("https://api.deepseek.com/anthropic"),
+    );
+    assert.equal(result, "deepseek");
+    assert.ok(
+      writes.some((w) => /providerOverride "nope" is not a key in providers/.test(w)),
+      `expected a stderr warn; got ${JSON.stringify(writes)}`,
+    );
+  });
+
+  it("warns and falls back when the name has no plugin on disk", () => {
+    __resetForTest({
+      providerOverride: "ghost",
+      providers: {
+        ghost: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "https://ghost.example/anthropic",
+          COMPARE_METHOD: "EXACT",
+          config: {},
+        },
+      },
+    } as never);
+    const { result, writes } = captureStderr(() =>
+      resolveProvider("https://api.deepseek.com/anthropic"),
+    );
+    // `ghost` IS in providers but has no query_plugins/ghost/ file, so the
+    // override is refused and the URL decides.
+    assert.equal(result, "deepseek");
+    assert.ok(
+      writes.some((w) => /providerOverride "ghost" has no plugin/.test(w)),
+      `expected a stderr warn; got ${JSON.stringify(writes)}`,
+    );
+  });
+
+  it("a plugin-less override does not shadow its own URL match", () => {
+    __resetForTest({
+      providerOverride: "ghost",
+      providers: {
+        ghost: {
+          TYPE: "QUOTA",
+          BASE_URL_COMPARED_TO: "https://ghost.example/anthropic",
+          COMPARE_METHOD: "EXACT",
+          config: {},
+        },
+      },
+    } as never);
+    const { result } = captureStderr(() =>
+      resolveProvider("https://ghost.example/anthropic"),
+    );
+    // Falls back to matching, which does find ghost — the override only
+    // decides whether it gets to *skip* matching.
+    assert.equal(result, "ghost");
+  });
+
+  it("reports the unregistered case before the missing-plugin case", () => {
+    // Both checks would fail for "nope" (absent from providers AND no
+    // plugin); the providers check is the one that names the real problem.
+    __resetForTest({ providerOverride: "nope" } as never);
+    const { writes } = captureStderr(() => resolveProvider(undefined));
+    assert.ok(writes.some((w) => /is not a key in providers/.test(w)));
+    assert.ok(!writes.some((w) => /has no plugin/.test(w)));
   });
 });
 

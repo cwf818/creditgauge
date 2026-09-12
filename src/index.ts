@@ -27,7 +27,7 @@ import * as statusStore from "./status-store.ts";
 import {
   fetchForProvider,
   getProviderEntry,
-  matchProvider,
+  resolveProvider,
 } from "./providers.ts";
 import { parseTokenSnapshot } from "./session-parse.ts";
 import * as diagnostics from "./diagnostics.ts";
@@ -170,7 +170,10 @@ async function main(): Promise<void> {
 
   const baseUrl = process.env.ANTHROPIC_BASE_URL;
   const upstream = UPSTREAM;
-  const provider = matchProvider(baseUrl);
+  // resolveProvider (not matchProvider): a valid `providerOverride` in
+  // config.json wins over URL matching, so a local proxy can be named
+  // explicitly instead of guessed from a host that several proxies share.
+  const provider = resolveProvider(baseUrl);
 
   // Apply the active provider's `config` overlay BEFORE processAndSaveTick
   // so the cost computation sees the fully merged config (three-layer

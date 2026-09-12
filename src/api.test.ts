@@ -8,6 +8,7 @@ import {
   ensureInterval,
   ensureQuota,
   fetchForProviderById,
+  pluginExistsOnDisk,
   pluginTransport,
   resolvePluginOnDisk,
 } from "./api.ts";
@@ -396,6 +397,25 @@ describe("resolvePluginOnDisk", () => {
     assert.throws(() => resolvePluginOnDisk("../escape"), /invalid provider id/);
     assert.throws(() => resolvePluginOnDisk("with/slash"),     /invalid provider id/);
     assert.throws(() => resolvePluginOnDisk("with space"),     /invalid provider id/);
+  });
+});
+
+describe("pluginExistsOnDisk", () => {
+  it("is true for a bundled plugin", () => {
+    assert.equal(pluginExistsOnDisk("minimax"), true);
+  });
+
+  it("is false when no user file and no bundled copy exist", () => {
+    // resolvePluginOnDisk returns the would-be user path here rather than a
+    // null sentinel, so the stat of that path is what reports "missing".
+    assert.equal(pluginExistsOnDisk("totally-unknown-provider"), false);
+  });
+
+  it("is false (not a throw) for ids that fail the shape gate", () => {
+    assert.equal(pluginExistsOnDisk("../escape"), false);
+    assert.equal(pluginExistsOnDisk("with/slash"), false);
+    assert.equal(pluginExistsOnDisk("with space"), false);
+    assert.equal(pluginExistsOnDisk(""), false);
   });
 });
 

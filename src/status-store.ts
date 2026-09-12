@@ -1394,7 +1394,7 @@ export function beginTick(cwd: string | null, tokens: TokenSnapshot | null): Tic
   const loaded = cwd ? loadFromDiskInternal(cwd) : {};
   const prevEntry = loaded[PREV_TICK_KEY];
   const prev = prevEntry?.kind === "prevTickStatus" ? prevEntry.value : null;
-  // Provider unknown at beginTick (pre-matchProvider): pass null so the
+  // Provider unknown at beginTick (pre-provider-resolution): pass null so the
   // gate uses config.tokenPrices.json; processTick re-runs it later.
   const { snapshot, measurement } = normalizeTick(tokens, prev, null);
   _tickState = {

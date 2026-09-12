@@ -48,6 +48,8 @@
     ],
     "balance": ["m_modeLabel", "s_0", "m_balance"]
   },
+  "//_providerOverride_comment": "Force one provider instead of matching ANTHROPIC_BASE_URL. Must name a key in `providers` that also has a plugin on disk, else it warns and falls back to matching. Use it for local proxies that share a host and differ only by an arbitrary port. Empty = no override.",
+  "providerOverride": "",
   "providers": {
     "minimax": {
       "TYPE": "Quota",
