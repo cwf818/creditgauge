@@ -5,6 +5,9 @@
 # Usage:
 #   config.sh                        # print current status (read-only)
 #   config.sh --preset-<name>        # set statuslineTemplate to a preset name
+#   config.sh --provider-<id>        # force a provider (sets config.json providerOverride;
+#                                    #   <id> must already be a key in `providers`)
+#   config.sh --clear-provider       # unset providerOverride (back to ANTHROPIC_BASE_URL matching)
 #   config.sh --disable-upstream     # disable the upstream chain (rename state/upstream-cmd.sh -> .disabled)
 #   config.sh --enable-upstream      # re-enable it (rename back)
 #   config.sh --dry-run [...]        # print actions, change nothing
@@ -23,28 +26,40 @@ set -u
 
 DRY_RUN=0
 ACTION_PRESET=""
+ACTION_PROVIDER=""
+ACTION_CLEAR_PROVIDER=0
 ACTION_DISABLE=0
 ACTION_ENABLE=0
 HELP=0
 VALID_PRESETS="simple compact solo standard"
+USAGE="usage: /creditgauge:config [--preset-<name>] [--provider-<id>] [--clear-provider] [--disable-upstream] [--enable-upstream] [--dry-run]"
 
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --disable-upstream) ACTION_DISABLE=1 ;;
     --enable-upstream) ACTION_ENABLE=1 ;;
+    --clear-provider) ACTION_CLEAR_PROVIDER=1 ;;
     --preset-*)
       ACTION_PRESET="${arg#--preset-}"
       if [ -z "$ACTION_PRESET" ]; then
         echo "config.sh: --preset- requires a preset name" >&2
-        echo "usage: /creditgauge:config [--preset-<name>] [--disable-upstream] [--enable-upstream] [--dry-run]" >&2
+        echo "$USAGE" >&2
+        exit 2
+      fi
+      ;;
+    --provider-*)
+      ACTION_PROVIDER="${arg#--provider-}"
+      if [ -z "$ACTION_PROVIDER" ]; then
+        echo "config.sh: --provider- requires a provider id" >&2
+        echo "$USAGE" >&2
         exit 2
       fi
       ;;
     --help|-h) HELP=1 ;;
     *)
       echo "config.sh: unknown argument: $arg" >&2
-      echo "usage: /creditgauge:config [--preset-<name>] [--disable-upstream] [--enable-upstream] [--dry-run]" >&2
+      echo "$USAGE" >&2
       exit 2
       ;;
   esac
@@ -102,11 +117,36 @@ template_status_line() {
   ' "$WIN_CONFIG_FILE" "$VALID_PRESETS"
 }
 
+# Classify the configured providerOverride into a human line. Flags a name
+# that is no longer a key in `providers` — the statusline would warn and fall
+# back to URL matching in that case, so it is worth surfacing here.
+provider_status_line() {
+  node -e '
+    const fs = require("fs");
+    const p = process.argv[1];
+    const none = "(none — ANTHROPIC_BASE_URL matching)";
+    if (!fs.existsSync(p)) { console.log(none); process.exit(0); }
+    let d;
+    try { d = JSON.parse(fs.readFileSync(p, "utf8")); }
+    catch { console.log("(config.json not valid JSON)"); process.exit(0); }
+    const v = d && typeof d === "object" ? d.providerOverride : undefined;
+    if (typeof v !== "string" || v === "") { console.log(none); process.exit(0); }
+    const providers = d.providers && typeof d.providers === "object" && !Array.isArray(d.providers)
+      ? d.providers : {};
+    if (Object.prototype.hasOwnProperty.call(providers, v)) {
+      console.log(v + "   (forced — URL matching skipped)");
+    } else {
+      console.log(v + "   (NOT in providers — statusline warns + falls back)");
+    }
+  ' "$WIN_CONFIG_FILE"
+}
+
 print_status() {
   echo "当前配置:"
   local tline
   tline="$(template_status_line)" || exit 1
   echo "  statuslineTemplate: ${tline}"
+  echo "  providerOverride:   $(provider_status_line)"
   if [ -f "$UPSTREAM_CMD" ]; then
     echo "  upstream:           enabled   (state/upstream-cmd.sh)"
   elif [ -f "$UPSTREAM_DISABLED" ]; then
@@ -165,15 +205,19 @@ enable_upstream() {
 }
 
 if [ "$HELP" = 1 ]; then
-  sed -n '2,20p' "$0"
+  # Print the leading comment block (skip the shebang, stop at the first
+  # non-comment line). Structural, so adding a usage line can't silently
+  # truncate the help the way a hardcoded `sed -n '2,Np'` range would.
+  awk 'NR == 1 { next } /^#/ { print; next } { exit }' "$0"
   exit 0
 fi
 
 # No action flags -> read-only status view.
-if [ -z "$ACTION_PRESET" ] && [ "$ACTION_DISABLE" = 0 ] && [ "$ACTION_ENABLE" = 0 ]; then
+if [ -z "$ACTION_PRESET" ] && [ -z "$ACTION_PROVIDER" ] && [ "$ACTION_CLEAR_PROVIDER" = 0 ] \
+   && [ "$ACTION_DISABLE" = 0 ] && [ "$ACTION_ENABLE" = 0 ]; then
   print_status
   echo ""
-  echo "用法: /creditgauge:config [--preset-<name>] [--disable-upstream] [--enable-upstream] [--dry-run]"
+  echo "用法: ${USAGE#usage: }"
   exit 0
 fi
 
@@ -189,6 +233,25 @@ if [ -n "$ACTION_PRESET" ]; then
     # the node helper writes into it and would otherwise ENOENT.
     mkdir -p "$(dirname "$CONFIG_FILE")"
     node "$HELPER" "$WIN_CONFIG_FILE" set-preset "$ACTION_PRESET" || exit 1
+  fi
+fi
+
+# --provider-<id>: the helper hard-fails when <id> is not a key in `providers`
+# (nothing is written), and only prints a note when no plugin file is found —
+# plugin resolution is the statusline runtime's call, not ours.
+if [ -n "$ACTION_PROVIDER" ]; then
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "would set providerOverride: ${ACTION_PROVIDER} in ${CONFIG_FILE}"
+  else
+    node "$HELPER" "$WIN_CONFIG_FILE" set-provider "$ACTION_PROVIDER" || exit 1
+  fi
+fi
+
+if [ "$ACTION_CLEAR_PROVIDER" = 1 ]; then
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "would clear providerOverride in ${CONFIG_FILE}"
+  else
+    node "$HELPER" "$WIN_CONFIG_FILE" clear-provider || exit 1
   fi
 fi
 

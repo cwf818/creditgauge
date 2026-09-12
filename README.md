@@ -136,7 +136,7 @@ Seven slash commands ship with the plugin:
 | `/creditgauge:clean-cache`       | Remove stale version dirs from the plugin cache, keeping only the newest. |
 | `/creditgauge:clean-journal`     | Remove old .jsonl journal files under state/<projectHash>/ by age or --all.                                                                  |
 | `/creditgauge:reset`             | Wipe the 3 cache files for the current project only (cache.json, state.json, cache.stat.json); preserves diagnostics + token-sample history. |
-| `/creditgauge:config`            | Read config state; switch statuslineTemplate preset; disable/enable upstream. |
+| `/creditgauge:config`            | Read config state; switch statuslineTemplate preset; force/clear providerOverride; disable/enable upstream. |
 
 Each is a Pattern B2 slash command — the body is a `!`-fenced shell block that loads `scripts/<name>.sh` directly via `${CLAUDE_PLUGIN_ROOT}`, with `allowed-tools` scoped to that script. See [Project layout](#project-layout) for the file map.
 

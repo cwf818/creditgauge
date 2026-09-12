@@ -346,6 +346,8 @@ A top-level `providerOverride` string names the active provider outright, skippi
 
 Use it for **local proxies**. When several proxies share a host and differ only by an arbitrary port, URL matching cannot tell them apart — under a bare-host `STARTWITH` pattern every port on that host matches, and which one wins is decided by insertion order rather than by what you actually configured. `providerOverride` removes the guess.
 
+Set it with `/creditgauge:config --provider-<id>` (and unset with `--clear-provider`), or by hand in `config.json`.
+
 Resolution rules:
 
 | Situation | Result |

@@ -69,6 +69,18 @@ assert_match_str() {
   fi
 }
 
+assert_not_match_str() {
+  local label="$1" pattern="$2" haystack="$3"
+  if echo "$haystack" | grep -qF "$pattern"; then
+    echo "  FAIL $label (pattern unexpectedly found: $pattern)"
+    echo "       output: $haystack"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  ok  $label"
+    PASS=$((PASS + 1))
+  fi
+}
+
 # Read a JSON field via node — same helper as test-install.sh.
 jget_field() {
   local f="$1" path="$2"
@@ -195,6 +207,129 @@ before="$(cat "$CONFIG_FILE")"
 out="$(run_config --preset-standard 2>&1)"; rc=$?
 assert_eq "[set-preset-badjson] exit code" "1" "$rc"
 assert_eq "[set-preset-badjson] file untouched" "$before" "$(cat "$CONFIG_FILE")"
+
+# --- providerOverride: set / clear -------------------------------------------
+# `--provider-<id>` writes config.json's top-level `providerOverride`, which the
+# statusline runtime reads to skip ANTHROPIC_BASE_URL matching. <id> must be a
+# key in `providers` (hard fail otherwise); a missing plugin is only a note.
+
+write_plugin() {
+  mkdir -p "${FIXTURE_ROOT}/plugins/creditgauge/query_plugins/$1"
+  printf 'export function fetchAccountCredit() { return null; }\n' \
+    > "${FIXTURE_ROOT}/plugins/creditgauge/query_plugins/$1/index.js"
+}
+
+write_config_providers() {
+  write_config '{
+  "display": "used",
+  "providers": {
+    "proxya": { "TYPE": "QUOTA", "BASE_URL_COMPARED_TO": "http://127.0.0.1:3456", "COMPARE_METHOD": "EXACT" },
+    "proxyb": { "TYPE": "QUOTA", "BASE_URL_COMPARED_TO": "http://127.0.0.1", "COMPARE_METHOD": "STARTWITH" }
+  }
+}'
+}
+
+echo "-- status: providerOverride absent --"
+build_fixture
+write_config '{
+  "display": "used"
+}'
+out="$(run_config)"
+assert_match_str "[status-provider-none] none caption" "providerOverride:   (none — ANTHROPIC_BASE_URL matching)" "$out"
+
+echo "-- status: providerOverride set and valid --"
+build_fixture
+write_config_providers
+out="$(run_config --provider-proxya)"
+assert_match_str "[set-provider] ok line" "set providerOverride: proxya" "$out"
+assert_eq "[set-provider] wrote value" "proxya" "$(jget_field "$CONFIG_FILE" providerOverride)"
+assert_eq "[set-provider] preserved display" "used" "$(jget_field "$CONFIG_FILE" display)"
+assert_eq "[set-provider] preserved providers.proxyb.COMPARE_METHOD" "STARTWITH" "$(jget_field "$CONFIG_FILE" providers.proxyb.COMPARE_METHOD)"
+out="$(run_config)"
+assert_match_str "[status-provider-set] forced caption" "providerOverride:   proxya   (forced — URL matching skipped)" "$out"
+
+echo "-- set-provider: no plugin for a valid provider id only warns --"
+build_fixture
+write_config_providers
+out="$(run_config --provider-proxyb)"; rc=$?
+assert_eq "[set-provider-noplugin] exit code" "0" "$rc"
+assert_match_str "[set-provider-noplugin] note printed" "no plugin found at query_plugins/proxyb/" "$out"
+assert_eq "[set-provider-noplugin] still wrote value" "proxyb" "$(jget_field "$CONFIG_FILE" providerOverride)"
+
+echo "-- set-provider: plugin present suppresses the note --"
+build_fixture
+write_config_providers
+write_plugin proxya
+out="$(run_config --provider-proxya)"
+assert_not_match_str "[set-provider-plugin] no note" "no plugin found" "$out"
+
+echo "-- set-provider: unknown id errors, file untouched --"
+build_fixture
+write_config_providers
+before="$(cat "$CONFIG_FILE")"
+out="$(run_config --provider-nope 2>&1)"; rc=$?
+assert_eq "[set-provider-unknown] exit code" "1" "$rc"
+assert_match_str "[set-provider-unknown] explains" "is not a key in providers" "$out"
+assert_match_str "[set-provider-unknown] lists known ids" "known providers: proxya, proxyb" "$out"
+assert_eq "[set-provider-unknown] file untouched" "$before" "$(cat "$CONFIG_FILE")"
+
+echo "-- set-provider: no config.json errors --"
+build_fixture
+out="$(run_config --provider-proxya 2>&1)"; rc=$?
+assert_eq "[set-provider-noconfig] exit code" "1" "$rc"
+assert_match_str "[set-provider-noconfig] explains" "no config.json" "$out"
+assert_file_missing "[set-provider-noconfig] nothing created" "$CONFIG_FILE"
+
+echo "-- set-provider: --provider- with no id errors --"
+build_fixture
+out="$(run_config --provider- 2>&1)"; rc=$?
+assert_eq "[set-provider-empty] exit code" "2" "$rc"
+assert_match_str "[set-provider-empty] usage" "usage: /creditgauge:config" "$out"
+
+echo "-- clear-provider: reports the previous id --"
+build_fixture
+write_config_providers
+run_config --provider-proxya >/dev/null
+out="$(run_config --clear-provider)"
+assert_match_str "[clear-provider] ok line" 'cleared providerOverride (was "proxya")' "$out"
+assert_eq "[clear-provider] value cleared" "" "$(jget_field "$CONFIG_FILE" providerOverride)"
+assert_eq "[clear-provider] preserved providers" "EXACT" "$(jget_field "$CONFIG_FILE" providers.proxya.COMPARE_METHOD)"
+
+echo "-- clear-provider: idempotent --"
+out="$(run_config --clear-provider)"
+assert_match_str "[clear-provider-idempotent] no-op" "providerOverride already unset (no-op)" "$out"
+
+echo "-- clear-provider: no config.json is a no-op, creates nothing --"
+build_fixture
+out="$(run_config --clear-provider)"
+assert_match_str "[clear-provider-noconfig] no-op" "no config.json; nothing to clear (no-op)" "$out"
+assert_file_missing "[clear-provider-noconfig] nothing created" "$CONFIG_FILE"
+
+echo "-- dry-run: provider writes nothing --"
+build_fixture
+write_config_providers
+before="$(cat "$CONFIG_FILE")"
+out="$(run_config --provider-proxya --dry-run)"
+assert_match_str "[dry-provider] would line" "would set providerOverride: proxya" "$out"
+assert_eq "[dry-provider] file untouched" "$before" "$(cat "$CONFIG_FILE")"
+
+echo "-- dry-run: clear-provider writes nothing --"
+build_fixture
+write_config_providers
+run_config --provider-proxya >/dev/null
+after_set="$(cat "$CONFIG_FILE")"
+out="$(run_config --clear-provider --dry-run)"
+assert_match_str "[dry-clear-provider] would line" "would clear providerOverride" "$out"
+assert_eq "[dry-clear-provider] file untouched" "$after_set" "$(cat "$CONFIG_FILE")"
+
+echo "-- provider and preset flags combine in one invocation --"
+build_fixture
+write_config_providers
+out="$(run_config --preset-standard --provider-proxya)"
+assert_match_str "[combined] preset written" "set statuslineTemplate: standard" "$out"
+assert_match_str "[combined] provider written" "set providerOverride: proxya" "$out"
+assert_eq "[combined] both in file" "proxya" "$(jget_field "$CONFIG_FILE" providerOverride)"
+assert_eq "[combined] preset in file" "standard" "$(jget_field "$CONFIG_FILE" statuslineTemplate)"
 
 # --- upstream toggle ---------------------------------------------------------
 
